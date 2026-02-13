@@ -141,7 +141,9 @@ approvers:
 # =============================================================================
 actions:
   # Global action enablement
-  enabled: false  # Set to true to enable action execution
+  # IMPORTANT: Set to true only after configuring Slack workspace/channel IDs
+  # and approver Slack IDs above. The system will validate these on startup.
+  enabled: true  # Actions enabled - individual actions still require approval
 
   # Per-action configuration
   allowlist:

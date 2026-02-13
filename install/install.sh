@@ -114,7 +114,8 @@ prompt_input() {
     local var_name="$3"
 
     if [[ "$INTERACTIVE" != "true" ]]; then
-        eval "$var_name=\"$default\""
+        # Use printf -v instead of eval to prevent command injection
+        printf -v "$var_name" '%s' "$default"
         return
     fi
 
@@ -126,7 +127,76 @@ prompt_input() {
         read -rp "$prompt: " input
     fi
 
-    eval "$var_name=\"$input\""
+    # Use printf -v instead of eval to prevent command injection
+    printf -v "$var_name" '%s' "$input"
+}
+
+# Input validation functions
+validate_hostname() {
+    local host="$1"
+    # Allow valid hostnames, IPv4, and IPv6 addresses
+    # Hostname: alphanumeric, hyphens, dots, max 253 chars
+    if [[ -z "$host" ]]; then
+        return 1
+    fi
+    if [[ ${#host} -gt 253 ]]; then
+        return 1
+    fi
+    # Check for valid hostname/IP pattern (no special shell chars)
+    if [[ "$host" =~ [^a-zA-Z0-9._:-] ]]; then
+        return 1
+    fi
+    return 0
+}
+
+validate_username() {
+    local user="$1"
+    # Unix usernames: alphanumeric, underscore, hyphen, dollar sign, max 32 chars
+    if [[ -z "$user" ]]; then
+        return 1
+    fi
+    if [[ ${#user} -gt 32 ]]; then
+        return 1
+    fi
+    if [[ "$user" =~ [^a-zA-Z0-9_\$-] ]]; then
+        return 1
+    fi
+    return 0
+}
+
+validate_path() {
+    local path="$1"
+    # Paths: alphanumeric, slashes, dots, hyphens, underscores
+    # No special shell metacharacters
+    if [[ -z "$path" ]]; then
+        return 1
+    fi
+    if [[ "$path" =~ [^a-zA-Z0-9_./-] ]]; then
+        return 1
+    fi
+    # Must start with /
+    if [[ ! "$path" =~ ^/ ]]; then
+        return 1
+    fi
+    return 0
+}
+
+validate_url() {
+    local url="$1"
+    # Basic URL validation - no shell metacharacters
+    if [[ -z "$url" ]]; then
+        return 0  # Empty URLs are OK (optional)
+    fi
+    # Must start with http:// or https://
+    if [[ ! "$url" =~ ^https?:// ]]; then
+        return 1
+    fi
+    # Allow standard URL characters (use a pattern variable to avoid regex issues)
+    local invalid_pattern='[^a-zA-Z0-9_./:@?&=%-]'
+    if [[ "$url" =~ $invalid_pattern ]]; then
+        return 1
+    fi
+    return 0
 }
 
 check_root() {
@@ -631,6 +701,13 @@ scenario_openclaw_runtime() {
     prompt_input "Enter remote MCP URL" "https://mcp-server:8080" MCP_URL
     prompt_input "Enter MCP Auth Token (optional)" "" MCP_AUTH
 
+    # Validate MCP URL
+    if [[ -n "$MCP_URL" ]] && ! validate_url "$MCP_URL"; then
+        log_error "Invalid MCP URL format: $MCP_URL"
+        log_info "URL must start with http:// or https:// and contain only valid URL characters"
+        exit 1
+    fi
+
     check_dependencies || install_dependencies
     install_nodejs
     install_tailscale
@@ -660,6 +737,13 @@ scenario_runtime_only() {
 
     prompt_input "Enter MCP URL" "https://mcp-server:8080" MCP_URL
     prompt_input "Enter MCP Auth Token (optional)" "" MCP_AUTH
+
+    # Validate MCP URL
+    if [[ -n "$MCP_URL" ]] && ! validate_url "$MCP_URL"; then
+        log_error "Invalid MCP URL format: $MCP_URL"
+        log_info "URL must start with http:// or https:// and contain only valid URL characters"
+        exit 1
+    fi
 
     check_dependencies || install_dependencies
     install_nodejs
@@ -713,13 +797,33 @@ scenario_remote_openclaw() {
     prompt_input "Enter SSH user" "root" REMOTE_USER
     prompt_input "Enter remote OpenClaw agents path" "/opt/openclaw/agents" REMOTE_OPENCLAW_PATH
 
+    # Validate all inputs to prevent command injection
     if [[ -z "$REMOTE_HOST" ]]; then
         log_error "Remote host is required"
         exit 1
     fi
 
+    if ! validate_hostname "$REMOTE_HOST"; then
+        log_error "Invalid hostname format: $REMOTE_HOST"
+        log_info "Hostname must contain only alphanumeric characters, dots, hyphens, and colons"
+        exit 1
+    fi
+
+    if ! validate_username "$REMOTE_USER"; then
+        log_error "Invalid username format: $REMOTE_USER"
+        log_info "Username must contain only alphanumeric characters, underscores, and hyphens"
+        exit 1
+    fi
+
+    if ! validate_path "$REMOTE_OPENCLAW_PATH"; then
+        log_error "Invalid path format: $REMOTE_OPENCLAW_PATH"
+        log_info "Path must start with / and contain only alphanumeric characters, slashes, dots, hyphens, and underscores"
+        exit 1
+    fi
+
     log_info "Testing SSH connection..."
-    if ! ssh -o ConnectTimeout=10 -o BatchMode=yes "$REMOTE_USER@$REMOTE_HOST" "echo ok" &>/dev/null; then
+    # Use -- to prevent option injection
+    if ! ssh -o ConnectTimeout=10 -o BatchMode=yes -- "${REMOTE_USER}@${REMOTE_HOST}" "echo ok" &>/dev/null; then
         log_warn "SSH connection test failed - make sure SSH keys are set up"
         if ! prompt_yes_no "Continue anyway?"; then
             exit 1
@@ -728,21 +832,23 @@ scenario_remote_openclaw() {
 
     log_info "Copying agents to remote server..."
 
-    ssh "$REMOTE_USER@$REMOTE_HOST" "mkdir -p $REMOTE_OPENCLAW_PATH"
-    scp -r "$PROJECT_ROOT/agents/"* "$REMOTE_USER@$REMOTE_HOST:$REMOTE_OPENCLAW_PATH/"
+    # Use -- to prevent option injection, quote all variables
+    ssh -- "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '${REMOTE_OPENCLAW_PATH}'"
+    scp -r -- "$PROJECT_ROOT/agents/"* "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_OPENCLAW_PATH}/"
 
     log_info "Copying policies..."
-    ssh "$REMOTE_USER@$REMOTE_HOST" "mkdir -p ${REMOTE_OPENCLAW_PATH%/agents}/config"
-    scp -r "$PROJECT_ROOT/policies/"* "$REMOTE_USER@$REMOTE_HOST:${REMOTE_OPENCLAW_PATH%/agents}/config/"
+    local config_path="${REMOTE_OPENCLAW_PATH%/agents}/config"
+    ssh -- "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '${config_path}'"
+    scp -r -- "$PROJECT_ROOT/policies/"* "${REMOTE_USER}@${REMOTE_HOST}:${config_path}/"
 
     echo ""
     log_success "Agents copied to remote server!"
     echo ""
-    echo "  Remote server: $REMOTE_USER@$REMOTE_HOST"
-    echo "  Agents path:   $REMOTE_OPENCLAW_PATH"
+    echo "  Remote server: ${REMOTE_USER}@${REMOTE_HOST}"
+    echo "  Agents path:   ${REMOTE_OPENCLAW_PATH}"
     echo ""
     echo "  Next: Restart OpenClaw on the remote server"
-    echo "        ssh $REMOTE_USER@$REMOTE_HOST 'docker restart openclaw'"
+    echo "        ssh -- ${REMOTE_USER}@${REMOTE_HOST} 'docker restart openclaw'"
     echo ""
 }
 
@@ -754,6 +860,13 @@ scenario_docker_compose() {
     mkdir -p "$output_dir"
 
     prompt_input "Enter MCP URL (or leave empty for same container)" "" MCP_URL
+
+    # Validate MCP URL if provided
+    if [[ -n "$MCP_URL" ]] && ! validate_url "$MCP_URL"; then
+        log_error "Invalid MCP URL format: $MCP_URL"
+        log_info "URL must start with http:// or https:// and contain only valid URL characters"
+        exit 1
+    fi
 
     cat > "$output_dir/docker-compose.yml" << 'COMPOSE_EOF'
 version: '3.8'

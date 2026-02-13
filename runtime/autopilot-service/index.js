@@ -103,10 +103,18 @@ function incrementMetric(name, labels = {}) {
   }
 }
 
+// Maximum samples to retain per metric key (prevents memory leak)
+const MAX_LATENCY_SAMPLES = 1000;
+
 function recordLatency(name, seconds, labels = {}) {
   const key = Object.keys(labels).length > 0 ? JSON.stringify(labels) : "default";
   if (!metrics[name]) metrics[name] = {};
   if (!metrics[name][key]) metrics[name][key] = [];
+
+  // Prevent unbounded array growth - keep only recent samples
+  if (metrics[name][key].length >= MAX_LATENCY_SAMPLES) {
+    metrics[name][key].shift(); // Remove oldest sample
+  }
   metrics[name][key].push(seconds);
 }
 
@@ -340,8 +348,30 @@ async function listCases(options = {}) {
 // =============================================================================
 
 const approvalTokens = new Map();
+const MAX_APPROVAL_TOKENS = 10000; // Prevent unbounded growth
 
 function generateApprovalToken(planId, caseId) {
+  // Enforce token limit to prevent memory exhaustion
+  if (approvalTokens.size >= MAX_APPROVAL_TOKENS) {
+    // Remove oldest expired tokens first
+    const now = Date.now();
+    let removed = 0;
+    for (const [token, data] of approvalTokens.entries()) {
+      if (new Date(data.expires_at) < new Date(now) || data.used) {
+        approvalTokens.delete(token);
+        removed++;
+        if (approvalTokens.size < MAX_APPROVAL_TOKENS * 0.9) break;
+      }
+    }
+    log("warn", "approval", "Token cleanup triggered", { removed, remaining: approvalTokens.size });
+
+    // If still at limit, reject new token creation
+    if (approvalTokens.size >= MAX_APPROVAL_TOKENS) {
+      log("error", "approval", "Token limit reached, cannot create new token");
+      throw new Error("Approval token limit reached");
+    }
+  }
+
   const token = crypto.randomBytes(32).toString("hex");
   const expiresAt = Date.now() + config.approvalTtlMinutes * 60 * 1000;
 
@@ -403,15 +433,7 @@ function consumeApprovalToken(token, approverId, decision, reason = "") {
   return tokenData;
 }
 
-// Clean up expired tokens periodically
-setInterval(() => {
-  const now = Date.now();
-  for (const [token, data] of approvalTokens.entries()) {
-    if (new Date(data.expires_at) < new Date(now)) {
-      approvalTokens.delete(token);
-    }
-  }
-}, 60000); // Every minute
+// Note: Token cleanup is now handled by setupCleanupIntervals() during startup
 
 // =============================================================================
 // MCP CLIENT WRAPPER
@@ -543,15 +565,7 @@ function checkRateLimit(clientIp) {
   return { allowed: true, remaining: config.rateLimitMaxRequests - clientData.count };
 }
 
-// Clean up rate limit state periodically
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, data] of rateLimitState.requests.entries()) {
-    if (now > data.resetTime) {
-      rateLimitState.requests.delete(ip);
-    }
-  }
-}, 60000);
+// Note: Rate limit cleanup is now handled by setupCleanupIntervals() during startup
 
 // =============================================================================
 // HTTP SERVER
@@ -564,6 +578,47 @@ const startTime = Date.now();
 function isValidCaseId(caseId) {
   // Case IDs must be alphanumeric with hyphens, 1-64 chars
   return /^[a-zA-Z0-9-]{1,64}$/.test(caseId);
+}
+
+// Authorization validation for sensitive endpoints
+function validateAuthorization(req, requiredScope = "write") {
+  const authHeader = req.headers.authorization;
+
+  // Allow requests from localhost without auth (for internal agents)
+  const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+                   req.socket.remoteAddress || "unknown";
+  const isLocalhost = clientIp === "127.0.0.1" || clientIp === "::1" ||
+                      clientIp === "::ffff:127.0.0.1";
+
+  if (isLocalhost && !authHeader) {
+    return { valid: true, source: "localhost" };
+  }
+
+  // Require authorization for non-localhost requests
+  if (!authHeader) {
+    return { valid: false, reason: "Missing Authorization header" };
+  }
+
+  // Validate Bearer token format
+  if (!authHeader.startsWith("Bearer ")) {
+    return { valid: false, reason: "Invalid Authorization format" };
+  }
+
+  const token = authHeader.substring(7);
+
+  // Validate against configured MCP auth token
+  // In production, this should use proper token validation (JWT, etc.)
+  if (config.mcpAuth && token === config.mcpAuth) {
+    return { valid: true, source: "api_token" };
+  }
+
+  // Also check for internal service token (environment variable)
+  const serviceToken = process.env.AUTOPILOT_SERVICE_TOKEN;
+  if (serviceToken && token === serviceToken) {
+    return { valid: true, source: "service_token" };
+  }
+
+  return { valid: false, reason: "Invalid or expired token" };
 }
 
 // Parse JSON body from request
@@ -684,6 +739,14 @@ function createServer() {
 
       // Cases API - POST create
       if (url.pathname === "/api/cases" && req.method === "POST") {
+        // Require authorization for write operations
+        const authResult = validateAuthorization(req, "write");
+        if (!authResult.valid) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: authResult.reason }));
+          return;
+        }
+
         const body = await parseJsonBody(req);
 
         if (!body.case_id || !isValidCaseId(body.case_id)) {
@@ -722,6 +785,14 @@ function createServer() {
 
       // Cases API - PUT update
       if (url.pathname.startsWith("/api/cases/") && req.method === "PUT") {
+        // Require authorization for write operations
+        const authResult = validateAuthorization(req, "write");
+        if (!authResult.valid) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: authResult.reason }));
+          return;
+        }
+
         const caseId = url.pathname.split("/")[3];
 
         if (!caseId || !isValidCaseId(caseId)) {
@@ -763,6 +834,41 @@ function createServer() {
 // STARTUP
 // =============================================================================
 
+// Validate that critical configuration doesn't contain placeholder values
+function validateNoPlaceholders(configObj, path = "") {
+  const PLACEHOLDER_PATTERNS = [
+    /^YOUR_/i,
+    /^PLACEHOLDER_/i,
+    /_ID$/i,
+    /^TODO:/i,
+    /^CHANGE_ME$/i,
+    /^EXAMPLE_/i,
+  ];
+
+  const warnings = [];
+
+  function check(obj, currentPath) {
+    if (typeof obj === "string") {
+      for (const pattern of PLACEHOLDER_PATTERNS) {
+        if (pattern.test(obj) && obj.includes("_ID")) {
+          warnings.push({ path: currentPath, value: obj });
+        }
+      }
+      // Also check for specific placeholder patterns
+      if (obj === "YOUR_WORKSPACE_ID" || obj.match(/^(USER_ID|ADMIN_USER_ID|MANAGER_USER_ID|SENIOR_USER_ID)/)) {
+        warnings.push({ path: currentPath, value: obj });
+      }
+    } else if (typeof obj === "object" && obj !== null) {
+      for (const [key, value] of Object.entries(obj)) {
+        check(value, currentPath ? `${currentPath}.${key}` : key);
+      }
+    }
+  }
+
+  check(configObj, path);
+  return warnings;
+}
+
 async function validateStartup() {
   log("info", "startup", "Validating configuration...");
 
@@ -784,6 +890,30 @@ async function validateStartup() {
   await ensureDir(path.join(config.dataDir, "reports"));
   await ensureDir(path.join(config.dataDir, "state"));
 
+  // Load and validate policy configuration
+  const policyPath = path.join(config.configDir, "policies", "policy.yaml");
+  try {
+    await fs.access(policyPath);
+    const policyContent = await fs.readFile(policyPath, "utf8");
+
+    // Simple placeholder check (in production, parse YAML properly)
+    const placeholderMatches = policyContent.match(/(YOUR_|USER_ID_|ADMIN_USER_ID|_CHANNEL_ID)/g);
+    if (placeholderMatches && placeholderMatches.length > 0) {
+      log("warn", "startup", "Policy contains placeholder values - configure before production use", {
+        placeholders_found: placeholderMatches.length,
+        examples: [...new Set(placeholderMatches)].slice(0, 5),
+      });
+
+      // In production mode, fail startup if placeholders exist
+      if (config.mode === "production") {
+        log("error", "startup", "Production mode cannot use placeholder values in policy");
+        process.exit(1);
+      }
+    }
+  } catch (err) {
+    log("warn", "startup", "Could not validate policy file", { path: policyPath, error: err.message });
+  }
+
   // Load toolmap
   await loadToolmap();
 
@@ -799,8 +929,11 @@ async function main() {
 
   await validateStartup();
 
+  // Setup cleanup intervals for memory management
+  setupCleanupIntervals();
+
   if (config.metricsEnabled) {
-    const server = createServer();
+    server = createServer();
     server.listen(config.metricsPort, config.metricsHost, () => {
       log("info", "startup", `Server listening`, {
         host: config.metricsHost,
@@ -826,6 +959,69 @@ module.exports = {
   incrementMetric,
   recordLatency,
 };
+
+// Graceful shutdown handling
+let server = null;
+const cleanupIntervals = [];
+
+function setupCleanupIntervals() {
+  // Approval token cleanup
+  const tokenCleanup = setInterval(() => {
+    const now = Date.now();
+    let removed = 0;
+    for (const [token, data] of approvalTokens.entries()) {
+      if (new Date(data.expires_at) < new Date(now)) {
+        approvalTokens.delete(token);
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      log("debug", "cleanup", "Expired approval tokens removed", { count: removed });
+    }
+  }, 60000);
+  cleanupIntervals.push(tokenCleanup);
+
+  // Rate limit state cleanup
+  const rateLimitCleanup = setInterval(() => {
+    const now = Date.now();
+    let removed = 0;
+    for (const [ip, data] of rateLimitState.requests.entries()) {
+      if (now > data.resetTime) {
+        rateLimitState.requests.delete(ip);
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      log("debug", "cleanup", "Expired rate limit entries removed", { count: removed });
+    }
+  }, 60000);
+  cleanupIntervals.push(rateLimitCleanup);
+}
+
+function gracefulShutdown(signal) {
+  log("info", "shutdown", `Received ${signal}, shutting down gracefully...`);
+
+  // Stop accepting new requests
+  if (server) {
+    server.close(() => {
+      log("info", "shutdown", "HTTP server closed");
+    });
+  }
+
+  // Clear all cleanup intervals
+  for (const interval of cleanupIntervals) {
+    clearInterval(interval);
+  }
+
+  // Allow pending operations to complete
+  setTimeout(() => {
+    log("info", "shutdown", "Shutdown complete");
+    process.exit(0);
+  }, 1000);
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 // Run if executed directly
 if (require.main === module) {
