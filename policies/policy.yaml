@@ -86,7 +86,7 @@ slack:
 approvers:
   # Approver groups
   groups:
-    # Standard approvers - can approve medium risk actions
+    # Standard approvers - can approve low/medium risk actions
     standard:
       members:
         - slack_id: "USER_ID_1"
@@ -110,6 +110,8 @@ approvers:
         - quarantine_file
         - isolate_host
         - kill_process
+        - firewall_drop
+        - host_deny
       max_risk_level: high
 
     # Admin approvers - can approve critical actions
@@ -123,6 +125,10 @@ approvers:
         - isolate_host
         - kill_process
         - disable_user
+        - firewall_drop
+        - host_deny
+        - active_response
+        - restart_wazuh
       max_risk_level: critical
 
   # Self-approval prevention
@@ -183,6 +189,42 @@ actions:
       min_confidence: 0.7
       min_evidence_items: 2
       cooldown_minutes: 5
+
+    active_response:
+      enabled: false  # Generic active response - enable with caution
+      risk_level: high
+      requires_approval: true
+      min_approver_group: admin
+      min_confidence: 0.9
+      min_evidence_items: 5
+      cooldown_minutes: 30
+
+    firewall_drop:
+      enabled: true
+      risk_level: medium
+      requires_approval: true
+      min_approver_group: elevated
+      min_confidence: 0.8
+      min_evidence_items: 3
+      cooldown_minutes: 10
+
+    host_deny:
+      enabled: true
+      risk_level: medium
+      requires_approval: true
+      min_approver_group: elevated
+      min_confidence: 0.8
+      min_evidence_items: 3
+      cooldown_minutes: 10
+
+    restart_wazuh:
+      enabled: false  # Wazuh restart - critical operation
+      risk_level: critical
+      requires_approval: true
+      min_approver_group: admin
+      min_confidence: 0.95
+      min_evidence_items: 5
+      cooldown_minutes: 60
 
   # Deny all actions not in allowlist
   deny_unlisted: true
@@ -329,6 +371,16 @@ idempotency:
       deny_if_exists: true
       deny_reason: ALREADY_QUARANTINED
 
+    firewall_drop:
+      check_method: verify_firewall_rule_not_exists
+      deny_if_exists: true
+      deny_reason: FIREWALL_RULE_EXISTS
+
+    host_deny:
+      check_method: verify_host_not_denied
+      deny_if_exists: true
+      deny_reason: HOST_ALREADY_DENIED
+
   # Duplicate request detection
   duplicate_detection:
     enabled: true
@@ -372,6 +424,22 @@ rate_limits:
     quarantine_file:
       max_per_hour: 100
       max_per_day: 500
+
+    active_response:
+      max_per_hour: 10
+      max_per_day: 30
+
+    firewall_drop:
+      max_per_hour: 50
+      max_per_day: 200
+
+    host_deny:
+      max_per_hour: 50
+      max_per_day: 200
+
+    restart_wazuh:
+      max_per_hour: 2
+      max_per_day: 5
 
   # Global rate limits
   global:

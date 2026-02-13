@@ -38,6 +38,11 @@ const config = {
     process.env.APPROVAL_TOKEN_TTL_MINUTES || "60",
     10
   ),
+  // Rate limiting
+  rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || "60000", 10),
+  rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "100", 10),
+  // MCP timeout
+  mcpTimeoutMs: parseInt(process.env.MCP_TIMEOUT_MS || "30000", 10),
 };
 
 // =============================================================================
@@ -441,6 +446,10 @@ async function callMcpTool(toolName, params, correlationId) {
     .substring(0, 16);
 
   try {
+    // Create abort controller for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), config.mcpTimeoutMs);
+
     const response = await fetch(`${config.mcpUrl}/tools/${toolName}`, {
       method: "POST",
       headers: {
@@ -449,7 +458,10 @@ async function callMcpTool(toolName, params, correlationId) {
         ...(correlationId && { "X-Correlation-ID": correlationId }),
       },
       body: JSON.stringify(params),
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     const latencySeconds = (Date.now() - startTime) / 1000;
     const status = response.ok ? "success" : "error";
@@ -500,6 +512,48 @@ async function callMcpTool(toolName, params, correlationId) {
 }
 
 // =============================================================================
+// RATE LIMITING
+// =============================================================================
+
+const rateLimitState = {
+  requests: new Map(), // IP -> { count, resetTime }
+};
+
+function checkRateLimit(clientIp) {
+  const now = Date.now();
+  const clientData = rateLimitState.requests.get(clientIp);
+
+  if (!clientData || now > clientData.resetTime) {
+    rateLimitState.requests.set(clientIp, {
+      count: 1,
+      resetTime: now + config.rateLimitWindowMs,
+    });
+    return { allowed: true, remaining: config.rateLimitMaxRequests - 1 };
+  }
+
+  if (clientData.count >= config.rateLimitMaxRequests) {
+    return {
+      allowed: false,
+      remaining: 0,
+      retryAfter: Math.ceil((clientData.resetTime - now) / 1000),
+    };
+  }
+
+  clientData.count++;
+  return { allowed: true, remaining: config.rateLimitMaxRequests - clientData.count };
+}
+
+// Clean up rate limit state periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, data] of rateLimitState.requests.entries()) {
+    if (now > data.resetTime) {
+      rateLimitState.requests.delete(ip);
+    }
+  }
+}, 60000);
+
+// =============================================================================
 // HTTP SERVER
 // =============================================================================
 
@@ -512,9 +566,35 @@ function isValidCaseId(caseId) {
   return /^[a-zA-Z0-9-]{1,64}$/.test(caseId);
 }
 
+// Parse JSON body from request
+async function parseJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+      // Limit body size to 1MB
+      if (body.length > 1024 * 1024) {
+        reject(new Error("Request body too large"));
+      }
+    });
+    req.on("end", () => {
+      try {
+        resolve(body ? JSON.parse(body) : {});
+      } catch (err) {
+        reject(new Error("Invalid JSON"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
 function createServer() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
+
+    // Get client IP for rate limiting
+    const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+                     req.socket.remoteAddress || "unknown";
 
     // Security headers
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -524,13 +604,29 @@ function createServer() {
 
     // CORS headers for local development
     res.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
       res.end();
       return;
+    }
+
+    // Rate limiting (skip for health/metrics endpoints)
+    if (!["/health", "/ready", "/metrics"].includes(url.pathname)) {
+      const rateLimit = checkRateLimit(clientIp);
+      res.setHeader("X-RateLimit-Remaining", rateLimit.remaining);
+
+      if (!rateLimit.allowed) {
+        res.setHeader("Retry-After", rateLimit.retryAfter);
+        res.writeHead(429, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          error: "Too Many Requests",
+          retry_after: rateLimit.retryAfter,
+        }));
+        return;
+      }
     }
 
     try {
@@ -578,7 +674,7 @@ function createServer() {
         return;
       }
 
-      // Cases API
+      // Cases API - GET all
       if (url.pathname === "/api/cases" && req.method === "GET") {
         const cases = await listCases({ limit: 100 });
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -586,6 +682,23 @@ function createServer() {
         return;
       }
 
+      // Cases API - POST create
+      if (url.pathname === "/api/cases" && req.method === "POST") {
+        const body = await parseJsonBody(req);
+
+        if (!body.case_id || !isValidCaseId(body.case_id)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid or missing case_id" }));
+          return;
+        }
+
+        const newCase = await createCase(body.case_id, body);
+        res.writeHead(201, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(newCase));
+        return;
+      }
+
+      // Cases API - GET single
       if (url.pathname.startsWith("/api/cases/") && req.method === "GET") {
         const caseId = url.pathname.split("/")[3];
 
@@ -603,6 +716,32 @@ function createServer() {
         } catch (err) {
           res.writeHead(404, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Case not found" }));
+        }
+        return;
+      }
+
+      // Cases API - PUT update
+      if (url.pathname.startsWith("/api/cases/") && req.method === "PUT") {
+        const caseId = url.pathname.split("/")[3];
+
+        if (!caseId || !isValidCaseId(caseId)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid case ID format" }));
+          return;
+        }
+
+        try {
+          const body = await parseJsonBody(req);
+          const updatedCase = await updateCase(caseId, body);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(updatedCase));
+        } catch (err) {
+          if (err.message.includes("not found")) {
+            res.writeHead(404, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Case not found" }));
+          } else {
+            throw err;
+          }
         }
         return;
       }

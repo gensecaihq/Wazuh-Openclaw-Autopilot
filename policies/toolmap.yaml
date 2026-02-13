@@ -233,6 +233,83 @@ action_operations:
     rollback:
       tool: wazuh_restore_file
 
+  # Active response execution (generic)
+  active_response:
+    logical_name: active_response
+    mcp_tool: wazuh_active_response
+    description: "Execute Wazuh active response script"
+    required: false
+    enabled: false
+    risk_level: high
+    reversible: false
+    parameters:
+      - name: agent_id
+        type: string
+        required: true
+      - name: command
+        type: string
+        required: true
+      - name: parameters
+        type: object
+        required: false
+
+  # Firewall drop rule
+  firewall_drop:
+    logical_name: firewall_drop
+    mcp_tool: wazuh_firewall_drop
+    description: "Add firewall drop rule via active response"
+    required: false
+    enabled: false
+    risk_level: medium
+    reversible: true
+    parameters:
+      - name: agent_id
+        type: string
+        required: true
+      - name: src_ip
+        type: string
+        required: true
+      - name: duration
+        type: integer
+        required: false
+        description: "Duration in seconds (0 = permanent)"
+    rollback:
+      tool: wazuh_firewall_allow
+
+  # Host deny (hosts.deny)
+  host_deny:
+    logical_name: host_deny
+    mcp_tool: wazuh_host_deny
+    description: "Add entry to hosts.deny"
+    required: false
+    enabled: false
+    risk_level: medium
+    reversible: true
+    parameters:
+      - name: agent_id
+        type: string
+        required: true
+      - name: src_ip
+        type: string
+        required: true
+    rollback:
+      tool: wazuh_host_allow
+
+  # Restart Wazuh agent/manager
+  restart_wazuh:
+    logical_name: restart_wazuh
+    mcp_tool: wazuh_restart
+    description: "Restart Wazuh agent or manager service"
+    required: false
+    enabled: false
+    risk_level: critical
+    reversible: false
+    parameters:
+      - name: target
+        type: string
+        required: true
+        description: "agent ID or 'manager'"
+
 # =============================================================================
 # UTILITY OPERATIONS
 # =============================================================================

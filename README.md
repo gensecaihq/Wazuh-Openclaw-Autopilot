@@ -170,6 +170,8 @@ Wazuh OpenClaw Autopilot ships with pre-configured [OpenClaw](https://github.com
 | [SLACK_SOCKET_MODE.md](docs/SLACK_SOCKET_MODE.md) | Slack integration setup |
 | [POLICY_AND_APPROVALS.md](docs/POLICY_AND_APPROVALS.md) | Policy configuration guide |
 | [OBSERVABILITY_EXPORT.md](docs/OBSERVABILITY_EXPORT.md) | Metrics and logging |
+| [RUNTIME_API.md](docs/RUNTIME_API.md) | Runtime service API reference |
+| [EVIDENCE_PACK_SCHEMA.md](docs/EVIDENCE_PACK_SCHEMA.md) | Evidence pack data structure |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Common issues and solutions |
 | [SECURITY.md](SECURITY.md) | Security policy and vulnerability reporting |
 
@@ -193,7 +195,9 @@ Wazuh-Openclaw-Autopilot/
 │   ├── ransomware.md
 │   ├── suspicious-powershell.md
 │   ├── data-exfil.md
-│   └── vuln-spike.md
+│   ├── vuln-spike.md
+│   ├── privilege-escalation.md
+│   └── lateral-movement.md
 ├── install/                   # Installation scripts
 │   ├── install.sh            # Universal installer
 │   ├── doctor.sh             # Diagnostic tool

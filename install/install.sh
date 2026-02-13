@@ -160,6 +160,55 @@ check_ubuntu() {
 }
 
 # =============================================================================
+# DEPENDENCY CHECKS
+# =============================================================================
+
+check_dependencies() {
+    log_info "Checking required dependencies..."
+
+    local missing_deps=()
+
+    # Check for curl
+    if ! command -v curl &> /dev/null; then
+        missing_deps+=("curl")
+    fi
+
+    # Check for jq
+    if ! command -v jq &> /dev/null; then
+        missing_deps+=("jq")
+    fi
+
+    # Check for Node.js (required for runtime)
+    if ! command -v node &> /dev/null; then
+        log_warn "Node.js not found - required for runtime service"
+        missing_deps+=("nodejs")
+    else
+        # Check Node.js version
+        local node_version
+        node_version=$(node --version | sed 's/v//' | cut -d. -f1)
+        if [[ "$node_version" -lt 18 ]]; then
+            log_warn "Node.js version $node_version detected. Version 18+ recommended."
+        else
+            log_success "Node.js $(node --version) detected"
+        fi
+    fi
+
+    # Check for systemctl (systemd)
+    if ! command -v systemctl &> /dev/null; then
+        log_warn "systemd not found - service management will not be available"
+    fi
+
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        log_warn "Missing dependencies: ${missing_deps[*]}"
+        log_info "These will be installed automatically if you continue"
+        return 1
+    fi
+
+    log_success "All required dependencies are present"
+    return 0
+}
+
+# =============================================================================
 # DETECTION FUNCTIONS
 # =============================================================================
 
@@ -312,8 +361,33 @@ install_tailscale() {
         return 0
     fi
 
-    curl -fsSL https://tailscale.com/install.sh | sh
+    # Download installer to temp file for verification instead of curl|sh
+    local installer_tmp
+    installer_tmp=$(mktemp)
 
+    log_info "Downloading Tailscale installer..."
+    if ! curl -fsSL https://tailscale.com/install.sh -o "$installer_tmp"; then
+        log_error "Failed to download Tailscale installer"
+        rm -f "$installer_tmp"
+        return 1
+    fi
+
+    # Verify it's a shell script
+    if ! head -1 "$installer_tmp" | grep -q "^#!"; then
+        log_error "Downloaded file does not appear to be a valid installer script"
+        rm -f "$installer_tmp"
+        return 1
+    fi
+
+    log_info "Installing Tailscale..."
+    chmod +x "$installer_tmp"
+    if ! sh "$installer_tmp"; then
+        log_error "Tailscale installation failed"
+        rm -f "$installer_tmp"
+        return 1
+    fi
+
+    rm -f "$installer_tmp"
     log_success "Tailscale installed"
     log_info "Run 'tailscale up' to authenticate with your Tailnet"
 
@@ -334,8 +408,33 @@ install_docker() {
         return 0
     fi
 
-    # Install Docker using official script
-    curl -fsSL https://get.docker.com | sh
+    # Download installer to temp file for verification instead of curl|sh
+    local installer_tmp
+    installer_tmp=$(mktemp)
+
+    log_info "Downloading Docker installer..."
+    if ! curl -fsSL https://get.docker.com -o "$installer_tmp"; then
+        log_error "Failed to download Docker installer"
+        rm -f "$installer_tmp"
+        return 1
+    fi
+
+    # Verify it's a shell script
+    if ! head -1 "$installer_tmp" | grep -q "^#!"; then
+        log_error "Downloaded file does not appear to be a valid installer script"
+        rm -f "$installer_tmp"
+        return 1
+    fi
+
+    log_info "Installing Docker..."
+    chmod +x "$installer_tmp"
+    if ! sh "$installer_tmp"; then
+        log_error "Docker installation failed"
+        rm -f "$installer_tmp"
+        return 1
+    fi
+
+    rm -f "$installer_tmp"
 
     # Start Docker
     systemctl enable docker
@@ -571,6 +670,9 @@ scenario_agent_pack() {
     log_header "Scenario 1: Agent Pack Installation"
     log_info "Installing Autopilot agents into existing OpenClaw environment"
 
+    # Check dependencies first
+    check_dependencies || install_dependencies
+
     # Verify OpenClaw exists
     if ! detect_openclaw; then
         log_error "OpenClaw not found. Use --mode bootstrap-openclaw instead."
@@ -711,12 +813,18 @@ tailnet_cutover() {
 
     local env_file="$CONFIG_DIR/.env"
     if [[ -f "$env_file" ]]; then
-        # Update MCP_URL
-        sed -i "s|^MCP_URL=.*|MCP_URL=$new_mcp_url|" "$env_file"
-        # Update mode to production
-        sed -i "s|^AUTOPILOT_MODE=.*|AUTOPILOT_MODE=production|" "$env_file"
+        # Create backup before modifying
+        cp "$env_file" "$env_file.bak.$(date +%Y%m%d%H%M%S)"
 
-        log_success "Configuration updated"
+        # Update MCP_URL
+        sed -i.tmp "s|^MCP_URL=.*|MCP_URL=$new_mcp_url|" "$env_file"
+        # Update mode to production
+        sed -i.tmp "s|^AUTOPILOT_MODE=.*|AUTOPILOT_MODE=production|" "$env_file"
+
+        # Clean up temp files from sed
+        rm -f "$env_file.tmp"
+
+        log_success "Configuration updated (backup saved)"
     else
         log_error "Configuration file not found at $env_file"
         return 1
