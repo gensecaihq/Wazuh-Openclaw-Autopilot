@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/OpenClaw-FF6B35?style=for-the-badge&logo=claw&logoColor=white" alt="OpenClaw"/>
 </p>
 
-<h1 align="center">🛡️ Wazuh OpenClaw Autopilot <sup><img src="https://img.shields.io/badge/BETA-yellow?style=flat-square" alt="Beta"/></sup></h1>
+<h1 align="center">Wazuh OpenClaw Autopilot <sup><img src="https://img.shields.io/badge/v2.0-blue?style=flat-square" alt="v2.0"/></sup></h1>
 
 <p align="center">
   <b>Autonomous SOC Layer for Wazuh via OpenClaw Agents</b>
@@ -25,9 +25,9 @@
 <p align="center">
   <a href="#quick-start">Quick Start</a> •
   <a href="#features">Features</a> •
+  <a href="#deployment-scenarios">Deployment</a> •
   <a href="#architecture">Architecture</a> •
-  <a href="#documentation">Documentation</a> •
-  <a href="#contributing">Contributing</a>
+  <a href="#documentation">Documentation</a>
 </p>
 
 ---
@@ -60,15 +60,17 @@
 - **Tailscale-First Security** - Production deployments use Tailnet for zero-trust connectivity
 - **Policy-Driven** - All behavior controlled by declarative YAML policies
 - **Observable** - Prometheus metrics and structured JSON logs out of the box
+- **Flexible Deployment** - 9 deployment scenarios from single-server to Kubernetes
 
 ## How It Works
 
 1. **Auto-Triage** - New high/critical alerts are automatically analyzed, entities extracted, and cases created
 2. **Correlation** - Related alerts are clustered into timelines with blast radius assessment
-3. **Response Planning** - Generates response plans with risk assessment (no automatic execution)
-4. **Policy Guard** - Evaluates all actions against configurable security policies
-5. **Approval Workflow** - Risky actions require human approval via Slack
-6. **Observability** - Exports Prometheus metrics and structured JSON logs
+3. **Investigation** - Deep-dive analysis with process trees, network mapping, and user profiling
+4. **Response Planning** - Generates response plans with risk assessment (no automatic execution)
+5. **Policy Guard** - Evaluates all actions against configurable security policies
+6. **Approval Workflow** - Risky actions require human approval via Slack
+7. **Execution & Verification** - Approved actions are executed with verification and rollback capability
 
 ## Quick Start
 
@@ -76,7 +78,7 @@
 
 | Requirement | Description |
 |-------------|-------------|
-| **Ubuntu** | 22.04 or 24.04 LTS |
+| **Ubuntu** | 22.04 or 24.04 LTS (other Linux supported) |
 | **Wazuh** | Installed and running ([wazuh.com](https://wazuh.com)) |
 | **Wazuh MCP Server** | Deployed and accessible ([gensecaihq/Wazuh-MCP-Server](https://github.com/gensecaihq/Wazuh-MCP-Server)) |
 
@@ -87,16 +89,11 @@
 git clone https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot.git
 cd Wazuh-Openclaw-Autopilot
 
-# Choose your scenario:
+# Interactive installation (recommended)
+sudo ./install/install.sh
 
-# Scenario 1: You have OpenClaw already installed
-sudo ./install/install.sh --mode agent-pack
-
-# Scenario 2: You have MCP but need OpenClaw bootstrapped
-sudo ./install/install.sh --mode bootstrap-openclaw
-
-# Scenario 3: Fresh start (Wazuh only)
-sudo ./install/install.sh --mode fresh
+# Or specify a mode directly:
+sudo ./install/install.sh --mode all-in-one
 ```
 
 ### Configuration
@@ -110,7 +107,7 @@ MCP_URL=https://your-mcp.tailnet.ts.net:8080
 AUTOPILOT_MCP_AUTH=your-token
 
 # Verify installation
-./install/doctor.sh
+sudo ./install/install.sh --mode doctor
 ```
 
 ### Start the Service
@@ -118,30 +115,79 @@ AUTOPILOT_MCP_AUTH=your-token
 ```bash
 sudo systemctl start wazuh-autopilot
 sudo systemctl enable wazuh-autopilot
+
+# Check status
+sudo systemctl status wazuh-autopilot
 ```
+
+## Deployment Scenarios
+
+The installer supports 9 deployment scenarios for any infrastructure:
+
+| Scenario | Use Case | Command |
+|----------|----------|---------|
+| **All-in-One** | Dev/Test, small deployments | `--mode all-in-one` |
+| **OpenClaw + Runtime** | MCP on different server | `--mode openclaw-runtime` |
+| **Runtime Only** | OpenClaw also elsewhere | `--mode runtime-only` |
+| **Agent Pack (Local)** | Existing local OpenClaw | `--mode agent-pack` |
+| **Agent Pack (Remote)** | Existing remote OpenClaw | `--mode remote-openclaw` |
+| **Docker Compose** | Containerized deployment | `--mode docker` |
+| **Kubernetes** | Cloud-native deployment | `--mode kubernetes` |
+| **Doctor** | Run diagnostics | `--mode doctor` |
+| **Cutover** | Transition to production | `--mode cutover` |
+
+### Architecture Examples
+
+**All-in-One (Single Server):**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      SINGLE SERVER                          │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │
+│  │ Wazuh   │─▶│   MCP   │─▶│OpenClaw │─▶│ Runtime │       │
+│  │ Manager │  │ :8080   │  │ :3000   │  │ :9090   │       │
+│  └─────────┘  └─────────┘  └─────────┘  └─────────┘       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Distributed (MCP Remote):**
+```
+┌─────────────────────────┐      ┌─────────────────────────┐
+│      SERVER A           │      │      SERVER B           │
+│   (Security Data)       │      │   (AI Processing)       │
+│  ┌─────────┐            │      │            ┌─────────┐ │
+│  │ Wazuh   │            │      │            │OpenClaw │ │
+│  │ Manager │            │ HTTP │            └────┬────┘ │
+│  ├─────────┤            │      │            ┌────┴────┐ │
+│  │   MCP   │◀───────────│──────│────────────┤ Runtime │ │
+│  │ :8080   │            │      │            │ :9090   │ │
+│  └─────────┘            │      │            └─────────┘ │
+└─────────────────────────┘      └─────────────────────────┘
+```
+
+See [SCENARIOS.md](docs/SCENARIOS.md) for detailed architecture diagrams.
 
 ## Architecture
 
 ### Agents
 
-Wazuh OpenClaw Autopilot ships with pre-configured [OpenClaw](https://github.com/openclaw/openclaw) agents:
+Wazuh OpenClaw Autopilot ships with 7 pre-configured [OpenClaw](https://github.com/openclaw/openclaw) agents:
 
 | Agent | Role | Autonomy Level |
 |-------|------|----------------|
-| **Triage** | Alert analysis, entity extraction, case creation | Read-only (auto) |
-| **Correlation** | Clusters related alerts, builds timelines | Read-only (auto) |
-| **Investigation** | Deep-dive queries, enrichment | Read-only |
-| **Response Planner** | Generates response plans | Plan-only |
-| **Policy Guard** | Evaluates actions against policies | Enforcement |
-| **Reporting** | Daily digest, KPIs | Read-only (scheduled) |
-| **Responder** | Executes approved actions | Approval-gated (disabled by default) |
+| **Triage** | Alert analysis, entity extraction, case creation | Read-only (Full auto) |
+| **Correlation** | Clusters related alerts, builds timelines | Read-only (Full auto) |
+| **Investigation** | Deep-dive queries, process trees, enrichment | Read-only (Full auto) |
+| **Response Planner** | Generates response plans with risk assessment | Approval-gated |
+| **Policy Guard** | Constitutional enforcement of all actions | Approval-gated |
+| **Responder** | Executes approved actions with verification | Approval-gated (Disabled) |
+| **Reporting** | Daily digest, KPIs, executive summaries | Read-only (Scheduled) |
 
 ### Deployment Modes
 
 | Mode | Description | Status |
 |------|-------------|--------|
-| **Bootstrap** | MCP accessible via any URL, Tailscale optional | `⚠️ READY (Bootstrap only)` |
-| **Production** | MCP must be on Tailnet, Tailscale required | `✅ READY (Production)` |
+| **Bootstrap** | MCP accessible via any URL, Tailscale optional | `READY (Bootstrap)` |
+| **Production** | MCP must be on Tailnet, Tailscale required | `READY (Production)` |
 
 ### Integration Stack
 
@@ -162,16 +208,31 @@ Wazuh OpenClaw Autopilot ships with pre-configured [OpenClaw](https://github.com
 
 ## Documentation
 
+### Getting Started
+
 | Document | Description |
 |----------|-------------|
 | [QUICKSTART.md](docs/QUICKSTART.md) | Get running in 15 minutes |
-| [SCENARIOS.md](docs/SCENARIOS.md) | Detailed deployment scenarios |
-| [TAILSCALE_MANDATORY.md](docs/TAILSCALE_MANDATORY.md) | Why and how to use Tailscale |
-| [SLACK_SOCKET_MODE.md](docs/SLACK_SOCKET_MODE.md) | Slack integration setup |
+| [SCENARIOS.md](docs/SCENARIOS.md) | All deployment scenarios with diagrams |
+| [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) | Complete command-line reference |
+
+### Configuration
+
+| Document | Description |
+|----------|-------------|
+| [AGENT_CONFIGURATION.md](docs/AGENT_CONFIGURATION.md) | Agent customization guide |
 | [POLICY_AND_APPROVALS.md](docs/POLICY_AND_APPROVALS.md) | Policy configuration guide |
-| [OBSERVABILITY_EXPORT.md](docs/OBSERVABILITY_EXPORT.md) | Metrics and logging |
-| [RUNTIME_API.md](docs/RUNTIME_API.md) | Runtime service API reference |
+| [MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md) | MCP server setup and integration |
+| [SLACK_SOCKET_MODE.md](docs/SLACK_SOCKET_MODE.md) | Slack integration setup |
+| [TAILSCALE_MANDATORY.md](docs/TAILSCALE_MANDATORY.md) | Why and how to use Tailscale |
+
+### Reference
+
+| Document | Description |
+|----------|-------------|
+| [RUNTIME_API.md](docs/RUNTIME_API.md) | Runtime service REST API reference |
 | [EVIDENCE_PACK_SCHEMA.md](docs/EVIDENCE_PACK_SCHEMA.md) | Evidence pack data structure |
+| [OBSERVABILITY_EXPORT.md](docs/OBSERVABILITY_EXPORT.md) | Metrics and logging |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Common issues and solutions |
 | [SECURITY.md](SECURITY.md) | Security policy and vulnerability reporting |
 
@@ -190,7 +251,7 @@ Wazuh-Openclaw-Autopilot/
 ├── policies/                  # Policy definitions
 │   ├── policy.yaml           # Security policies (source of truth)
 │   └── toolmap.yaml          # MCP tool name mapping
-├── playbooks/                 # Response playbooks
+├── playbooks/                 # Response playbooks (7 included)
 │   ├── bruteforce.md
 │   ├── ransomware.md
 │   ├── suspicious-powershell.md
@@ -199,14 +260,12 @@ Wazuh-Openclaw-Autopilot/
 │   ├── privilege-escalation.md
 │   └── lateral-movement.md
 ├── install/                   # Installation scripts
-│   ├── install.sh            # Universal installer
-│   ├── doctor.sh             # Diagnostic tool
-│   ├── uninstall.sh          # Clean removal
-│   └── env.template          # Configuration template
+│   └── install.sh            # Universal installer (9 scenarios)
 ├── runtime/                   # Runtime service
 │   └── autopilot-service/
+│       ├── index.js          # Main service
+│       └── index.test.js     # Test suite
 ├── docs/                      # Documentation
-├── LICENSE
 └── README.md
 ```
 
@@ -222,11 +281,12 @@ Every case produces a structured, audit-ready evidence pack:
   "severity": "high",
   "confidence": 0.85,
   "entities": [
-    {"type": "ip", "value": "192.168.1.100"},
-    {"type": "user", "value": "admin"},
-    {"type": "host", "value": "web-server-01"}
+    {"type": "ip", "value": "192.168.1.100", "role": "attacker"},
+    {"type": "user", "value": "admin", "role": "target"},
+    {"type": "host", "value": "web-server-01", "role": "victim"}
   ],
   "timeline": [],
+  "mitre": [{"tactic": "Credential Access", "technique": "T1110"}],
   "mcp_calls": [],
   "plans": [],
   "approvals": [],
@@ -252,11 +312,14 @@ autopilot_mcp_tool_call_latency_seconds_bucket{tool}
 autopilot_approvals_requested_total
 autopilot_approvals_granted_total
 autopilot_policy_denies_total{reason}
+
+# Errors
+autopilot_errors_total{component}
 ```
 
 ### Structured Logs
 
-All logs are JSON-formatted with correlation IDs for end-to-end tracing:
+All logs are JSON-formatted with correlation IDs:
 
 ```json
 {
@@ -265,7 +328,8 @@ All logs are JSON-formatted with correlation IDs for end-to-end tracing:
   "component": "triage",
   "msg": "Case created",
   "correlation_id": "abc123",
-  "case_id": "CASE-2024-001"
+  "case_id": "CASE-2024-001",
+  "severity": "high"
 }
 ```
 
@@ -274,15 +338,18 @@ All logs are JSON-formatted with correlation IDs for end-to-end tracing:
 | Control | Description |
 |---------|-------------|
 | **Read-only by default** | Agents cannot execute actions without explicit enablement |
-| **Approval-gated actions** | Response actions require human approval |
+| **Approval-gated actions** | Response actions require human approval via Slack |
 | **Policy enforcement** | All actions checked against declarative policies |
 | **Tailscale-first** | Production requires Tailnet connectivity |
+| **Input validation** | All user inputs validated to prevent injection |
+| **Authorization required** | Write API endpoints require authentication |
 | **No secrets in logs** | Structured logs automatically redact sensitive data |
 | **Localhost metrics** | Metrics endpoint bound to 127.0.0.1 by default |
+| **Memory protection** | Bounded data structures prevent resource exhaustion |
 
 ## Contributing
 
-Contributions are welcome! Whether it's bug reports, feature requests, or pull requests, we appreciate your help in making Wazuh OpenClaw Autopilot better.
+Contributions are welcome! Whether it's bug reports, feature requests, or pull requests.
 
 ### Development Setup
 
@@ -291,15 +358,12 @@ Contributions are welcome! Whether it's bug reports, feature requests, or pull r
 git clone https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot.git
 cd Wazuh-Openclaw-Autopilot
 
-# Install in development mode
-sudo ./install/install.sh --mode bootstrap-openclaw
-
-# Run diagnostics
-./install/doctor.sh
-
 # Run tests
 cd runtime/autopilot-service
 npm test
+
+# Run diagnostics
+sudo ./install/install.sh --mode doctor
 ```
 
 ### Submitting Changes
@@ -312,17 +376,18 @@ npm test
 
 ## Roadmap
 
-- [x] Core agent pack (Triage, Correlation, Policy Guard, Reporting)
+- [x] Core agent pack (7 agents with full configurations)
 - [x] Evidence pack schema v1.0
 - [x] Slack Socket Mode integration
 - [x] Prometheus metrics export
 - [x] Bootstrap/Production deployment modes
-- [x] Responder agent with action execution (disabled by default)
-- [x] Investigation agent with pivot queries
-- [x] Response Planner agent with risk assessment
+- [x] 9 deployment scenarios with interactive installer
+- [x] Comprehensive documentation suite
+- [x] Security hardening (input validation, auth, memory limits)
 - [ ] Teams/Discord integrations
 - [ ] S3/R2 evidence pack storage
 - [ ] OTEL tracing support
+- [ ] Web dashboard
 
 ## License
 
