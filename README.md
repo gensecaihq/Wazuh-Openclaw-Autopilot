@@ -134,7 +134,7 @@ Wazuh OpenClaw Autopilot ships with pre-configured [OpenClaw](https://github.com
 | **Response Planner** | Generates response plans | Plan-only |
 | **Policy Guard** | Evaluates actions against policies | Enforcement |
 | **Reporting** | Daily digest, KPIs | Read-only (scheduled) |
-| **Responder** | Executes approved actions | Approval-gated (v2) |
+| **Responder** | Executes approved actions | Approval-gated (disabled by default) |
 
 ### Deployment Modes
 
@@ -313,7 +313,9 @@ npm test
 - [x] Slack Socket Mode integration
 - [x] Prometheus metrics export
 - [x] Bootstrap/Production deployment modes
-- [ ] Responder agent with action execution (v2)
+- [x] Responder agent with action execution (disabled by default)
+- [x] Investigation agent with pivot queries
+- [x] Response Planner agent with risk assessment
 - [ ] Teams/Discord integrations
 - [ ] S3/R2 evidence pack storage
 - [ ] OTEL tracing support
