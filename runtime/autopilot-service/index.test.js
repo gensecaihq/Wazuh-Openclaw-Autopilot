@@ -180,6 +180,43 @@ describe("Metrics", () => {
   });
 });
 
+describe("Input Validation", () => {
+  it("should accept valid case IDs", async () => {
+    await createCase("CASE-2024-001", { title: "Valid Case" });
+    const retrieved = await getCase("CASE-2024-001");
+    assert.strictEqual(retrieved.case_id, "CASE-2024-001");
+  });
+
+  it("should accept alphanumeric case IDs with hyphens", async () => {
+    await createCase("case-abc-123-XYZ", { title: "Alphanumeric Case" });
+    const retrieved = await getCase("case-abc-123-XYZ");
+    assert.strictEqual(retrieved.case_id, "case-abc-123-XYZ");
+  });
+});
+
+describe("Edge Cases", () => {
+  it("should handle empty case data gracefully", async () => {
+    const result = await createCase("CASE-EMPTY", {});
+
+    assert.strictEqual(result.case_id, "CASE-EMPTY");
+    assert.strictEqual(result.title, "");
+    assert.strictEqual(result.severity, "medium");
+    assert.strictEqual(result.confidence, 0);
+  });
+
+  it("should append to existing arrays on update", async () => {
+    await createCase("CASE-APPEND", {
+      entities: [{ type: "ip", value: "1.2.3.4" }],
+    });
+
+    const updated = await updateCase("CASE-APPEND", {
+      entities: [{ type: "user", value: "admin" }],
+    });
+
+    assert.strictEqual(updated.entities.length, 2);
+  });
+});
+
 // Run if executed directly
 if (require.main === module) {
   console.log("Running tests...");

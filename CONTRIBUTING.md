@@ -137,7 +137,7 @@ Wazuh-Openclaw-Autopilot/
 1. Create a new YAML file in `agents/`:
    ```yaml
    name: wazuh-new-agent
-   version: "1.0.0"
+   version: "2.0.0"
    description: |
      Description of what this agent does.
 

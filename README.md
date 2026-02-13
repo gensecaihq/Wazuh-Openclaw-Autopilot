@@ -171,6 +171,7 @@ Wazuh OpenClaw Autopilot ships with pre-configured [OpenClaw](https://github.com
 | [POLICY_AND_APPROVALS.md](docs/POLICY_AND_APPROVALS.md) | Policy configuration guide |
 | [OBSERVABILITY_EXPORT.md](docs/OBSERVABILITY_EXPORT.md) | Metrics and logging |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Common issues and solutions |
+| [SECURITY.md](SECURITY.md) | Security policy and vulnerability reporting |
 
 ## Repository Structure
 

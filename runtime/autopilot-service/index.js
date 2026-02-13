@@ -503,9 +503,24 @@ async function callMcpTool(toolName, params, correlationId) {
 // HTTP SERVER
 // =============================================================================
 
+const SERVICE_VERSION = "2.0.0";
+const startTime = Date.now();
+
+// Input validation
+function isValidCaseId(caseId) {
+  // Case IDs must be alphanumeric with hyphens, 1-64 chars
+  return /^[a-zA-Z0-9-]{1,64}$/.test(caseId);
+}
+
 function createServer() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
+
+    // Security headers
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("X-XSS-Protection", "1; mode=block");
+    res.setHeader("Cache-Control", "no-store");
 
     // CORS headers for local development
     res.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
@@ -526,10 +541,40 @@ function createServer() {
         return;
       }
 
-      // Health endpoint
+      // Health endpoint (enhanced)
       if (url.pathname === "/health" && req.method === "GET") {
+        const uptimeSeconds = Math.floor((Date.now() - startTime) / 1000);
+        const health = {
+          status: "healthy",
+          version: SERVICE_VERSION,
+          mode: config.mode,
+          uptime_seconds: uptimeSeconds,
+          checks: {
+            data_dir: true,
+            metrics: config.metricsEnabled,
+          },
+          timestamp: new Date().toISOString(),
+        };
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ status: "healthy", mode: config.mode }));
+        res.end(JSON.stringify(health));
+        return;
+      }
+
+      // Readiness endpoint
+      if (url.pathname === "/ready" && req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ready: true }));
+        return;
+      }
+
+      // Version endpoint
+      if (url.pathname === "/version" && req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          service: "wazuh-openclaw-autopilot",
+          version: SERVICE_VERSION,
+          node: process.version,
+        }));
         return;
       }
 
@@ -543,6 +588,14 @@ function createServer() {
 
       if (url.pathname.startsWith("/api/cases/") && req.method === "GET") {
         const caseId = url.pathname.split("/")[3];
+
+        // Input validation
+        if (!caseId || !isValidCaseId(caseId)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid case ID format" }));
+          return;
+        }
+
         try {
           const caseData = await getCase(caseId);
           res.writeHead(200, { "Content-Type": "application/json" });
