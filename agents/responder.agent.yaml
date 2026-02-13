@@ -1,221 +1,689 @@
-# Wazuh Autopilot - Responder Agent
-# Role: Executes approved response actions with verification
-# Permission Level: ACTION EXECUTOR (v2 - requires explicit enablement)
-# WARNING: This agent can execute potentially disruptive actions
+# =============================================================================
+# WAZUH OPENCLAW AUTOPILOT - RESPONDER AGENT
+# =============================================================================
+# Role: Executor - Approved action execution with verification and rollback
+# Permission Level: ACTION EXECUTOR (Requires explicit enablement + approval)
+# Autonomy: APPROVAL-GATED - Only executes after valid approval + policy allow
+# Security Model: Defense-in-depth with kill-switch capability
+# =============================================================================
 
 name: wazuh-responder-agent
 version: "2.0.0"
 description: |
-  Responder Agent executes approved response actions via MCP.
-  This agent is DISABLED BY DEFAULT and requires explicit enablement.
+  Expert Responder Agent - The precision executor of the SOC.
 
-  Prerequisites for execution:
-  - Valid approval token (not expired, single-use, bound to plan/case/approver)
-  - Policy Guard allow decision
-  - Action tools available in MCP
-  - Idempotency check passed
+  This agent operates in APPROVAL-GATED mode, executing response actions ONLY
+  after receiving valid approval tokens and Policy Guard allow decisions.
 
-  Responsibilities:
-  - Execute approved containment actions
-  - Verify action effects
-  - Update evidence pack with execution results
-  - Handle rollback if verification fails
+  CRITICAL SAFETY FEATURES:
+  - DISABLED BY DEFAULT - Requires explicit enablement
+  - Requires valid, unexpired, single-use approval token
+  - Requires Policy Guard allow decision
+  - Verifies action effects before marking complete
+  - Supports automatic rollback on verification failure
+  - Kill-switch capability for emergency halt
+  - Complete audit trail for every execution
 
+  CORE MISSION:
+  Execute approved containment and response actions with precision, verification,
+  and the ability to rollback if effects don't match expectations.
+
+# =============================================================================
+# AGENT IDENTITY
+# =============================================================================
 role: responder
 autonomy_level: approval-gated
+autonomous_execution: false  # Requires approval
+can_execute_actions: true    # CAN execute after approval
 
-# IMPORTANT: This agent is disabled by default
+# CRITICAL: Disabled by default
 enabled: false
-enable_requires:
+enable_requirements:
   - config_flag: AUTOPILOT_ENABLE_RESPONDER=true
   - mcp_tools_available: true
-  - policy_allows_actions: true
+  - policy_guard_active: true
+  - approval_workflow_configured: true
 
-# Tool permissions - action tools allowed ONLY after approval
+# Kill-switch configuration
+kill_switch:
+  enabled: true
+  triggers:
+    - type: manual
+      command: "/wazuh halt"
+      description: "Manual emergency halt"
+
+    - type: automatic
+      condition: "consecutive_failures >= 3"
+      description: "Auto-halt after 3 consecutive failures"
+
+    - type: automatic
+      condition: "verification_failures >= 2"
+      description: "Auto-halt after 2 verification failures"
+
+    - type: automatic
+      condition: "circuit_breaker_open"
+      description: "Auto-halt when circuit breaker trips"
+
+  on_kill_switch:
+    - halt_all_pending_actions: true
+    - notify_admins: immediate
+    - log_event: critical
+    - require_manual_reset: true
+
+# =============================================================================
+# WAZUH EXECUTION EXPERTISE
+# =============================================================================
+wazuh_expertise:
+  # Wazuh Active Response integration
+  active_response_integration:
+    enabled: true
+    timeout_seconds: 60
+    verify_agent_connectivity: true
+
+  # Action execution playbooks
+  action_playbooks:
+    block_ip:
+      wazuh_command: firewall-drop
+      pre_execution:
+        - verify_ip_format
+        - check_not_allowlisted
+        - verify_not_internal_critical
+      execution:
+        - call_active_response
+        - wait_for_acknowledgment
+      post_execution:
+        - verify_block_active
+        - update_evidence_pack
+      verification:
+        method: search_firewall_events
+        query: "rule.groups:firewall AND data.srcip:{target} AND action:drop"
+        timeout_seconds: 30
+        success_criteria: "event_found"
+      rollback:
+        command: firewall-drop-unblock
+        auto_rollback_on_verify_fail: false
+
+    isolate_host:
+      wazuh_command: isolate-endpoint
+      pre_execution:
+        - verify_agent_online
+        - verify_agent_supports_isolation
+        - capture_current_connections
+      execution:
+        - call_active_response
+        - wait_for_isolation_confirmation
+      post_execution:
+        - verify_isolation_status
+        - verify_no_new_connections
+        - update_evidence_pack
+      verification:
+        method: check_agent_isolation_status
+        timeout_seconds: 60
+        retry_count: 3
+        success_criteria: "agent.isolated == true"
+      rollback:
+        command: unisolate-endpoint
+        auto_rollback_on_verify_fail: false
+      warnings:
+        - "Host will lose network connectivity"
+        - "Remote sessions will terminate"
+        - "Cloud sync will pause"
+
+    kill_process:
+      wazuh_command: kill-process
+      pre_execution:
+        - verify_process_exists
+        - capture_process_tree
+        - verify_not_critical_system_process
+      execution:
+        - call_active_response
+        - wait_for_termination
+      post_execution:
+        - verify_process_terminated
+        - check_for_respawn
+        - update_evidence_pack
+      verification:
+        method: search_process_events
+        query: "agent.name:{host} AND data.win.eventdata.processId:{pid}"
+        timeout_seconds: 15
+        success_criteria: "process_not_found"
+      rollback:
+        command: null  # Not reversible
+        auto_rollback_on_verify_fail: false
+      warnings:
+        - "Process termination is irreversible"
+        - "Child processes may also terminate"
+
+    disable_user:
+      wazuh_command: disable-account
+      pre_execution:
+        - verify_user_exists
+        - check_user_not_critical_service
+        - capture_active_sessions
+      execution:
+        - call_active_response
+        - wait_for_account_disable
+      post_execution:
+        - verify_account_disabled
+        - terminate_active_sessions
+        - update_evidence_pack
+      verification:
+        method: check_user_status
+        timeout_seconds: 30
+        retry_count: 3
+        success_criteria: "user.enabled == false"
+      rollback:
+        command: enable-account
+        auto_rollback_on_verify_fail: false
+      warnings:
+        - "User will lose all access immediately"
+        - "Active sessions will be terminated"
+        - "May require HR notification"
+
+    quarantine_file:
+      wazuh_command: quarantine-file
+      pre_execution:
+        - verify_file_exists
+        - capture_file_metadata
+        - compute_file_hash
+      execution:
+        - call_active_response
+        - wait_for_quarantine
+      post_execution:
+        - verify_file_quarantined
+        - verify_file_not_accessible
+        - update_evidence_pack
+      verification:
+        method: check_file_status
+        timeout_seconds: 30
+        success_criteria: "file.quarantined == true"
+      rollback:
+        command: restore-file
+        auto_rollback_on_verify_fail: false
+
+  # Critical process protection
+  protected_processes:
+    - name: "wazuh-agent"
+      pattern: "wazuh-agent.*"
+      policy: never_kill
+
+    - name: "system"
+      pattern: "(init|systemd|launchd|csrss|services)"
+      policy: never_kill
+
+    - name: "security"
+      pattern: "(sshd|winlogon|lsass)"
+      policy: require_admin_approval
+
+  # Internal IP ranges (never block)
+  protected_networks:
+    - cidr: "10.0.0.0/8"
+      policy: require_elevated_approval
+    - cidr: "172.16.0.0/12"
+      policy: require_elevated_approval
+    - cidr: "192.168.0.0/16"
+      policy: require_elevated_approval
+    - cidr: "127.0.0.0/8"
+      policy: never_block
+
+# =============================================================================
+# TOOL PERMISSIONS
+# =============================================================================
 allowed_tools:
   # Read operations (always allowed)
-  - get_alert
-  - search_alerts
-  - search_events
-  - get_agent
-  - get_rule_info
-  # Action operations (only after approval + policy allow)
-  - block_ip
-  - isolate_host
-  - kill_process
-  - disable_user
-  - quarantine_file
+  - name: get_alert
+    purpose: "Retrieve alert context for execution"
+    requires_approval: false
 
-# Action tool configuration
-action_tools:
-  block_ip:
-    requires:
-      - valid_approval_token
-      - policy_guard_allow
-      - idempotency_check
-    verification:
-      method: check_block_status
-      timeout_seconds: 30
-      retry_count: 3
-    rollback:
-      method: unblock_ip
-      auto_rollback_on_verify_fail: false
+  - name: search_alerts
+    purpose: "Search for related alerts during verification"
+    requires_approval: false
 
-  isolate_host:
-    requires:
-      - valid_approval_token
-      - policy_guard_allow
-      - idempotency_check
-    verification:
-      method: check_isolation_status
-      timeout_seconds: 60
-      retry_count: 3
-    rollback:
-      method: unisolate_host
-      auto_rollback_on_verify_fail: false
+  - name: search_events
+    purpose: "Search events for verification"
+    requires_approval: false
 
-  kill_process:
-    requires:
-      - valid_approval_token
-      - policy_guard_allow
-      - idempotency_check
-    verification:
-      method: check_process_terminated
-      timeout_seconds: 15
-      retry_count: 2
-    rollback:
-      method: null  # Not reversible
-      auto_rollback_on_verify_fail: false
+  - name: get_agent
+    purpose: "Get endpoint status for execution"
+    requires_approval: false
 
-  disable_user:
-    requires:
-      - valid_approval_token
-      - policy_guard_allow
-      - idempotency_check
-      - elevated_approver  # Always requires elevated approval
-    verification:
-      method: check_user_disabled
-      timeout_seconds: 30
-      retry_count: 3
-    rollback:
-      method: enable_user
-      auto_rollback_on_verify_fail: false
+  - name: get_rule_info
+    purpose: "Retrieve rule context"
+    requires_approval: false
 
-  quarantine_file:
-    requires:
-      - valid_approval_token
-      - policy_guard_allow
-      - idempotency_check
-    verification:
-      method: check_file_quarantined
-      timeout_seconds: 30
-      retry_count: 3
-    rollback:
-      method: restore_file
-      auto_rollback_on_verify_fail: false
+  # ACTION OPERATIONS (require approval + policy allow)
+  - name: block_ip
+    purpose: "Block IP address via firewall"
+    requires_approval: true
+    requires_policy_allow: true
 
-# Trigger conditions
+  - name: isolate_host
+    purpose: "Network isolate endpoint"
+    requires_approval: true
+    requires_policy_allow: true
+
+  - name: kill_process
+    purpose: "Terminate malicious process"
+    requires_approval: true
+    requires_policy_allow: true
+
+  - name: disable_user
+    purpose: "Disable user account"
+    requires_approval: true
+    requires_policy_allow: true
+
+  - name: quarantine_file
+    purpose: "Quarantine malicious file"
+    requires_approval: true
+    requires_policy_allow: true
+
+# =============================================================================
+# AUTONOMOUS TRIGGERS
+# =============================================================================
 triggers:
   events:
-    - type: approval_granted
-      when_policy_allows: true
-      auto_execute: false  # Still requires explicit trigger
+    - type: policy_allow_decision
+      conditions:
+        decision: allow
+        token_valid: true
+      auto_execute: false  # Still requires explicit command
+      priority: high
+
+    - type: expedited_policy_allow
+      conditions:
+        decision: allow
+        expedited: true
+        token_valid: true
+      auto_execute: false
+      priority: immediate
+
   commands:
     - name: execute
       pattern: "/wazuh execute <plan_id>"
       description: "Execute an approved plan"
       requires:
-        - valid_approval
-        - policy_allow
+        - valid_approval_token
+        - policy_guard_allow
 
-# Execution configuration
+    - name: execute-action
+      pattern: "/wazuh execute-action <action_id>"
+      description: "Execute a single approved action"
+      requires:
+        - valid_approval_token
+        - policy_guard_allow
+
+    - name: rollback
+      pattern: "/wazuh rollback <execution_id>"
+      description: "Rollback a previously executed action"
+      requires:
+        - admin_approval
+        - action_reversible
+
+    - name: halt
+      pattern: "/wazuh halt"
+      description: "Emergency halt all executions"
+      requires:
+        - elevated_permissions
+
+# =============================================================================
+# EXECUTION ENGINE
+# =============================================================================
 execution:
-  mode: sequential  # Execute actions one at a time
+  enabled: true
+  mode: sequential  # Execute actions one at a time for safety
 
-  pre_execution:
-    - validate_approval_token
-    - check_policy_guard
-    - verify_idempotency
-    - log_execution_start
+  pre_execution_chain:
+    - step: validate_approval_token
+      description: "Verify token is valid, unexpired, unused"
+      fail_action: abort
 
-  post_execution:
-    - verify_action_effect
-    - update_evidence_pack
-    - invalidate_approval_token
-    - notify_slack
-    - log_execution_complete
+    - step: verify_policy_allow
+      description: "Confirm Policy Guard allow decision"
+      fail_action: abort
+
+    - step: check_idempotency
+      description: "Verify action not already executed"
+      fail_action: skip_with_note
+
+    - step: verify_target_state
+      description: "Confirm target is in expected state"
+      fail_action: abort
+
+    - step: capture_pre_state
+      description: "Capture state before execution for rollback"
+      fail_action: warn_and_continue
+
+    - step: log_execution_start
+      description: "Record execution attempt"
+      fail_action: abort
+
+  execution_chain:
+    - step: execute_action
+      description: "Call Wazuh active response"
+      timeout_seconds: 60
+      retry_count: 2
+      fail_action: abort_and_notify
+
+    - step: wait_for_acknowledgment
+      description: "Wait for Wazuh acknowledgment"
+      timeout_seconds: 30
+      fail_action: retry_or_abort
+
+  post_execution_chain:
+    - step: verify_action_effect
+      description: "Confirm action had intended effect"
+      timeout_seconds: 60
+      retry_count: 3
+      fail_action: flag_for_review
+
+    - step: invalidate_approval_token
+      description: "Mark token as used (single-use)"
+      fail_action: warn_and_continue
+
+    - step: update_evidence_pack
+      description: "Record execution details in evidence pack"
+      fail_action: warn_and_continue
+
+    - step: update_case_status
+      description: "Update case with execution result"
+      fail_action: warn_and_continue
+
+    - step: notify_slack
+      description: "Post execution notification"
+      fail_action: warn_and_continue
+
+    - step: log_execution_complete
+      description: "Record completion with verification status"
+      fail_action: warn_and_continue
 
   on_failure:
-    - log_failure
-    - update_evidence_pack
-    - notify_slack_failure
-    - consider_rollback
+    - action: log_failure_details
+      include: [error_type, error_message, stack_trace, context]
+
+    - action: update_evidence_pack
+      include: [failure_details, pre_state, attempted_action]
+
+    - action: notify_slack_failure
+      urgency: high
+
+    - action: evaluate_rollback
+      condition: "action.reversible AND pre_state.captured"
+
+    - action: increment_failure_counter
+      for_circuit_breaker: true
 
   verification:
     enabled: true
+    required: true
     timeout_seconds: 60
-    fail_action: halt_and_notify
+    retry_policy:
+      max_attempts: 3
+      backoff_type: linear
+      delay_ms: 5000
 
-# Output configurations
+    on_verify_fail:
+      - log_verification_failure
+      - flag_for_manual_review
+      - consider_rollback
+      - notify_admin
+
+# =============================================================================
+# ROLLBACK ENGINE
+# =============================================================================
+rollback:
+  enabled: true
+
+  triggers:
+    - type: manual
+      command: "/wazuh rollback <execution_id>"
+      requires: admin_approval
+
+    - type: automatic
+      condition: "verification_failed AND auto_rollback_enabled"
+      requires: null  # Auto-triggered
+
+    - type: scheduled
+      condition: "action.duration_expired"
+      requires: null  # Auto-triggered
+
+  pre_rollback:
+    - verify_original_action_exists
+    - verify_action_is_reversible
+    - capture_current_state
+    - log_rollback_start
+
+  post_rollback:
+    - verify_rollback_effect
+    - update_evidence_pack
+    - update_case_status
+    - notify_slack
+
+  on_rollback_fail:
+    - log_failure
+    - escalate_to_admin
+    - flag_for_manual_intervention
+
+# =============================================================================
+# OUTPUTS
+# =============================================================================
 outputs:
   execution_result:
+    create: true
     fields:
+      - execution_id
       - plan_id
       - case_id
-      - action
-      - status
+      - action_type
+      - target
+      - status  # pending | executing | completed | failed | rolled_back
       - verification_result
-      - timestamp
+      - pre_state_snapshot
+      - post_state_snapshot
       - duration_ms
+      - timestamp
+      - correlation_id
       - error_details
+      - rollback_available
 
   evidence_pack:
     update: true
     sections:
       - actions
+      - execution_chain_results
       - verification_results
       - mcp_calls
+      - state_snapshots
+      - rollback_history
 
   slack:
-    notify_on_execution: true
+    enabled: true
+    notify_on_execution_start: true
+    notify_on_execution_complete: true
     notify_on_failure: true
-    include:
-      - action_summary
-      - verification_status
-      - next_steps
+    notify_on_rollback: true
 
-# Safety safeguards
+    execution_card:
+      header: ":zap: Action Executed"
+      fields:
+        - case_id
+        - action_type
+        - target
+        - status_badge
+        - verification_result
+        - duration
+        - approver
+      actions:
+        - label: "View Details"
+          action: view_execution
+        - label: "Rollback"
+          action: request_rollback
+          condition: "action.reversible"
+
+    failure_card:
+      header: ":x: Execution Failed"
+      urgency_indicator: true
+      fields:
+        - case_id
+        - action_type
+        - target
+        - error_summary
+        - recommended_actions
+      actions:
+        - label: "Retry"
+          action: retry_execution
+        - label: "Escalate"
+          action: escalate_to_admin
+
+# =============================================================================
+# INTER-AGENT COMMUNICATION
+# =============================================================================
+agent_triggers:
+  on_execution_complete:
+    - target: reporting-agent
+      action: log_action_execution
+      priority: medium
+      include_result: true
+
+  on_execution_failed:
+    - target: reporting-agent
+      action: log_action_failure
+      priority: high
+      include_error: true
+
+    - target: response-planner-agent
+      condition: "requires_alternative_plan"
+      action: request_alternative_plan
+      priority: high
+
+  on_rollback_complete:
+    - target: reporting-agent
+      action: log_rollback
+      priority: medium
+
+    - target: investigation-agent
+      action: investigate_rollback_cause
+      priority: medium
+
+# =============================================================================
+# SAFETY SAFEGUARDS
+# =============================================================================
 safeguards:
+  # Action limits
   max_actions_per_plan: 10
   max_actions_per_hour: 50
+  max_actions_per_day: 200
+
+  # Verification requirements
   require_verification: true
   halt_on_verify_fail: true
+
+  # Timing controls
   cooldown_between_actions_ms: 5000
+  min_time_between_same_action_ms: 60000
+
+  # Emergency controls
+  emergency_halt_enabled: true
+  halt_on_consecutive_failures: 3
+
+  # Circuit breaker
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 3
+    reset_timeout_minutes: 15
+    half_open_requests: 1
+
+  # Blast radius limits
+  max_hosts_per_plan: 10
+  max_users_per_plan: 5
+  max_ips_per_plan: 50
+
+  # Protected entity checks
+  check_protected_processes: true
+  check_protected_networks: true
+  check_critical_assets: true
+
+# =============================================================================
+# SELF-HEALING & ERROR RECOVERY
+# =============================================================================
+resilience:
+  retry_policy:
+    max_attempts: 3
+    backoff_type: exponential
+    initial_delay_ms: 2000
+    max_delay_ms: 30000
+
+  fallback_behavior:
+    mcp_unavailable: abort_with_notification
+    verification_timeout: retry_then_flag
+    rollback_failed: escalate_to_admin
 
   circuit_breaker:
     enabled: true
     failure_threshold: 3
     reset_timeout_minutes: 15
 
-# Rate limiting
+  # Default to secure state
+  fail_secure: true
+  fail_secure_action: abort_and_notify
+
+# =============================================================================
+# RATE LIMITING
+# =============================================================================
 rate_limits:
-  max_concurrent: 1  # Only one execution at a time
+  max_concurrent: 1  # Only one execution at a time for safety
   max_per_minute: 5
+  max_per_hour: 50
   cooldown_on_error_ms: 30000
 
-# Logging configuration
+# =============================================================================
+# LOGGING & METRICS
+# =============================================================================
 logging:
   level: info
-  include_correlation_id: true
-  include_case_id: true
-  include_plan_id: true
-  include_approval_id: true
-  include_action_details: true
-  redact_secrets: true
+  structured: true
+  fields:
+    - correlation_id
+    - case_id
+    - plan_id
+    - execution_id
+    - action_type
+    - target
+    - status
+    - verification_result
+    - duration_ms
+    - approver_id
+  redact:
+    - password
+    - token
+    - secret
+    - credential
+    - api_key
 
-# Metrics to emit
 metrics:
-  - autopilot_actions_executed_total{action,status}
-  - autopilot_action_execution_latency_seconds{action}
-  - autopilot_action_verification_total{action,result}
-  - autopilot_action_rollbacks_total{action}
+  - name: autopilot_actions_executed_total
+    type: counter
+    labels: [action_type, status]
+
+  - name: autopilot_action_execution_latency_seconds
+    type: histogram
+    buckets: [1, 5, 10, 30, 60, 120]
+
+  - name: autopilot_action_verification_total
+    type: counter
+    labels: [action_type, result]
+
+  - name: autopilot_action_rollbacks_total
+    type: counter
+    labels: [action_type, trigger]
+
+  - name: autopilot_execution_failures_total
+    type: counter
+    labels: [action_type, error_type]
+
+  - name: autopilot_circuit_breaker_state
+    type: gauge
+    labels: []  # 0=closed, 1=half_open, 2=open
+
+  - name: autopilot_kill_switch_activations_total
+    type: counter
+    labels: [trigger_type]

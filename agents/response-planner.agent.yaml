@@ -1,177 +1,456 @@
-# Wazuh Autopilot - Response Planner Agent
-# Role: Generates response plans (no execution), produces approval requests
-# Permission Level: PLAN-ONLY (no execution capability)
+# =============================================================================
+# WAZUH OPENCLAW AUTOPILOT - RESPONSE PLANNER AGENT
+# =============================================================================
+# Role: Strategist - Response plan generation, risk assessment, approval requests
+# Permission Level: PLAN-ONLY (Cannot execute - only proposes)
+# Autonomy: FULL for planning - Approval required for execution
+# =============================================================================
 
 name: wazuh-response-planner-agent
-version: "1.0.0"
+version: "2.0.0"
 description: |
-  Response Planner Agent analyzes cases and generates recommended response
-  plans. This agent CANNOT execute actions - it only creates plans that
-  require approval before execution by the Responder Agent.
+  Expert Response Planner Agent - The strategic mind of the SOC.
 
-  Responsibilities:
-  - Analyze case severity, confidence, and blast radius
-  - Generate prioritized response action plans
-  - Assess risk and potential impact of each action
-  - Create approval requests with full context
-  - Document reasoning and alternatives
+  This agent operates with FULL AUTONOMY for plan generation, automatically
+  creating comprehensive response plans for high-severity incidents. Plans
+  REQUIRE human approval before any execution occurs.
 
+  CORE MISSION:
+  Generate intelligent, risk-assessed response plans that balance security
+  needs with business continuity, providing responders with clear, actionable
+  recommendations.
+
+  CRITICAL SAFETY: This agent CANNOT execute any response actions.
+
+# =============================================================================
+# AGENT IDENTITY
+# =============================================================================
 role: response_planner
 autonomy_level: plan-only
+autonomous_execution: true
+can_execute_actions: false  # Explicit safety flag
 
-# Tool permissions - read-only for planning purposes
+# Wazuh response expertise
+wazuh_expertise:
+  # Available Wazuh Active Response actions
+  active_response_actions:
+    - name: firewall-drop
+      wazuh_command: firewall-drop
+      target_type: ip
+      reversible: true
+      risk_level: low
+      typical_duration: 3600
+
+    - name: host-deny
+      wazuh_command: host-deny
+      target_type: ip
+      reversible: true
+      risk_level: low
+      typical_duration: 3600
+
+    - name: disable-account
+      wazuh_command: disable-account
+      target_type: user
+      reversible: true
+      risk_level: high
+      requires_elevated: true
+
+    - name: restart-wazuh
+      wazuh_command: restart-wazuh
+      target_type: agent
+      reversible: false
+      risk_level: medium
+
+  # Response playbooks by attack type
+  response_playbooks:
+    brute_force:
+      primary_actions:
+        - action: block_ip
+          target: source_ip
+          duration: 86400
+          condition: "attempts > 10 AND no_successful_auth"
+      secondary_actions:
+        - action: force_password_reset
+          target: targeted_users
+          condition: "any_successful_auth"
+      containment_priority: 1
+
+    lateral_movement:
+      primary_actions:
+        - action: isolate_host
+          target: compromised_host
+          condition: "confidence > 0.8"
+        - action: disable_user
+          target: compromised_user
+          condition: "credential_confirmed_compromised"
+      secondary_actions:
+        - action: block_ip
+          target: attacker_ips
+      containment_priority: 0  # Immediate
+
+    malware:
+      primary_actions:
+        - action: isolate_host
+          target: infected_host
+          condition: "malware_confirmed"
+        - action: quarantine_file
+          target: malware_file
+      secondary_actions:
+        - action: block_ip
+          target: c2_ips
+        - action: kill_process
+          target: malware_process
+      containment_priority: 0
+
+    data_exfiltration:
+      primary_actions:
+        - action: isolate_host
+          target: source_host
+          condition: "active_exfil"
+        - action: block_ip
+          target: destination_ips
+      secondary_actions:
+        - action: disable_user
+          target: associated_user
+      containment_priority: 0
+
+    privilege_escalation:
+      primary_actions:
+        - action: disable_user
+          target: escalated_user
+        - action: isolate_host
+          target: affected_host
+          condition: "root_or_admin_achieved"
+      containment_priority: 1
+
+# =============================================================================
+# TOOL PERMISSIONS (READ-ONLY)
+# =============================================================================
 allowed_tools:
-  - get_alert
-  - search_alerts
-  - search_events
-  - get_agent
-  - get_rule_info
+  - name: get_alert
+    purpose: "Retrieve alert details for plan context"
+    required: true
 
-# Explicitly cannot use action tools
+  - name: search_alerts
+    purpose: "Search for related context"
+    required: true
+
+  - name: search_events
+    purpose: "Gather additional evidence"
+    required: true
+
+  - name: get_agent
+    purpose: "Get endpoint status for planning"
+    required: true
+
+  - name: get_rule_info
+    purpose: "Retrieve rule context"
+    required: false
+
+# EXPLICIT DENIAL - This agent cannot execute
 denied_tools:
   - block_ip
   - isolate_host
   - kill_process
   - disable_user
   - quarantine_file
+  - active_response
+  - firewall_drop
+  - host_deny
+  - restart_wazuh
   - "*_write"
   - "*_execute"
   - "*_modify"
+  - "*_delete"
+  - "*_action"
 
-# Trigger conditions
+# =============================================================================
+# AUTONOMOUS TRIGGERS
+# =============================================================================
 triggers:
   events:
-    - type: case_severity_high
-      auto_plan: true
     - type: case_severity_critical
-      auto_plan: true
+      auto_execute: true
+      priority: immediate
+
+    - type: case_severity_high
+      auto_execute: true
+      priority: high
+
+    - type: investigation_complete
+      conditions:
+        finding_category: [confirmed_compromise, likely_compromise]
+      auto_execute: true
+      priority: high
+
     - type: correlation_complete
-      when_severity:
-        - high
-        - critical
-      auto_plan: true
+      conditions:
+        pattern_type: [lateral_movement, data_exfiltration, malware]
+      auto_execute: true
+      priority: immediate
+
+    - type: blast_radius_critical
+      conditions:
+        blast_radius_score: ">= 75"
+      auto_execute: true
+      priority: immediate
+
   commands:
     - name: propose
       pattern: "/wazuh propose <case_id>"
       description: "Generate response plan for a case"
+
     - name: replan
       pattern: "/wazuh replan <case_id>"
       description: "Generate alternative response plan"
 
-# Planning configuration
+    - name: expedite
+      pattern: "/wazuh expedite <case_id>"
+      description: "Generate expedited plan for critical incident"
+
+# =============================================================================
+# PLANNING ENGINE
+# =============================================================================
 planning:
+  enabled: true
+  autonomous: true
+
   strategies:
-    - containment_first     # Prioritize isolation/blocking
-    - evidence_preservation # Ensure forensic data retained
-    - minimal_disruption    # Minimize business impact
-    - defense_in_depth      # Multiple layers of response
+    - name: containment_first
+      description: "Prioritize stopping the threat spread"
+      weight: 0.4
+      preferred_actions: [isolate_host, block_ip]
+
+    - name: evidence_preservation
+      description: "Ensure forensic data is retained"
+      weight: 0.2
+      constraints:
+        - avoid_reboot_before_memory_capture
+        - preserve_logs_before_cleanup
+
+    - name: minimal_disruption
+      description: "Minimize business impact"
+      weight: 0.25
+      considerations:
+        - asset_criticality
+        - user_impact_radius
+        - service_dependencies
+
+    - name: defense_in_depth
+      description: "Multiple containment layers"
+      weight: 0.15
+      approach: multiple_independent_actions
 
   action_catalog:
-    # Available actions the planner can recommend
     containment:
-      - action: isolate_host
-        risk: medium
-        reversible: true
-        requires_approval: true
       - action: block_ip
-        risk: low
+        display_name: "Block IP Address"
+        wazuh_tool: block_ip
+        risk_level: low
         reversible: true
+        typical_duration_hours: 24
+        business_impact: minimal
         requires_approval: true
+        min_approver_group: standard
+
+      - action: isolate_host
+        display_name: "Isolate Host from Network"
+        wazuh_tool: isolate_host
+        risk_level: medium
+        reversible: true
+        business_impact: significant
+        requires_approval: true
+        min_approver_group: elevated
+        warnings:
+          - "Host will lose network connectivity"
+          - "Remote users will be disconnected"
+
       - action: disable_user
-        risk: high
+        display_name: "Disable User Account"
+        wazuh_tool: disable_user
+        risk_level: high
         reversible: true
+        business_impact: significant
         requires_approval: true
+        min_approver_group: admin
+        warnings:
+          - "User will lose all access immediately"
+          - "May require HR notification"
 
     eradication:
       - action: kill_process
-        risk: medium
+        display_name: "Terminate Process"
+        wazuh_tool: kill_process
+        risk_level: medium
         reversible: false
+        business_impact: varies
         requires_approval: true
+        min_approver_group: elevated
+
       - action: quarantine_file
-        risk: low
+        display_name: "Quarantine File"
+        wazuh_tool: quarantine_file
+        risk_level: low
         reversible: true
+        business_impact: minimal
         requires_approval: true
+        min_approver_group: standard
 
     investigation:
       - action: collect_forensics
-        risk: low
+        display_name: "Collect Forensic Data"
+        wazuh_tool: null  # Manual action
+        risk_level: low
         reversible: false
         requires_approval: false
 
-  risk_assessment:
-    enabled: true
-    factors:
-      - action_reversibility
-      - asset_criticality
-      - business_impact
-      - blast_radius
-      - confidence_level
+# =============================================================================
+# RISK ASSESSMENT ENGINE
+# =============================================================================
+risk_assessment:
+  enabled: true
+  autonomous: true
 
-    thresholds:
-      require_senior_approval:
-        risk_score_min: 7
-        asset_criticality:
-          - critical
-          - production
+  factors:
+    - name: action_reversibility
+      weight: 0.15
+      scoring:
+        reversible: 0
+        partially_reversible: 5
+        irreversible: 10
 
-      auto_deny:
-        risk_score_min: 9
-        confidence_below: 0.6
+    - name: asset_criticality
+      weight: 0.25
+      scoring:
+        low: 0
+        medium: 3
+        high: 6
+        critical: 10
 
-# Output configurations
-outputs:
-  plan:
-    create: true
-    fields:
-      - plan_id
+    - name: business_impact
+      weight: 0.25
+      scoring:
+        minimal: 0
+        moderate: 4
+        significant: 7
+        severe: 10
+
+    - name: blast_radius
+      weight: 0.15
+      scoring:
+        single_host: 0
+        multiple_hosts: 4
+        subnet: 7
+        enterprise_wide: 10
+
+    - name: confidence_level
+      weight: 0.20
+      scoring:
+        # Lower confidence = higher risk of wrong action
+        high: 0
+        medium: 4
+        low: 8
+
+  thresholds:
+    low_risk: [0, 3]
+    medium_risk: [4, 6]
+    high_risk: [7, 8]
+    critical_risk: [9, 10]
+
+  escalation_rules:
+    - condition: "risk_score >= 7"
+      require_approver_group: elevated
+
+    - condition: "risk_score >= 9"
+      require_approver_group: admin
+
+    - condition: "asset.criticality == 'critical'"
+      require_approver_group: admin
+
+    - condition: "confidence < 0.7 AND action.risk_level != 'low'"
+      action: auto_deny
+      reason: "Insufficient confidence for risky action"
+
+# =============================================================================
+# PLAN GENERATION
+# =============================================================================
+plan_generation:
+  enabled: true
+  autonomous: true
+
+  structure:
+    - section: executive_summary
+      content:
+        - incident_overview
+        - recommended_immediate_actions
+        - risk_assessment_summary
+
+    - section: situation_analysis
+      content:
+        - attack_pattern_identified
+        - blast_radius
+        - assets_at_risk
+        - timeline_summary
+
+    - section: proposed_actions
+      content:
+        - action_sequence
+        - per_action_details
+        - expected_outcomes
+        - rollback_procedures
+
+    - section: risk_analysis
+      content:
+        - action_risks
+        - inaction_risks
+        - business_impact_assessment
+
+    - section: evidence_summary
+      content:
+        - key_indicators
+        - confidence_factors
+        - supporting_alerts
+
+  action_sequencing:
+    method: dependency_aware
+    rules:
+      - "evidence_collection BEFORE eradication"
+      - "containment BEFORE eradication"
+      - "host_isolation BEFORE process_kill"
+      - "credential_reset AFTER user_disable"
+
+  alternatives:
+    generate: true
+    count: 2
+    strategies:
+      - aggressive  # Maximum containment
+      - conservative  # Minimum disruption
+
+# =============================================================================
+# APPROVAL REQUEST GENERATION
+# =============================================================================
+approval_request:
+  enabled: true
+  autonomous: true
+
+  content:
+    required_fields:
       - case_id
-      - actions
-      - risk_assessment
-      - blast_radius
-      - reasoning
-      - alternatives
-      - recommended_approvers
-
-    format:
-      actions:
-        - sequence_number
-        - action_type
-        - target
-        - parameters
-        - risk_level
-        - expected_outcome
-        - rollback_procedure
-
-  evidence_pack:
-    update: true
-    sections:
-      - plans
-      - risk_assessment
-
-  approval_request:
-    create: true
-    include:
       - case_summary
-      - plan_actions
-      - risk_notes
-      - blast_radius
-      - evidence_links
+      - severity
       - confidence_score
+      - proposed_actions
+      - risk_assessment
+      - blast_radius
+      - evidence_summary
       - time_sensitivity
+      - recommended_approver_group
 
-  slack:
-    post_approval_request: true
-    channel_type: approvals
-    include_buttons:
-      - approve
-      - deny
-      - request_changes
-    fallback_commands:
-      approve: "/wazuh approve <plan_id>"
-      deny: "/wazuh deny <plan_id> <reason>"
+    optional_fields:
+      - alternative_plans
+      - inaction_risks
+      - historical_similar_cases
 
-# Approval configuration
-approval:
   token:
     ttl_minutes: 60
     single_use: true
@@ -179,29 +458,165 @@ approval:
       - plan_id
       - case_id
       - approver_id
+    extend_on_request: true
+    max_extensions: 2
 
-  requirements:
-    min_approvers: 1
-    require_reason_on_deny: true
-    escalation_timeout_minutes: 30
+  escalation:
+    enabled: true
+    timeout_minutes: 30
+    escalation_path:
+      - standard
+      - elevated
+      - admin
+    notify_on_escalation: true
 
-# Rate limiting and safeguards
+# =============================================================================
+# OUTPUTS
+# =============================================================================
+outputs:
+  plan:
+    create: true
+    fields:
+      - plan_id
+      - case_id
+      - plan_version
+      - created_at
+      - status
+      - executive_summary
+      - proposed_actions
+      - action_sequence
+      - risk_assessment
+      - blast_radius
+      - evidence_summary
+      - alternatives
+      - recommended_approvers
+      - time_sensitivity
+      - expiration
+
+  evidence_pack:
+    update: true
+    sections:
+      - plans
+      - risk_assessments
+      - approval_requests
+
+  slack:
+    enabled: true
+    post_approval_request: true
+    channel_type: approvals
+
+    approval_card:
+      header: ":rotating_light: Response Plan Requires Approval"
+      urgency_indicator: true
+      fields:
+        - case_id
+        - severity_badge
+        - confidence_score
+        - incident_summary
+        - proposed_actions_list
+        - risk_level_badge
+        - blast_radius_summary
+        - evidence_highlights
+        - time_remaining
+      actions:
+        - label: "Approve"
+          style: primary
+          action: approve_plan
+        - label: "Deny"
+          style: danger
+          action: deny_plan
+        - label: "Request Changes"
+          action: request_changes
+        - label: "View Full Plan"
+          action: view_plan
+      fallback_commands:
+        approve: "/wazuh approve <plan_id>"
+        deny: "/wazuh deny <plan_id> <reason>"
+
+# =============================================================================
+# INTER-AGENT COMMUNICATION
+# =============================================================================
+agent_triggers:
+  on_plan_approved:
+    - target: policy-guard-agent
+      action: evaluate_plan
+      priority: immediate
+
+  on_plan_denied:
+    - target: reporting-agent
+      action: log_denial
+      include_reason: true
+
+  on_expedited_request:
+    - target: policy-guard-agent
+      action: expedited_evaluation
+      priority: immediate
+
+# =============================================================================
+# SELF-HEALING & ERROR RECOVERY
+# =============================================================================
+resilience:
+  retry_policy:
+    max_attempts: 3
+    backoff_type: exponential
+    initial_delay_ms: 1000
+
+  fallback_behavior:
+    context_unavailable: generate_with_available
+    risk_calculation_error: default_to_high_risk
+
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    reset_timeout_seconds: 60
+
+# =============================================================================
+# RATE LIMITING
+# =============================================================================
 rate_limits:
-  max_concurrent: 2
-  max_per_minute: 10
+  max_concurrent: 3
+  max_per_minute: 20
+  max_plans_per_case: 5
   cooldown_on_error_ms: 5000
 
-# Logging configuration
+# =============================================================================
+# LOGGING & METRICS
+# =============================================================================
 logging:
   level: info
-  include_correlation_id: true
-  include_case_id: true
-  include_plan_id: true
-  redact_secrets: true
+  structured: true
+  fields:
+    - correlation_id
+    - case_id
+    - plan_id
+    - proposed_actions
+    - risk_score
+    - approval_status
+    - processing_time_ms
+  redact:
+    - password
+    - token
+    - secret
 
-# Metrics to emit
 metrics:
-  - autopilot_plans_proposed_total
-  - autopilot_plans_risk_score
-  - autopilot_approvals_requested_total
-  - autopilot_planning_latency_seconds
+  - name: autopilot_plans_proposed_total
+    type: counter
+    labels: [severity, risk_level]
+
+  - name: autopilot_plan_generation_latency_seconds
+    type: histogram
+    buckets: [0.5, 1, 2, 5, 10, 30]
+
+  - name: autopilot_plan_risk_score
+    type: histogram
+    buckets: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+  - name: autopilot_approvals_requested_total
+    type: counter
+    labels: [required_approver_group]
+
+  - name: autopilot_approval_escalations_total
+    type: counter
+
+  - name: autopilot_plans_expired_total
+    type: counter

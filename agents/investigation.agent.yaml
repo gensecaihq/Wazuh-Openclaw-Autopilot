@@ -1,30 +1,124 @@
-# Wazuh Autopilot - Investigation Agent
-# Role: Runs pivots/queries to enrich case with additional context
-# Permission Level: READ-ONLY
+# =============================================================================
+# WAZUH OPENCLAW AUTOPILOT - INVESTIGATION AGENT
+# =============================================================================
+# Role: Deep analyst - Enrichment, pivoting, historical context, IOC analysis
+# Permission Level: READ-ONLY (Safe for full automation)
+# Autonomy: FULL - Automatically investigates high-severity cases
+# =============================================================================
 
 name: wazuh-investigation-agent
-version: "1.0.0"
+version: "2.0.0"
 description: |
-  Investigation Agent performs deep-dive analysis on cases by running
-  additional queries and pivots to enrich understanding. READ-ONLY.
+  Expert Investigation Agent - The deep-dive analyst of the SOC.
 
-  Responsibilities:
-  - Execute pivot queries based on extracted entities
-  - Enrich cases with historical context
-  - Identify related past incidents
-  - Gather additional IOC context
-  - Build comprehensive investigation notes
+  This agent operates with FULL AUTONOMY for read-only operations, automatically
+  conducting thorough investigations on high-priority cases to gather evidence,
+  historical context, and actionable intelligence.
 
+  CORE MISSION:
+  Transform correlated cases into fully investigated incidents with complete
+  context, enabling informed response decisions.
+
+# =============================================================================
+# AGENT IDENTITY
+# =============================================================================
 role: investigation
 autonomy_level: read-only
+autonomous_execution: true
 
-# Tool permissions - strictly read-only operations
+# Wazuh investigation expertise
+wazuh_expertise:
+  # Investigation playbooks per attack type
+  investigation_playbooks:
+    brute_force:
+      pivots:
+        - type: ip_history
+          query: "data.srcip:{ip} AND rule.groups:authentication"
+          lookback_hours: 168  # 7 days
+        - type: target_accounts
+          query: "data.srcip:{ip} AND data.dstuser:*"
+        - type: success_check
+          query: "data.srcip:{ip} AND rule.groups:authentication_success"
+      key_questions:
+        - "Was any login successful?"
+        - "How many unique accounts targeted?"
+        - "Is this IP known attacker?"
+
+    lateral_movement:
+      pivots:
+        - type: source_host_history
+          query: "agent.name:{host} AND rule.groups:sysmon"
+          lookback_hours: 24
+        - type: network_connections
+          query: "agent.name:{host} AND data.dstip:*"
+        - type: credential_usage
+          query: "data.srcuser:{user} AND agent.name:* NOT agent.name:{host}"
+      key_questions:
+        - "What was the initial access vector?"
+        - "Which credentials are compromised?"
+        - "How many hosts affected?"
+
+    malware:
+      pivots:
+        - type: file_hash_search
+          query: "syscheck.sha256_after:{hash} OR data.win.eventdata.hashes:*{hash}*"
+        - type: process_tree
+          query: "agent.name:{host} AND data.win.eventdata.parentProcessGuid:{pguid}"
+        - type: network_iocs
+          query: "agent.name:{host} AND data.dstip:*"
+          lookback_hours: 4
+      key_questions:
+        - "How did the malware arrive?"
+        - "What C2 communication exists?"
+        - "What persistence was established?"
+
+    data_exfiltration:
+      pivots:
+        - type: data_access
+          query: "agent.name:{host} AND syscheck.path:*"
+          lookback_hours: 48
+        - type: network_volume
+          query: "agent.name:{host} AND data.bytes_out:>1000000"
+        - type: external_destinations
+          query: "agent.name:{host} AND data.dstip:* NOT data.dstip:10.* NOT data.dstip:192.168.*"
+      key_questions:
+        - "What data was accessed?"
+        - "How much data transferred?"
+        - "Where did it go?"
+
+  # Wazuh-specific query patterns
+  query_patterns:
+    user_activity: "data.srcuser:{user} OR data.dstuser:{user} OR data.user:{user}"
+    host_events: "agent.name:{host}"
+    ip_activity: "data.srcip:{ip} OR data.dstip:{ip}"
+    process_events: "data.win.eventdata.image:*{process}*"
+    file_events: "syscheck.path:*{path}*"
+    authentication: "rule.groups:authentication AND {entity_filter}"
+    network: "rule.groups:(firewall OR ids) AND {entity_filter}"
+
+# =============================================================================
+# TOOL PERMISSIONS
+# =============================================================================
 allowed_tools:
-  - get_alert
-  - search_alerts
-  - search_events
-  - get_agent
-  - get_rule_info
+  - name: get_alert
+    purpose: "Retrieve full alert details"
+    required: true
+
+  - name: search_alerts
+    purpose: "Execute pivot queries across alerts"
+    required: true
+
+  - name: search_events
+    purpose: "Search raw events for deep investigation"
+    required: true
+
+  - name: get_agent
+    purpose: "Get endpoint details and status"
+    required: true
+
+  - name: get_rule_info
+    purpose: "Retrieve rule context and MITRE mappings"
+    required: false
 
 denied_tools:
   - block_ip
@@ -32,122 +126,410 @@ denied_tools:
   - kill_process
   - disable_user
   - quarantine_file
+  - active_response
   - "*_write"
   - "*_execute"
   - "*_modify"
+  - "*_delete"
 
-# Trigger conditions
+# =============================================================================
+# AUTONOMOUS TRIGGERS
+# =============================================================================
 triggers:
   events:
     - type: case_created
-      severity:
-        - high
-        - critical
-      auto_investigate: true
+      conditions:
+        severity: [high, critical]
+      auto_execute: true
+      priority: high
+
     - type: correlation_complete
-      auto_investigate: true
+      auto_execute: true
+      priority: high
+
+    - type: case_escalated
+      auto_execute: true
+      priority: immediate
+
+    - type: pattern_detected
+      conditions:
+        pattern_type: [lateral_movement, data_exfiltration, malware]
+      auto_execute: true
+      priority: immediate
+
   commands:
     - name: investigate
       pattern: "/wazuh investigate <case_id>"
-      description: "Manually trigger deep investigation for a case"
+      description: "Deep investigation of a case"
+
     - name: pivot
       pattern: "/wazuh pivot <entity_type> <entity_value>"
       description: "Pivot on a specific entity"
 
-# Investigation configuration
-investigation:
-  pivots:
-    enabled: true
-    types:
-      - ip_history
-      - user_activity
-      - host_events
-      - process_ancestry
-      - network_connections
-      - file_operations
+    - name: timeline
+      pattern: "/wazuh timeline <case_id> <entity>"
+      description: "Build entity-specific timeline"
 
-    lookback:
-      default_hours: 24
-      max_hours: 168
+    - name: hunt
+      pattern: "/wazuh hunt <ioc_type> <ioc_value>"
+      description: "Hunt for IOC across environment"
 
-    max_results_per_pivot: 100
+  scheduled:
+    - name: reinvestigate_active
+      cron: "*/30 * * * *"
+      description: "Re-investigate active critical cases"
+      condition: "case.status == 'active' AND case.severity == 'critical'"
 
-  enrichment:
+# =============================================================================
+# PIVOT ENGINE
+# =============================================================================
+pivots:
+  enabled: true
+  autonomous: true
+
+  types:
+    ip_history:
+      description: "Historical activity for an IP address"
+      query_template: "${wazuh_expertise.query_patterns.ip_activity}"
+      lookback:
+        default_hours: 24
+        max_hours: 168
+      aggregations:
+        - field: rule.id
+          type: terms
+        - field: agent.name
+          type: terms
+        - field: data.dstport
+          type: terms
+
+    user_activity:
+      description: "User activity across all systems"
+      query_template: "${wazuh_expertise.query_patterns.user_activity}"
+      lookback:
+        default_hours: 48
+        max_hours: 336
+      aggregations:
+        - field: agent.name
+          type: terms
+        - field: rule.groups
+          type: terms
+        - field: data.srcip
+          type: terms
+
+    host_events:
+      description: "All security events on a host"
+      query_template: "${wazuh_expertise.query_patterns.host_events}"
+      lookback:
+        default_hours: 24
+        max_hours: 168
+      aggregations:
+        - field: rule.id
+          type: terms
+        - field: rule.level
+          type: stats
+        - field: data.srcip
+          type: terms
+
+    process_ancestry:
+      description: "Process tree reconstruction"
+      query_template: "agent.name:{host} AND rule.groups:sysmon AND rule.id:(92001 OR 92002)"
+      lookback:
+        default_hours: 4
+        max_hours: 24
+      reconstruct_tree: true
+
+    network_connections:
+      description: "Network connection analysis"
+      query_template: "agent.name:{host} AND (rule.groups:sysmon AND rule.id:92003)"
+      lookback:
+        default_hours: 4
+        max_hours: 24
+      enrich_destinations: true
+
+    file_operations:
+      description: "File system activity"
+      query_template: "agent.name:{host} AND (rule.groups:syscheck OR (rule.groups:sysmon AND rule.id:(92011 OR 92015)))"
+      lookback:
+        default_hours: 24
+        max_hours: 72
+
+    authentication_trail:
+      description: "Authentication events for entity"
+      query_template: "${wazuh_expertise.query_patterns.authentication}"
+      lookback:
+        default_hours: 168
+        max_hours: 720
+
+  max_results_per_pivot: 500
+  parallel_pivots: 3
+
+# =============================================================================
+# ENRICHMENT ENGINE
+# =============================================================================
+enrichment:
+  enabled: true
+  autonomous: true
+
+  sources:
     historical_incidents:
       enabled: true
       lookback_days: 90
       match_on:
-        - entities
-        - rule_ids
-        - attack_patterns
+        - entities.ip
+        - entities.user
+        - entities.hash
+        - attack_pattern
+      relevance_decay: 0.95  # Per day
 
     baseline_comparison:
       enabled: true
-      compare_to: 7_day_average
+      baseline_period_days: 7
+      metrics:
+        - alert_volume
+        - unique_rule_ids
+        - network_destinations
+        - authentication_failures
+      anomaly_threshold: 2.0  # Standard deviations
 
     threat_context:
       enabled: true
       sources:
         - mitre_mapping
         - rule_metadata
+        - wazuh_ruleset_descriptions
+      enrich_with:
+        - technique_description
+        - common_mitigations
+        - detection_guidance
 
-# Output configurations
-outputs:
-  case:
-    update: true
-    fields:
-      - investigation_notes
-      - enrichment_data
-      - historical_context
-      - pivot_results
-      - ioc_context
-  evidence_pack:
-    update: true
-    sections:
-      - mcp_calls
-      - pivot_queries
-      - enrichment_results
-  slack:
-    post_findings: true
-    when:
-      - significant_finding
-      - historical_match
-      - baseline_anomaly
+    related_cases:
+      enabled: true
+      lookback_days: 30
+      match_criteria:
+        - shared_entities
+        - similar_attack_pattern
+        - same_source_ip
+      min_similarity: 0.6
 
-# Processing configuration
-processing:
-  query_optimization:
+# =============================================================================
+# INVESTIGATION AUTOMATION
+# =============================================================================
+investigation_automation:
+  enabled: true
+
+  auto_pivots:
+    # Automatically execute pivots based on entity types found
+    - entity_type: ip
+      is_external: true
+      pivots: [ip_history, authentication_trail]
+
+    - entity_type: user
+      is_privileged: true
+      pivots: [user_activity, authentication_trail]
+
+    - entity_type: host
+      pivots: [host_events, process_ancestry, network_connections]
+
+    - entity_type: hash
+      pivots: [file_hash_search]
+
+  playbook_selection:
+    # Automatically select investigation playbook based on patterns
     enabled: true
-    batch_queries: true
-    max_batch_size: 10
+    source: "${wazuh_expertise.investigation_playbooks}"
+    match_on: case.attack_pattern
 
-  result_analysis:
+  key_question_resolution:
     enabled: true
-    summarize: true
-    highlight_anomalies: true
+    auto_answer: true
+    confidence_threshold: 0.7
+
+# =============================================================================
+# FINDINGS GENERATION
+# =============================================================================
+findings:
+  enabled: true
+  autonomous: true
+
+  categories:
+    - name: confirmed_compromise
+      severity: critical
+      criteria:
+        - successful_auth_from_attacker_ip
+        - malware_execution_confirmed
+        - data_exfiltration_evidence
+
+    - name: likely_compromise
+      severity: high
+      criteria:
+        - credential_usage_anomaly
+        - lateral_movement_indicators
+        - persistence_established
+
+    - name: suspicious_activity
+      severity: medium
+      criteria:
+        - baseline_deviation
+        - unusual_network_destination
+        - privilege_escalation_attempt
+
+    - name: reconnaissance
+      severity: low
+      criteria:
+        - port_scanning
+        - directory_enumeration
+        - user_enumeration
 
   note_generation:
     enabled: true
     format: structured
-    include_confidence: true
+    include:
+      - finding_summary
+      - supporting_evidence
+      - confidence_level
+      - recommended_actions
+      - key_questions_answered
 
-# Rate limiting and safeguards
+# =============================================================================
+# OUTPUTS
+# =============================================================================
+outputs:
+  case:
+    update: true
+    fields:
+      - investigation_status
+      - investigation_notes
+      - pivot_results
+      - enrichment_data
+      - historical_context
+      - related_cases
+      - findings
+      - key_questions
+      - iocs_identified
+      - recommended_response
+
+  evidence_pack:
+    update: true
+    sections:
+      - pivot_queries
+      - pivot_results
+      - enrichment_results
+      - findings
+      - mcp_calls
+      - investigation_timeline
+
+  slack:
+    enabled: true
+    post_findings: true
+    conditions:
+      - finding_category: [confirmed_compromise, likely_compromise]
+      - historical_match: true
+      - baseline_anomaly_severe: true
+
+    findings_card:
+      header: ":mag: Investigation Findings"
+      fields:
+        - case_id
+        - finding_category
+        - key_findings
+        - iocs_identified
+        - recommended_actions
+      actions:
+        - label: "View Full Report"
+          action: view_investigation
+        - label: "Create Response Plan"
+          action: propose_response
+
+# =============================================================================
+# INTER-AGENT COMMUNICATION
+# =============================================================================
+agent_triggers:
+  on_investigation_complete:
+    - target: response-planner-agent
+      condition: "findings.category in ['confirmed_compromise', 'likely_compromise']"
+      priority: high
+      include_findings: true
+
+  on_ioc_discovered:
+    - target: triage-agent
+      action: hunt_ioc
+      priority: medium
+
+  on_historical_match:
+    - target: correlation-agent
+      action: link_cases
+      priority: medium
+
+# =============================================================================
+# SELF-HEALING & ERROR RECOVERY
+# =============================================================================
+resilience:
+  retry_policy:
+    max_attempts: 3
+    backoff_type: exponential
+    initial_delay_ms: 1000
+    max_delay_ms: 30000
+
+  fallback_behavior:
+    pivot_timeout: skip_and_note
+    enrichment_unavailable: continue_without
+    query_too_large: sample_and_note
+
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    reset_timeout_seconds: 60
+
+# =============================================================================
+# RATE LIMITING
+# =============================================================================
 rate_limits:
-  max_concurrent: 3
-  max_per_minute: 15
-  max_queries_per_investigation: 50
+  max_concurrent: 5
+  max_per_minute: 30
+  max_queries_per_investigation: 100
+  max_results_total: 5000
   cooldown_on_error_ms: 5000
 
-# Logging configuration
+# =============================================================================
+# LOGGING & METRICS
+# =============================================================================
 logging:
   level: info
-  include_correlation_id: true
-  include_case_id: true
-  redact_secrets: true
+  structured: true
+  fields:
+    - correlation_id
+    - case_id
+    - investigation_id
+    - pivots_executed
+    - findings_count
+    - iocs_found
+    - processing_time_ms
+  redact:
+    - password
+    - token
+    - secret
+    - credential
 
-# Metrics to emit
 metrics:
-  - autopilot_investigation_total
-  - autopilot_investigation_latency_seconds
-  - autopilot_investigation_pivots_total
-  - autopilot_investigation_findings_total
+  - name: autopilot_investigation_total
+    type: counter
+    labels: [severity, finding_category]
+
+  - name: autopilot_investigation_latency_seconds
+    type: histogram
+    buckets: [1, 5, 10, 30, 60, 120, 300]
+
+  - name: autopilot_pivots_executed_total
+    type: counter
+    labels: [pivot_type]
+
+  - name: autopilot_findings_total
+    type: counter
+    labels: [finding_category]
+
+  - name: autopilot_iocs_discovered_total
+    type: counter
+    labels: [ioc_type]
+
+  - name: autopilot_historical_matches_total
+    type: counter

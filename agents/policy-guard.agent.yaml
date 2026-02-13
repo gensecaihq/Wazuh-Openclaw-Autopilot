@@ -1,154 +1,627 @@
-# Wazuh Autopilot - Policy Guard Agent
-# Role: Evaluates plans/actions against policies, returns allow/deny with reasons
-# Permission Level: POLICY ENFORCEMENT (no action execution)
+# =============================================================================
+# WAZUH OPENCLAW AUTOPILOT - POLICY GUARD AGENT
+# =============================================================================
+# Role: Gatekeeper - Policy enforcement, compliance validation, action approval
+# Permission Level: POLICY-ENFORCEMENT (Cannot execute actions - only validates)
+# Autonomy: FULL - Automatically evaluates all action requests
+# Security Model: Constitutional AI with cryptographic validation
+# =============================================================================
 
 name: wazuh-policy-guard-agent
-version: "1.0.0"
+version: "2.0.0"
 description: |
-  Policy Guard Agent is the gatekeeper for all response actions. It evaluates
-  proposed plans and actions against the organization's security policies,
-  returning explicit allow/deny decisions with detailed reason codes.
+  Expert Policy Guard Agent - The constitutional guardian of the SOC.
 
-  Responsibilities:
-  - Evaluate actions against workspace/channel allowlists
-  - Verify approver authorization
-  - Check action allowlists and asset criticality rules
-  - Enforce evidence/confidence thresholds
-  - Perform idempotency checks
-  - Enforce time window restrictions
-  - Emit audit-ready decision logs
+  This agent operates with FULL AUTONOMY for policy evaluation, automatically
+  validating every proposed action against organizational security policies,
+  compliance requirements, and operational constraints.
 
+  CORE MISSION:
+  Serve as an immutable, cryptographically-enforced gatekeeper that ensures
+  no action exceeds authorized boundaries while maintaining full auditability
+  for compliance and forensic purposes.
+
+  CRITICAL SAFETY: This agent CANNOT execute any response actions.
+  It can only ALLOW or DENY based on policy evaluation.
+
+# =============================================================================
+# AGENT IDENTITY
+# =============================================================================
 role: policy_guard
 autonomy_level: policy-enforcement
+autonomous_execution: true
+can_execute_actions: false  # Explicit safety flag
 
-# Tool permissions - read-only for policy checks
+# Constitutional AI principles - immutable goal hierarchy
+constitutional_principles:
+  primary_directive: "Protect organizational assets while maintaining operational continuity"
+  immutable_rules:
+    - "Never allow actions that could cause irreversible damage without elevated approval"
+    - "Always preserve evidence before allowing destructive actions"
+    - "Deny any action lacking sufficient confidence or evidence"
+    - "Escalate to humans when policy ambiguity exists"
+    - "Log every decision with full context for audit"
+
+  decision_hierarchy:
+    - level: 1
+      name: safety_critical
+      description: "Actions affecting critical assets require admin approval"
+      override: never
+
+    - level: 2
+      name: operational
+      description: "Standard operations follow normal approval flow"
+      override: elevated_only
+
+    - level: 3
+      name: informational
+      description: "Read-only operations auto-approve"
+      override: standard
+
+# =============================================================================
+# WAZUH POLICY EXPERTISE
+# =============================================================================
+wazuh_expertise:
+  # Action classification based on Wazuh capabilities
+  action_classifications:
+    low_risk:
+      actions:
+        - firewall-drop
+        - host-deny
+      characteristics:
+        - reversible: true
+        - blast_radius: single_ip
+        - service_impact: none
+      default_duration_hours: 24
+      approval_group: standard
+
+    medium_risk:
+      actions:
+        - restart-wazuh
+        - kill_process
+        - quarantine_file
+      characteristics:
+        - reversible: varies
+        - blast_radius: single_host
+        - service_impact: possible
+      approval_group: elevated
+
+    high_risk:
+      actions:
+        - isolate_host
+        - disable_user
+      characteristics:
+        - reversible: true
+        - blast_radius: user_or_host
+        - service_impact: definite
+      approval_group: admin
+
+    critical_risk:
+      actions:
+        - mass_isolation
+        - domain_wide_disable
+      characteristics:
+        - reversible: true
+        - blast_radius: enterprise
+        - service_impact: severe
+      approval_group: executive
+      requires_dual_approval: true
+
+  # Asset criticality rules
+  asset_criticality_rules:
+    - pattern: "^(dc|ad|ldap)-.*"
+      criticality: critical
+      policy: "Domain controllers require executive approval for any action"
+      min_approver_group: admin
+
+    - pattern: "^(prod|prd)-.*"
+      criticality: high
+      policy: "Production systems require elevated approval"
+      min_approver_group: elevated
+
+    - pattern: "^(db|sql|mongo|redis)-.*"
+      criticality: high
+      policy: "Database servers require elevated approval"
+      min_approver_group: elevated
+
+    - pattern: "^(staging|stg)-.*"
+      criticality: medium
+      min_approver_group: standard
+
+    - pattern: "^(dev|test|sandbox)-.*"
+      criticality: low
+      min_approver_group: standard
+
+  # User privilege detection
+  privileged_user_patterns:
+    - pattern: "^(admin|root|administrator)$"
+      level: system_admin
+      policy: "System admin accounts require admin approval"
+
+    - pattern: ".*_(admin|adm|sa)$"
+      level: elevated
+      policy: "Service accounts with admin suffix require elevated approval"
+
+    - pattern: "^svc_.*"
+      level: service_account
+      policy: "Service accounts require elevated approval for disable"
+
+# =============================================================================
+# TOOL PERMISSIONS (READ-ONLY)
+# =============================================================================
 allowed_tools:
-  - get_alert
-  - get_agent
+  - name: get_alert
+    purpose: "Retrieve alert context for policy evaluation"
+    required: true
 
-# Cannot execute any actions
+  - name: search_alerts
+    purpose: "Search for related context"
+    required: true
+
+  - name: get_agent
+    purpose: "Get endpoint details for criticality assessment"
+    required: true
+
+  - name: get_rule_info
+    purpose: "Retrieve rule context"
+    required: false
+
+# EXPLICIT DENIAL - This agent cannot execute
 denied_tools:
   - block_ip
   - isolate_host
   - kill_process
   - disable_user
   - quarantine_file
+  - active_response
+  - firewall_drop
+  - host_deny
+  - restart_wazuh
   - "*_write"
   - "*_execute"
   - "*_modify"
+  - "*_delete"
+  - "*_action"
 
-# Trigger conditions - always triggered before action execution
+# =============================================================================
+# AUTONOMOUS TRIGGERS
+# =============================================================================
 triggers:
   events:
-    - type: approval_granted
-      evaluate: true
-    - type: action_requested
-      evaluate: true
     - type: plan_proposed
-      evaluate: true
+      auto_execute: true
+      priority: immediate
+
+    - type: approval_granted
+      auto_execute: true
+      priority: immediate
+
+    - type: action_requested
+      auto_execute: true
+      priority: immediate
+
+    - type: expedited_request
+      auto_execute: true
+      priority: immediate
+
   commands:
     - name: check-policy
       pattern: "/wazuh check-policy <plan_id>"
       description: "Manually check if a plan passes policy"
 
-# Policy evaluation configuration
+    - name: validate-action
+      pattern: "/wazuh validate-action <action> <target>"
+      description: "Validate a specific action against policy"
+
+    - name: policy-status
+      pattern: "/wazuh policy-status"
+      description: "Show current policy enforcement status"
+
+# =============================================================================
+# POLICY EVALUATION ENGINE
+# =============================================================================
 policy_evaluation:
-  # Reference to external policy file
+  enabled: true
+  autonomous: true
+  mode: strict  # strict | permissive | audit-only
+
+  # Reference to external policy file (source of truth)
   policy_file: policies/policy.yaml
+  policy_version_tracking: true
+  policy_hash_validation: true
 
   # Evaluation order (first deny wins)
-  evaluation_order:
-    - workspace_allowlist
-    - channel_allowlist
-    - approver_authorization
-    - action_allowlist
-    - asset_criticality
-    - evidence_threshold
-    - confidence_threshold
-    - time_window
-    - idempotency
+  evaluation_chain:
+    - name: token_validation
+      description: "Validate approval token authenticity and expiration"
+      fail_action: deny
+      reason_code: INVALID_TOKEN
 
-  # Deny reason codes (for metrics and audit)
+    - name: workspace_allowlist
+      description: "Verify Slack workspace is authorized"
+      fail_action: deny
+      reason_code: WORKSPACE_NOT_ALLOWED
+
+    - name: channel_allowlist
+      description: "Verify Slack channel is authorized"
+      fail_action: deny
+      reason_code: CHANNEL_NOT_ALLOWED
+
+    - name: approver_authorization
+      description: "Verify approver has required authority level"
+      fail_action: deny
+      reason_code: APPROVER_NOT_AUTHORIZED
+
+    - name: action_allowlist
+      description: "Verify action type is permitted"
+      fail_action: deny
+      reason_code: ACTION_NOT_ALLOWED
+
+    - name: asset_criticality
+      description: "Check if target asset requires elevated approval"
+      fail_action: escalate_or_deny
+      reason_code: CRITICAL_ASSET_ELEVATED_APPROVAL
+
+    - name: user_privilege
+      description: "Check if target user is privileged"
+      fail_action: escalate_or_deny
+      reason_code: PRIVILEGED_USER_ELEVATED_APPROVAL
+
+    - name: blast_radius
+      description: "Evaluate action impact scope"
+      fail_action: escalate_or_deny
+      reason_code: BLAST_RADIUS_EXCEEDED
+
+    - name: evidence_threshold
+      description: "Verify sufficient evidence exists"
+      fail_action: deny
+      reason_code: INSUFFICIENT_EVIDENCE
+      min_evidence_items: 3
+
+    - name: confidence_threshold
+      description: "Verify confidence score meets minimum"
+      fail_action: deny
+      reason_code: LOW_CONFIDENCE
+      thresholds:
+        low_risk_action: 0.5
+        medium_risk_action: 0.7
+        high_risk_action: 0.85
+        critical_risk_action: 0.95
+
+    - name: time_window
+      description: "Check if action is within allowed time window"
+      fail_action: warn_or_deny
+      reason_code: OUTSIDE_TIME_WINDOW
+
+    - name: rate_limit
+      description: "Check action rate limits"
+      fail_action: deny
+      reason_code: RATE_LIMIT_EXCEEDED
+
+    - name: idempotency
+      description: "Check if action was already executed"
+      fail_action: deny
+      reason_code: ALREADY_EXECUTED
+
+  # Deny reason codes (structured for metrics and audit)
   deny_reason_codes:
+    INVALID_TOKEN: "Approval token invalid, expired, or already used"
+    TOKEN_BINDING_MISMATCH: "Token not bound to this plan/case/approver"
     WORKSPACE_NOT_ALLOWED: "Slack workspace not in allowlist"
     CHANNEL_NOT_ALLOWED: "Slack channel not in allowlist"
     APPROVER_NOT_AUTHORIZED: "Approver not authorized for this action type"
     ACTION_NOT_ALLOWED: "Action type not in allowlist"
     CRITICAL_ASSET_ELEVATED_APPROVAL: "Critical asset requires elevated approver"
+    PRIVILEGED_USER_ELEVATED_APPROVAL: "Privileged user action requires elevated approver"
+    BLAST_RADIUS_EXCEEDED: "Action blast radius exceeds approver authorization"
     INSUFFICIENT_EVIDENCE: "Insufficient evidence for action"
-    LOW_CONFIDENCE: "Confidence score below threshold"
+    LOW_CONFIDENCE: "Confidence score below threshold for action risk level"
     OUTSIDE_TIME_WINDOW: "Action requested outside allowed time window"
+    RATE_LIMIT_EXCEEDED: "Action rate limit exceeded"
     ALREADY_EXECUTED: "Action already executed (idempotency check)"
     DUPLICATE_REQUEST: "Duplicate approval request detected"
-    EXPIRED_APPROVAL: "Approval token has expired"
-    INVALID_APPROVAL_TOKEN: "Approval token is invalid"
+    POLICY_VERSION_MISMATCH: "Policy version changed during evaluation"
     MISSING_REQUIRED_CONTEXT: "Required context fields missing"
+    DUAL_APPROVAL_REQUIRED: "Critical action requires dual approval"
 
-  # Idempotency configuration
-  idempotency:
+# =============================================================================
+# TOKEN VALIDATION ENGINE
+# =============================================================================
+token_validation:
+  enabled: true
+  autonomous: true
+
+  checks:
+    - name: token_exists
+      description: "Verify token was provided"
+
+    - name: token_not_expired
+      description: "Verify TTL has not elapsed"
+
+    - name: token_not_used
+      description: "Verify single-use token not already consumed"
+
+    - name: token_binding
+      description: "Verify token is bound to correct plan/case/approver"
+      binding_fields:
+        - plan_id
+        - case_id
+        - approver_id
+
+    - name: token_signature
+      description: "Verify cryptographic signature is valid"
+
+    - name: token_scope
+      description: "Verify token scope matches requested action"
+
+  cryptographic_validation:
     enabled: true
-    checks:
-      - host_already_isolated
-      - ip_already_blocked
-      - user_already_disabled
-      - process_already_killed
-    cache_ttl_minutes: 60
+    algorithm: HMAC-SHA256
+    key_source: environment
+    key_variable: AUTOPILOT_TOKEN_SECRET
 
-# Output configurations
+# =============================================================================
+# IDEMPOTENCY ENGINE
+# =============================================================================
+idempotency:
+  enabled: true
+  autonomous: true
+
+  checks:
+    - action: block_ip
+      check_method: search_active_blocks
+      query_template: "ip:{target} AND action:block AND status:active"
+
+    - action: isolate_host
+      check_method: check_agent_isolation_status
+      query_template: "agent.name:{target} AND isolated:true"
+
+    - action: disable_user
+      check_method: check_user_status
+      query_template: "user:{target} AND disabled:true"
+
+    - action: kill_process
+      check_method: check_process_status
+      query_template: "process_id:{target} AND agent:{host}"
+
+    - action: quarantine_file
+      check_method: check_file_quarantined
+      query_template: "file_hash:{hash} AND quarantined:true"
+
+  cache:
+    enabled: true
+    ttl_minutes: 60
+    storage: memory
+    max_entries: 10000
+
+# =============================================================================
+# DUAL APPROVAL HANDLING
+# =============================================================================
+dual_approval:
+  enabled: true
+
+  required_for:
+    - action_risk: critical
+    - asset_criticality: critical
+    - blast_radius_score: ">= 75"
+    - enterprise_wide_action: true
+
+  requirements:
+    min_approvers: 2
+    different_approver_groups: true
+    time_window_minutes: 30
+
+  workflow:
+    - first_approval_triggers: "notify_second_approver"
+    - both_approved: "proceed_to_execution"
+    - one_denied: "deny_entire_request"
+    - timeout: "deny_with_escalation"
+
+# =============================================================================
+# OUTPUTS
+# =============================================================================
 outputs:
   decision:
+    create: true
     fields:
-      - decision           # allow | deny
-      - reason_code        # structured code
-      - reason_message     # human-readable
-      - policy_version     # which policy was used
-      - evaluation_details # per-check results
+      - decision_id
+      - decision  # allow | deny | escalate
+      - reason_code
+      - reason_message
+      - policy_version
+      - policy_hash
+      - evaluation_details
+      - confidence_assessment
+      - risk_assessment
       - timestamp
       - correlation_id
+      - case_id
+      - plan_id
+      - approver_id
+      - token_id
 
   evidence_pack:
     update: true
     sections:
       - policy_decisions
+      - evaluation_chain_results
+      - token_validations
+      - idempotency_checks
+      - dual_approval_status
 
   audit_log:
     enabled: true
+    immutable: true
     include:
       - all_inputs
       - all_checks
       - decision
       - approver_info
       - asset_info
+      - policy_version
+      - evaluation_duration_ms
+    sign_entries: true
+    signing_algorithm: HMAC-SHA256
 
-# Decision caching
+  slack:
+    enabled: true
+    post_denials: true
+    channel_type: security
+
+    denial_card:
+      header: ":no_entry: Policy Denial"
+      urgency_indicator: true
+      fields:
+        - case_id
+        - plan_id
+        - action_requested
+        - denial_reason
+        - required_approver_group
+        - guidance
+      actions:
+        - label: "Request Elevation"
+          action: request_elevation
+        - label: "View Policy"
+          action: view_policy
+
+# =============================================================================
+# INTER-AGENT COMMUNICATION
+# =============================================================================
+agent_triggers:
+  on_policy_allow:
+    - target: responder-agent
+      action: execute_approved_action
+      priority: high
+      include_decision: true
+      include_token_validation: true
+
+  on_policy_deny:
+    - target: reporting-agent
+      action: log_policy_denial
+      priority: medium
+      include_reason: true
+
+    - target: response-planner-agent
+      condition: "reason_code in ['INSUFFICIENT_EVIDENCE', 'LOW_CONFIDENCE']"
+      action: request_additional_evidence
+      priority: high
+
+  on_escalation_required:
+    - target: slack
+      action: notify_escalation_group
+      priority: immediate
+
+# =============================================================================
+# SELF-HEALING & ERROR RECOVERY
+# =============================================================================
+resilience:
+  retry_policy:
+    max_attempts: 3
+    backoff_type: exponential
+    initial_delay_ms: 500
+    max_delay_ms: 5000
+
+  fallback_behavior:
+    policy_file_unavailable: deny_all_with_notification
+    token_validation_error: deny_with_retry
+    cache_unavailable: evaluate_without_cache
+
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    reset_timeout_seconds: 30
+
+  # Default to secure state on errors
+  fail_secure: true
+  fail_secure_action: deny
+
+# =============================================================================
+# RATE LIMITING
+# =============================================================================
+rate_limits:
+  max_concurrent: 20
+  max_per_minute: 200
+  max_per_case: 50
+  cooldown_on_error_ms: 2000
+
+# =============================================================================
+# CACHING
+# =============================================================================
 caching:
   enabled: true
-  decision_cache_ttl_seconds: 30
-  invalidate_on:
-    - policy_update
-    - new_approval
-    - action_executed
 
-# Rate limiting
-rate_limits:
-  max_concurrent: 10
-  max_per_minute: 100
-  cooldown_on_error_ms: 1000
+  decision_cache:
+    enabled: true
+    ttl_seconds: 30
+    max_entries: 1000
+    invalidate_on:
+      - policy_update
+      - new_approval
+      - action_executed
 
-# Logging configuration
+  policy_cache:
+    enabled: true
+    ttl_seconds: 300
+    validate_hash: true
+
+  idempotency_cache:
+    enabled: true
+    ttl_minutes: 60
+    max_entries: 10000
+
+# =============================================================================
+# LOGGING & METRICS
+# =============================================================================
 logging:
   level: info
-  include_correlation_id: true
-  include_case_id: true
-  include_plan_id: true
-  include_approval_id: true
-  include_decision: true
-  include_reason_code: true
-  redact_secrets: true
+  structured: true
+  fields:
+    - correlation_id
+    - case_id
+    - plan_id
+    - approval_id
+    - decision
+    - reason_code
+    - policy_version
+    - evaluation_duration_ms
+    - approver_id
+    - action_type
+  redact:
+    - password
+    - token
+    - secret
+    - credential
+    - api_key
 
-# Metrics to emit
 metrics:
-  - autopilot_policy_evaluations_total
-  - autopilot_policy_allows_total
-  - autopilot_policy_denies_total{reason}
-  - autopilot_policy_evaluation_latency_seconds
+  - name: autopilot_policy_evaluations_total
+    type: counter
+    labels: [decision, action_type]
+
+  - name: autopilot_policy_denials_total
+    type: counter
+    labels: [reason_code, action_type]
+
+  - name: autopilot_policy_allows_total
+    type: counter
+    labels: [action_type, risk_level]
+
+  - name: autopilot_policy_escalations_total
+    type: counter
+    labels: [reason]
+
+  - name: autopilot_policy_evaluation_latency_seconds
+    type: histogram
+    buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1]
+
+  - name: autopilot_token_validations_total
+    type: counter
+    labels: [result]
+
+  - name: autopilot_idempotency_hits_total
+    type: counter
+    labels: [action_type]
+
+  - name: autopilot_dual_approval_requests_total
+    type: counter
+    labels: [status]

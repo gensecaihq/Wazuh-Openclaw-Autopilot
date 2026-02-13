@@ -1,61 +1,377 @@
-# Wazuh Autopilot - Triage Agent
-# Role: Alert → Case summary; extracts entities, builds narrative, posts Slack Case Card
-# Permission Level: READ-ONLY
+# =============================================================================
+# WAZUH OPENCLAW AUTOPILOT - TRIAGE AGENT
+# =============================================================================
+# Role: First responder - Alert analysis, entity extraction, case creation
+# Permission Level: READ-ONLY (Safe for full automation)
+# Autonomy: FULL - Runs automatically on all high/critical alerts
+# =============================================================================
 
 name: wazuh-triage-agent
-version: "1.0.0"
+version: "2.0.0"
 description: |
-  Triage Agent performs initial alert assessment and case creation.
-  This agent is READ-ONLY and cannot execute response actions.
+  Expert Triage Agent - The first line of autonomous security analysis.
 
-  Responsibilities:
-  - Fetch alert details from Wazuh via MCP
-  - Extract entities (hosts, users, IPs, domains, hashes, processes)
-  - Create or update Cases with structured evidence
-  - Build narrative summaries with confidence scoring
-  - Post Case Cards to Slack channels
+  This agent operates with FULL AUTONOMY for read-only operations, automatically
+  processing every high/critical Wazuh alert without human intervention.
 
-# Agent identity and role
+  CORE MISSION:
+  Transform raw Wazuh alerts into structured, actionable security cases with
+  complete entity extraction, threat context, and confidence scoring.
+
+# =============================================================================
+# AGENT IDENTITY
+# =============================================================================
 role: triage
 autonomy_level: read-only
+autonomous_execution: true  # Runs without human prompts
 
-# Tool permissions - strictly read-only operations
+# Wazuh expertise embedded
+wazuh_expertise:
+  rule_categories:
+    - syscheck          # File integrity monitoring
+    - rootcheck         # Rootkit detection
+    - syslog            # System logs
+    - firewall          # Firewall events
+    - web               # Web application attacks
+    - windows           # Windows security events
+    - authentication    # Login/auth events
+    - ids               # IDS/IPS alerts
+    - vulnerability     # Vulnerability detection
+    - docker            # Container security
+    - aws               # AWS CloudTrail
+    - azure             # Azure events
+    - gcp               # GCP audit logs
+
+  severity_mapping:
+    # Wazuh rule levels to severity
+    0-3: informational
+    4-6: low
+    7-9: medium
+    10-12: high
+    13-15: critical
+
+  critical_rule_ids:
+    # Rules that always trigger immediate triage
+    - 5710   # sshd: Attempt to login using non-existent user
+    - 5712   # sshd: Brute force attack
+    - 5720   # PAM: Multiple failed logins
+    - 5763   # sshd: Possible breakin attempt
+    - 100002 # Suricata high severity
+    - 100100 # Custom critical rule range start
+    - 87105  # Windows: Multiple logon failures
+    - 87106  # Windows: Logon failure - unknown user
+    - 92000  # Sysmon: Process creation
+    - 92100  # Sysmon: Network connection
+
+# =============================================================================
+# TOOL PERMISSIONS
+# =============================================================================
 allowed_tools:
-  - get_alert
-  - search_alerts
-  - search_events
-  - get_agent
-  - get_rule_info
+  # Alert retrieval
+  - name: get_alert
+    purpose: "Fetch complete alert details including rule, agent, and data"
+    required: true
 
+  # Alert search
+  - name: search_alerts
+    purpose: "Find related alerts for correlation hints"
+    required: true
+
+  # Event search
+  - name: search_events
+    purpose: "Retrieve raw events for context"
+    required: true
+
+  # Agent info
+  - name: get_agent
+    purpose: "Get endpoint details - OS, IP, status"
+    required: false
+
+  # Rule info
+  - name: get_rule_info
+    purpose: "Retrieve rule metadata and MITRE mappings"
+    required: false
+
+# Explicit denials - safety barrier
 denied_tools:
   - block_ip
   - isolate_host
   - kill_process
   - disable_user
   - quarantine_file
+  - active_response
   - "*_write"
   - "*_execute"
   - "*_modify"
+  - "*_delete"
 
-# Trigger conditions
+# =============================================================================
+# AUTONOMOUS TRIGGERS
+# =============================================================================
 triggers:
+  # Primary: Auto-triage on alert events
   events:
-    - type: alert
-      severity:
-        - high
-        - critical
-      auto_triage: true
+    - type: wazuh_alert
+      conditions:
+        severity:
+          - high
+          - critical
+        rule_level_min: 10
+      auto_execute: true
+      priority: immediate
+
+    - type: wazuh_alert
+      conditions:
+        rule_id_in: "${wazuh_expertise.critical_rule_ids}"
+      auto_execute: true
+      priority: immediate
+
+    - type: wazuh_alert
+      conditions:
+        rule_groups:
+          - authentication_failed
+          - attack
+          - exploit
+          - malware
+          - rootkit
+      auto_execute: true
+      priority: high
+
+  # Secondary: Manual command
   commands:
     - name: triage
       pattern: "/wazuh triage <alert_id>"
-      description: "Manually trigger triage for a specific alert"
+      description: "Manually triage a specific alert"
 
-# Output configurations
+    - name: triage-batch
+      pattern: "/wazuh triage-batch <query>"
+      description: "Batch triage alerts matching query"
+
+  # Scheduled: Catch missed alerts
+  scheduled:
+    - name: sweep_untriaged
+      cron: "*/10 * * * *"
+      description: "Sweep for untriaged high-severity alerts every 10 minutes"
+      query: "rule.level >= 10 AND NOT _exists_:case_id"
+      max_batch: 50
+
+# =============================================================================
+# ENTITY EXTRACTION ENGINE
+# =============================================================================
+entity_extraction:
+  enabled: true
+  autonomous: true
+
+  extractors:
+    # IP Address extraction
+    ip:
+      fields:
+        - data.srcip
+        - data.dstip
+        - data.src_ip
+        - data.dst_ip
+        - data.win.eventdata.ipAddress
+        - data.aws.sourceIPAddress
+        - agent.ip
+      validation: ipv4_or_ipv6
+      enrich:
+        - geolocation
+        - reputation_hint
+        - is_internal
+
+    # User extraction
+    user:
+      fields:
+        - data.srcuser
+        - data.dstuser
+        - data.user
+        - data.win.eventdata.targetUserName
+        - data.win.eventdata.subjectUserName
+        - data.aws.userIdentity.userName
+      normalize: lowercase
+      enrich:
+        - is_service_account
+        - is_privileged
+
+    # Host extraction
+    host:
+      fields:
+        - agent.name
+        - data.hostname
+        - data.win.system.computer
+        - data.system_name
+      enrich:
+        - os_type
+        - criticality
+        - environment
+
+    # Process extraction
+    process:
+      fields:
+        - data.win.eventdata.image
+        - data.win.eventdata.parentImage
+        - data.win.eventdata.commandLine
+        - data.process.name
+        - data.process.ppid
+      extract_hierarchy: true
+      enrich:
+        - is_lolbin
+        - signature_status
+
+    # Hash extraction
+    hash:
+      fields:
+        - data.win.eventdata.hashes
+        - data.md5
+        - data.sha1
+        - data.sha256
+        - syscheck.md5_after
+        - syscheck.sha256_after
+      types:
+        - md5
+        - sha1
+        - sha256
+
+    # Domain extraction
+    domain:
+      fields:
+        - data.dns.question.name
+        - data.url
+        - data.win.eventdata.queryName
+      validation: fqdn
+      enrich:
+        - reputation_hint
+        - is_dga_like
+
+    # File path extraction
+    file:
+      fields:
+        - syscheck.path
+        - data.win.eventdata.targetFilename
+        - data.file
+      normalize: true
+      enrich:
+        - is_sensitive_path
+        - file_type
+
+# =============================================================================
+# CASE CREATION LOGIC
+# =============================================================================
+case_creation:
+  autonomous: true
+
+  # Title generation
+  title_template: "[${severity}] ${rule.description} on ${agent.name}"
+
+  # Summary generation
+  summary:
+    include:
+      - alert_description
+      - entity_summary
+      - initial_assessment
+      - recommended_next_steps
+    max_length: 2000
+
+  # Severity calculation
+  severity_calculation:
+    base: rule_level_to_severity
+    modifiers:
+      - name: critical_asset
+        condition: "host.criticality == 'critical'"
+        adjustment: +1
+      - name: privileged_user
+        condition: "user.is_privileged == true"
+        adjustment: +1
+      - name: multiple_entities
+        condition: "entities.count > 5"
+        adjustment: +1
+      - name: known_attack_pattern
+        condition: "mitre.technique != null"
+        adjustment: +1
+
+  # Confidence scoring
+  confidence_scoring:
+    factors:
+      - name: entity_completeness
+        weight: 0.25
+        calculation: "extracted_entities / expected_entities"
+      - name: rule_fidelity
+        weight: 0.30
+        source: rule.fidelity_score
+      - name: historical_accuracy
+        weight: 0.20
+        source: rule.historical_fp_rate
+      - name: context_richness
+        weight: 0.25
+        calculation: "available_context_fields / total_context_fields"
+
+  # MITRE ATT&CK mapping
+  mitre_mapping:
+    enabled: true
+    source: rule.mitre
+    fallback_inference: true
+    inference_rules:
+      - pattern: "brute.?force|multiple.*fail"
+        technique: T1110
+        tactic: credential-access
+      - pattern: "lateral|psexec|wmi.*remote"
+        technique: T1021
+        tactic: lateral-movement
+      - pattern: "powershell.*encoded|base64"
+        technique: T1059.001
+        tactic: execution
+      - pattern: "scheduled.*task|cron|at\\s"
+        technique: T1053
+        tactic: persistence
+
+# =============================================================================
+# NARRATIVE GENERATION
+# =============================================================================
+narrative:
+  enabled: true
+  autonomous: true
+
+  template: |
+    ## Alert Analysis
+
+    **What happened:** ${alert.rule.description}
+
+    **When:** ${alert.timestamp}
+
+    **Where:** ${agent.name} (${agent.ip})
+
+    **Key Entities:**
+    ${entities.formatted_list}
+
+    **Initial Assessment:**
+    ${assessment.summary}
+
+    **Confidence Level:** ${confidence.score}% (${confidence.factors})
+
+    **MITRE ATT&CK:** ${mitre.formatted}
+
+    **Recommended Actions:**
+    ${recommendations.list}
+
+  assessment_rules:
+    - condition: "rule.groups contains 'authentication_failed' AND entities.ip.is_external"
+      assessment: "External authentication attack detected. Source IP should be evaluated for blocking."
+
+    - condition: "rule.groups contains 'sysmon' AND process.is_lolbin"
+      assessment: "Living-off-the-land binary execution detected. Process tree analysis recommended."
+
+    - condition: "rule.groups contains 'web' AND data.id matches '9\\d{4}'"
+      assessment: "Web application attack detected. WAF rules and application logs should be reviewed."
+
+# =============================================================================
+# OUTPUTS
+# =============================================================================
 outputs:
   case:
     create: true
     update: true
     fields:
+      - case_id
       - title
       - summary
       - severity
@@ -63,65 +379,117 @@ outputs:
       - entities
       - timeline
       - mitre_mapping
+      - narrative
+      - initial_assessment
+      - source_alerts
+
   evidence_pack:
     update: true
     sections:
-      - mcp_calls
-      - evidence_refs
+      - alert_raw
       - entities
       - timeline
+      - mcp_calls
+      - evidence_refs
+      - extraction_metadata
+
   slack:
+    enabled: true
     post_case_card: true
     channel_type: alerts
-    include:
-      - case_id
-      - title
-      - severity
-      - confidence
-      - entity_summary
-      - timeline_preview
-      - action_buttons
+    card_format:
+      header: ":rotating_light: New Security Case"
+      fields:
+        - case_id
+        - title
+        - severity_badge
+        - confidence_score
+        - entity_summary
+        - mitre_badges
+        - timeline_preview
+      actions:
+        - label: "Investigate"
+          action: investigate_case
+        - label: "Correlate"
+          action: correlate_case
+        - label: "View Details"
+          action: view_case
 
-# Processing configuration
-processing:
-  entity_extraction:
-    enabled: true
-    types:
-      - host
-      - user
-      - ip
-      - domain
-      - hash
-      - process
-  narrative:
-    enabled: true
-    include_context: true
-    max_length: 2000
-  confidence_scoring:
-    enabled: true
-    factors:
-      - entity_count
-      - correlation_strength
-      - historical_matches
-      - rule_severity
+# =============================================================================
+# SELF-HEALING & ERROR RECOVERY
+# =============================================================================
+resilience:
+  retry_policy:
+    max_attempts: 3
+    backoff_type: exponential
+    initial_delay_ms: 1000
+    max_delay_ms: 30000
 
-# Rate limiting and safeguards
+  fallback_behavior:
+    mcp_unavailable: queue_for_retry
+    entity_extraction_partial: continue_with_available
+    slack_unavailable: log_and_continue
+
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    reset_timeout_seconds: 60
+    half_open_requests: 3
+
+# =============================================================================
+# RATE LIMITING
+# =============================================================================
 rate_limits:
-  max_concurrent: 5
-  max_per_minute: 30
+  max_concurrent: 10
+  max_per_minute: 100
+  max_per_hour: 2000
+  burst_allowance: 20
   cooldown_on_error_ms: 5000
 
-# Logging configuration
+# =============================================================================
+# LOGGING & METRICS
+# =============================================================================
 logging:
   level: info
-  include_correlation_id: true
-  include_case_id: true
-  include_alert_id: true
-  redact_secrets: true
+  structured: true
+  fields:
+    - correlation_id
+    - case_id
+    - alert_id
+    - agent_name
+    - rule_id
+    - severity
+    - confidence
+    - entities_count
+    - processing_time_ms
+  redact:
+    - password
+    - token
+    - secret
+    - credential
+    - auth
 
-# Metrics to emit
 metrics:
-  - autopilot_triage_total
-  - autopilot_triage_latency_seconds
-  - autopilot_triage_errors_total
-  - autopilot_entities_extracted_total
+  - name: autopilot_triage_total
+    type: counter
+    labels: [severity, rule_group]
+
+  - name: autopilot_triage_latency_seconds
+    type: histogram
+    buckets: [0.1, 0.5, 1, 2, 5, 10, 30]
+
+  - name: autopilot_entities_extracted_total
+    type: counter
+    labels: [entity_type]
+
+  - name: autopilot_triage_confidence_score
+    type: histogram
+    buckets: [0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
+
+  - name: autopilot_triage_errors_total
+    type: counter
+    labels: [error_type]
+
+  - name: autopilot_cases_created_total
+    type: counter
+    labels: [severity]

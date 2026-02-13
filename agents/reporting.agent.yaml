@@ -1,100 +1,416 @@
-# Wazuh Autopilot - Reporting Agent
-# Role: Daily digest, KPIs, and operational metrics reporting
-# Permission Level: READ-ONLY
+# =============================================================================
+# WAZUH OPENCLAW AUTOPILOT - REPORTING AGENT
+# =============================================================================
+# Role: Analyst - Operational metrics, KPIs, digests, trend analysis
+# Permission Level: READ-ONLY (Safe for full automation)
+# Autonomy: FULL - Automatically generates scheduled and event-driven reports
+# =============================================================================
 
 name: wazuh-reporting-agent
-version: "1.0.0"
+version: "2.0.0"
 description: |
-  Reporting Agent generates scheduled and on-demand operational reports.
-  This agent is READ-ONLY and focuses on aggregation and presentation.
+  Expert Reporting Agent - The intelligence analyst of the SOC.
 
-  Responsibilities:
-  - Generate daily security digest
-  - Calculate and report KPIs
-  - Identify top noisy rules
-  - Track recurring offenders
-  - Report on case/approval/action metrics
-  - Post reports to Slack
+  This agent operates with FULL AUTONOMY for read-only operations, automatically
+  generating comprehensive operational reports, security metrics, and trend
+  analysis to measure SOC effectiveness and identify areas for improvement.
 
+  CORE MISSION:
+  Transform raw operational data into actionable intelligence through automated
+  reporting, KPI tracking, and trend analysis that enables data-driven security
+  decisions.
+
+  INDUSTRY BENCHMARK TARGETS:
+  - 80% false positive reduction through tuning recommendations
+  - 60% reduction in mean time to respond
+  - 95% Tier-1 alert auto-triage rate
+
+# =============================================================================
+# AGENT IDENTITY
+# =============================================================================
 role: reporting
 autonomy_level: read-only
+autonomous_execution: true
 
-# Tool permissions - strictly read-only operations
+# Reporting expertise
+reporting_expertise:
+  # SOC operational frameworks
+  frameworks:
+    - name: NIST_CSF
+      applicable_metrics: [detect, respond, recover]
+    - name: MITRE_ATT&CK
+      applicable_metrics: [technique_coverage, detection_gaps]
+    - name: SOC_CMM
+      applicable_metrics: [maturity_level, process_efficiency]
+
+  # Industry benchmarks (2026 standards)
+  industry_benchmarks:
+    mean_time_to_detect_minutes: 10
+    mean_time_to_triage_minutes: 15
+    mean_time_to_respond_minutes: 60
+    false_positive_rate_target: 0.20
+    auto_triage_rate_target: 0.95
+    analyst_efficiency_ratio: 5.0  # Cases per analyst per day
+
+# =============================================================================
+# TOOL PERMISSIONS (READ-ONLY)
+# =============================================================================
 allowed_tools:
-  - get_alert
-  - search_alerts
-  - search_events
-  - get_agent
-  - get_rule_info
+  - name: get_alert
+    purpose: "Retrieve alert details for reporting"
+    required: true
 
+  - name: search_alerts
+    purpose: "Aggregate alert statistics"
+    required: true
+
+  - name: search_events
+    purpose: "Gather event data for analysis"
+    required: true
+
+  - name: get_agent
+    purpose: "Get endpoint fleet statistics"
+    required: true
+
+  - name: get_rule_info
+    purpose: "Retrieve rule effectiveness data"
+    required: false
+
+# EXPLICIT DENIAL - Read-only agent
 denied_tools:
   - block_ip
   - isolate_host
   - kill_process
   - disable_user
   - quarantine_file
+  - active_response
   - "*_write"
   - "*_execute"
   - "*_modify"
+  - "*_delete"
 
-# Trigger conditions
+# =============================================================================
+# AUTONOMOUS TRIGGERS
+# =============================================================================
 triggers:
   scheduled:
+    - name: hourly_snapshot
+      cron: "0 * * * *"
+      description: "Hourly operational snapshot"
+      report_type: operational_snapshot
+      retention_hours: 24
+
     - name: daily_digest
-      cron: "0 8 * * *"  # 8 AM daily
+      cron: "0 8 * * *"
       timezone: UTC
       description: "Daily security operations digest"
+      report_type: daily_digest
+      retention_days: 90
+
+    - name: shift_handoff
+      cron: "0 6,14,22 * * *"
+      timezone: UTC
+      description: "Shift handoff report (8-hour shifts)"
+      report_type: shift_handoff
+      retention_days: 30
 
     - name: weekly_summary
-      cron: "0 9 * * 1"  # 9 AM Monday
+      cron: "0 9 * * 1"
       timezone: UTC
       description: "Weekly security summary"
+      report_type: weekly_summary
+      retention_days: 365
+
+    - name: monthly_executive
+      cron: "0 9 1 * *"
+      timezone: UTC
+      description: "Monthly executive report"
+      report_type: executive_summary
+      retention_days: 730
+
+    - name: rule_effectiveness
+      cron: "0 2 * * 0"
+      timezone: UTC
+      description: "Weekly rule effectiveness analysis"
+      report_type: rule_effectiveness
+      retention_days: 90
+
+  events:
+    - type: case_closed
+      auto_execute: true
+      priority: low
+      report_type: case_summary
+
+    - type: blast_radius_critical
+      auto_execute: true
+      priority: high
+      report_type: incident_impact
+
+    - type: policy_denial
+      auto_execute: true
+      priority: low
+      report_type: policy_effectiveness
 
   commands:
     - name: digest
-      pattern: "/wazuh digest"
-      description: "Generate on-demand daily digest"
+      pattern: "/wazuh digest [period]"
+      description: "Generate on-demand digest (day/week/month)"
+
     - name: kpis
       pattern: "/wazuh kpis"
       description: "Show current KPI metrics"
+
     - name: noisy-rules
       pattern: "/wazuh noisy-rules [days]"
       description: "Show top noisy rules"
 
-# Report configuration
+    - name: trending
+      pattern: "/wazuh trending [metric]"
+      description: "Show trend analysis for metric"
+
+    - name: sla-status
+      pattern: "/wazuh sla-status"
+      description: "Show SLA compliance status"
+
+    - name: coverage
+      pattern: "/wazuh coverage"
+      description: "Show detection coverage analysis"
+
+# =============================================================================
+# KPI ENGINE
+# =============================================================================
+kpis:
+  enabled: true
+  autonomous: true
+
+  # Mean Time metrics (in minutes)
+  time_metrics:
+    - name: mean_time_to_detect
+      abbreviation: MTTD
+      description: "Average time from event occurrence to alert generation"
+      calculation: "avg(alert.timestamp - event.timestamp)"
+      unit: minutes
+      target: 10
+      warning_threshold: 15
+      critical_threshold: 30
+      trend_period_days: 7
+
+    - name: mean_time_to_triage
+      abbreviation: MTTT
+      description: "Average time from alert to case creation"
+      calculation: "avg(case.created_at - alert.timestamp)"
+      unit: minutes
+      target: 15
+      warning_threshold: 30
+      critical_threshold: 60
+      trend_period_days: 7
+
+    - name: mean_time_to_investigate
+      abbreviation: MTTI
+      description: "Average time from case creation to investigation complete"
+      calculation: "avg(investigation.completed_at - case.created_at)"
+      unit: minutes
+      target: 120
+      warning_threshold: 240
+      critical_threshold: 480
+      trend_period_days: 7
+
+    - name: mean_time_to_plan
+      abbreviation: MTTP
+      description: "Average time from case to response plan"
+      calculation: "avg(plan.created_at - case.created_at)"
+      unit: minutes
+      target: 30
+      warning_threshold: 60
+      critical_threshold: 120
+      trend_period_days: 7
+
+    - name: mean_time_to_respond
+      abbreviation: MTTR
+      description: "Average time from plan to action execution"
+      calculation: "avg(action.executed_at - plan.approved_at)"
+      unit: minutes
+      target: 60
+      warning_threshold: 120
+      critical_threshold: 240
+      trend_period_days: 7
+
+    - name: mean_time_to_contain
+      abbreviation: MTTC
+      description: "Average time from detection to containment"
+      calculation: "avg(containment.executed_at - alert.timestamp)"
+      unit: minutes
+      target: 90
+      warning_threshold: 180
+      critical_threshold: 360
+      trend_period_days: 7
+
+  # Efficiency metrics
+  efficiency_metrics:
+    - name: auto_triage_rate
+      description: "Percentage of alerts automatically triaged"
+      calculation: "count(auto_triaged_alerts) / count(total_alerts)"
+      unit: percent
+      target: 95
+      warning_threshold: 80
+      critical_threshold: 60
+      trend_period_days: 7
+
+    - name: false_positive_rate
+      description: "Percentage of cases closed as false positives"
+      calculation: "count(cases.status='false_positive') / count(total_cases)"
+      unit: percent
+      target: 20
+      warning_threshold: 35
+      critical_threshold: 50
+      trend_period_days: 7
+
+    - name: true_positive_rate
+      description: "Percentage of cases confirmed as true incidents"
+      calculation: "count(cases.status='confirmed') / count(total_cases)"
+      unit: percent
+      trend_period_days: 7
+
+    - name: escalation_rate
+      description: "Percentage of cases requiring human escalation"
+      calculation: "count(escalated_cases) / count(total_cases)"
+      unit: percent
+      target: 15
+      warning_threshold: 25
+      critical_threshold: 40
+      trend_period_days: 7
+
+    - name: approval_grant_rate
+      description: "Percentage of approval requests granted"
+      calculation: "count(approvals.status='granted') / count(total_approvals)"
+      unit: percent
+      trend_period_days: 7
+
+    - name: policy_compliance_rate
+      description: "Percentage of actions passing policy evaluation"
+      calculation: "count(policy.decision='allow') / count(total_evaluations)"
+      unit: percent
+      target: 85
+      trend_period_days: 7
+
+    - name: action_success_rate
+      description: "Percentage of actions successfully executed and verified"
+      calculation: "count(actions.verified='success') / count(total_actions)"
+      unit: percent
+      target: 99
+      warning_threshold: 95
+      critical_threshold: 90
+      trend_period_days: 7
+
+  # Volume metrics
+  volume_metrics:
+    - name: alerts_per_day
+      description: "Total alerts generated per day"
+      calculation: "count(alerts) / days"
+      unit: count
+      trend_period_days: 30
+
+    - name: cases_per_day
+      description: "Cases created per day"
+      calculation: "count(cases) / days"
+      unit: count
+      trend_period_days: 30
+
+    - name: critical_cases_per_day
+      description: "Critical severity cases per day"
+      calculation: "count(cases.severity='critical') / days"
+      unit: count
+      trend_period_days: 30
+
+    - name: actions_executed_per_day
+      description: "Response actions executed per day"
+      calculation: "count(actions) / days"
+      unit: count
+      trend_period_days: 30
+
+  # Coverage metrics
+  coverage_metrics:
+    - name: mitre_technique_coverage
+      description: "Percentage of MITRE ATT&CK techniques with detection rules"
+      calculation: "count(detected_techniques) / count(total_techniques)"
+      unit: percent
+      trend_period_days: 30
+
+    - name: endpoint_coverage
+      description: "Percentage of endpoints with active Wazuh agents"
+      calculation: "count(active_agents) / count(known_endpoints)"
+      unit: percent
+      target: 100
+      warning_threshold: 95
+      critical_threshold: 90
+
+    - name: log_source_coverage
+      description: "Percentage of critical log sources ingesting"
+      calculation: "count(active_sources) / count(expected_sources)"
+      unit: percent
+      target: 100
+      warning_threshold: 90
+      critical_threshold: 80
+
+# =============================================================================
+# REPORT TYPES
+# =============================================================================
 reports:
+  operational_snapshot:
+    name: "Hourly Operational Snapshot"
+    lookback_minutes: 60
+    sections:
+      - alert_volume
+      - active_cases
+      - pending_approvals
+      - agent_health
+
   daily_digest:
-    name: "Daily Security Digest"
+    name: "Daily Security Operations Digest"
     lookback_hours: 24
     sections:
-      - summary_stats
-      - new_cases
-      - updated_cases
-      - closed_cases
-      - approvals_summary
-      - top_noisy_rules
+      - executive_summary
+      - kpi_dashboard
+      - case_summary
+      - alert_analysis
+      - top_rules
       - recurring_offenders
-      - kpis
+      - agent_health
+      - recommendations
 
-    summary_stats:
-      - total_alerts
-      - alerts_by_severity
-      - cases_created
-      - cases_updated
-      - cases_closed
-      - plans_proposed
-      - approvals_requested
-      - approvals_granted
-      - approvals_denied
-      - actions_executed
+    executive_summary:
+      include:
+        - total_alerts_vs_baseline
+        - cases_created_closed
+        - critical_incidents
+        - response_actions_taken
+        - notable_events
 
-    top_noisy_rules:
+    case_summary:
+      include:
+        - new_cases
+        - updated_cases
+        - closed_cases
+        - pending_cases
+        - by_severity
+        - by_attack_pattern
+
+    alert_analysis:
+      include:
+        - total_alerts
+        - alerts_by_severity
+        - alerts_by_rule_group
+        - baseline_deviation
+
+    top_rules:
       limit: 10
       include:
         - rule_id
         - rule_description
         - alert_count
         - trend  # up/down/stable
+        - false_positive_rate
+        - tuning_recommendation
 
     recurring_offenders:
       limit: 10
@@ -104,118 +420,426 @@ reports:
         - host
       include:
         - entity
+        - entity_type
         - alert_count
         - case_count
         - last_seen
+        - risk_score
+
+  shift_handoff:
+    name: "Shift Handoff Report"
+    lookback_hours: 8
+    sections:
+      - shift_summary
+      - active_incidents
+      - pending_actions
+      - escalations
+      - notes_for_next_shift
 
   weekly_summary:
     name: "Weekly Security Summary"
     lookback_days: 7
     sections:
+      - executive_summary
       - week_over_week_comparison
-      - trend_analysis
+      - kpi_trends
       - top_incidents
+      - attack_pattern_analysis
+      - rule_effectiveness
       - policy_effectiveness
+      - coverage_gaps
       - recommendations
 
-  kpis:
-    metrics:
-      - name: mean_time_to_triage
-        description: "Average time from alert to case creation"
-        unit: minutes
-        target: 15
+    week_over_week_comparison:
+      metrics:
+        - total_alerts
+        - total_cases
+        - mean_time_to_respond
+        - false_positive_rate
+        - auto_triage_rate
 
-      - name: mean_time_to_plan
-        description: "Average time from case to response plan"
-        unit: minutes
-        target: 30
+  executive_summary:
+    name: "Monthly Executive Report"
+    lookback_days: 30
+    sections:
+      - executive_dashboard
+      - threat_landscape
+      - kpi_scorecard
+      - maturity_assessment
+      - resource_utilization
+      - compliance_status
+      - strategic_recommendations
+      - budget_impact
 
-      - name: mean_time_to_respond
-        description: "Average time from plan to action execution"
-        unit: minutes
-        target: 60
+    executive_dashboard:
+      include:
+        - security_posture_score
+        - risk_trend
+        - top_threats
+        - response_effectiveness
 
-      - name: cases_per_day
-        description: "Average cases created per day"
-        unit: count
+    maturity_assessment:
+      framework: SOC_CMM
+      dimensions:
+        - detection_capability
+        - response_capability
+        - automation_level
+        - coverage
 
-      - name: auto_triage_rate
-        description: "Percentage of alerts auto-triaged"
-        unit: percent
-        target: 80
+  rule_effectiveness:
+    name: "Rule Effectiveness Analysis"
+    lookback_days: 30
+    sections:
+      - rule_performance
+      - false_positive_analysis
+      - coverage_gaps
+      - tuning_recommendations
 
-      - name: approval_grant_rate
-        description: "Percentage of approval requests granted"
-        unit: percent
+    rule_performance:
+      metrics:
+        - alert_count
+        - case_conversion_rate
+        - false_positive_rate
+        - true_positive_rate
+        - mean_time_to_triage
 
-      - name: policy_deny_rate
-        description: "Percentage of actions denied by policy"
-        unit: percent
+    tuning_recommendations:
+      types:
+        - high_volume_low_conversion
+        - high_false_positive
+        - duplicate_alerts
+        - missing_context
 
-      - name: tool_success_rate
-        description: "MCP tool call success rate"
-        unit: percent
-        target: 99
+  case_summary:
+    name: "Case Closure Summary"
+    sections:
+      - case_details
+      - timeline
+      - actions_taken
+      - lessons_learned
 
-# Output configurations
+  incident_impact:
+    name: "Incident Impact Report"
+    sections:
+      - blast_radius_analysis
+      - affected_assets
+      - business_impact
+      - containment_effectiveness
+      - recovery_status
+
+  policy_effectiveness:
+    name: "Policy Effectiveness Report"
+    lookback_days: 30
+    sections:
+      - policy_decisions
+      - denial_analysis
+      - escalation_patterns
+      - approval_latency
+
+# =============================================================================
+# TREND ANALYSIS ENGINE
+# =============================================================================
+trend_analysis:
+  enabled: true
+  autonomous: true
+
+  algorithms:
+    - name: moving_average
+      window_days: 7
+      for_metrics: [alert_volume, case_volume]
+
+    - name: linear_regression
+      window_days: 30
+      for_metrics: [mttd, mttr, false_positive_rate]
+
+    - name: seasonal_decomposition
+      window_days: 90
+      for_metrics: [alert_volume]
+
+    - name: anomaly_detection
+      method: z_score
+      threshold: 2.5
+      for_metrics: [alert_volume, case_volume]
+
+  trend_classifications:
+    - name: improving
+      condition: "slope < -0.05 AND p_value < 0.05"
+      emoji: ":chart_with_downwards_trend:"
+
+    - name: stable
+      condition: "abs(slope) <= 0.05 OR p_value >= 0.05"
+      emoji: ":chart:"
+
+    - name: degrading
+      condition: "slope > 0.05 AND p_value < 0.05"
+      emoji: ":chart_with_upwards_trend:"
+      alert: true
+
+  baseline_comparison:
+    enabled: true
+    baseline_period_days: 30
+    deviation_thresholds:
+      warning: 1.5  # 50% above baseline
+      critical: 2.0  # 100% above baseline
+
+# =============================================================================
+# RECOMMENDATION ENGINE
+# =============================================================================
+recommendations:
+  enabled: true
+  autonomous: true
+
+  categories:
+    - name: rule_tuning
+      triggers:
+        - condition: "rule.false_positive_rate > 0.5"
+          recommendation: "Consider tuning rule {rule_id} - {fp_rate}% false positive rate"
+
+        - condition: "rule.alert_count > baseline * 3"
+          recommendation: "Rule {rule_id} volume spike - investigate potential misconfiguration"
+
+    - name: coverage_improvement
+      triggers:
+        - condition: "mitre_technique.coverage < 0.7"
+          recommendation: "Add detection rules for {missing_techniques}"
+
+        - condition: "log_source.coverage < 0.95"
+          recommendation: "Missing log sources: {missing_sources}"
+
+    - name: efficiency_improvement
+      triggers:
+        - condition: "mttr > target * 1.5"
+          recommendation: "MTTR exceeds target - review approval workflow efficiency"
+
+        - condition: "auto_triage_rate < 0.8"
+          recommendation: "Low auto-triage rate - review triage agent configuration"
+
+    - name: resource_optimization
+      triggers:
+        - condition: "analyst_workload > 10 cases/day"
+          recommendation: "High analyst workload - consider automation expansion"
+
+# =============================================================================
+# OUTPUTS
+# =============================================================================
 outputs:
   report:
+    create: true
     formats:
-      - slack_message
       - json
+      - markdown
+      - slack_blocks
+
     storage:
+      enabled: true
       path: "${AUTOPILOT_DATA_DIR}/reports"
-      retention_days: 90
+      retention_days: 365
+      archive_after_days: 90
+      compress_archives: true
+
+  evidence_pack:
+    update: true
+    sections:
+      - reports_generated
+      - kpi_snapshots
+      - trend_data
 
   slack:
-    post_digest: true
+    enabled: true
     channel_type: reports
-    format:
-      style: blocks
-      include_charts: false  # Text-based for v1
-      include_links: true
 
-    digest_template:
+    daily_digest_card:
       header: ":chart_with_upwards_trend: Daily Security Digest"
       sections:
         - type: summary
           emoji: ":bar_chart:"
-        - type: cases
-          emoji: ":file_folder:"
-        - type: noisy_rules
-          emoji: ":loud_sound:"
+          fields:
+            - total_alerts
+            - total_cases
+            - critical_cases
+            - actions_executed
+
         - type: kpis
           emoji: ":dart:"
+          fields:
+            - mttr_with_trend
+            - auto_triage_rate_with_trend
+            - false_positive_rate_with_trend
 
-# Data sources
+        - type: top_rules
+          emoji: ":loud_sound:"
+          limit: 5
+
+        - type: recommendations
+          emoji: ":bulb:"
+          limit: 3
+
+      actions:
+        - label: "View Full Report"
+          action: view_report
+        - label: "View KPI Dashboard"
+          action: view_kpis
+
+    alert_card:
+      header: ":warning: Metric Alert"
+      urgency_indicator: true
+      fields:
+        - metric_name
+        - current_value
+        - threshold
+        - trend
+        - recommendation
+
+# =============================================================================
+# INTER-AGENT COMMUNICATION
+# =============================================================================
+agent_triggers:
+  on_report_generated:
+    - target: slack
+      action: post_report
+      condition: "report.type in ['daily_digest', 'weekly_summary', 'executive_summary']"
+      priority: medium
+
+  on_metric_alert:
+    - target: slack
+      action: post_alert
+      priority: high
+
+  on_rule_tuning_recommendation:
+    - target: triage-agent
+      action: update_tuning_hints
+      priority: low
+
+  on_coverage_gap_detected:
+    - target: investigation-agent
+      action: flag_coverage_gap
+      priority: medium
+
+# =============================================================================
+# DATA SOURCES
+# =============================================================================
 data_sources:
   cases:
+    source: internal
     path: "${AUTOPILOT_DATA_DIR}/cases"
     format: json
 
-  metrics:
+  evidence_packs:
     source: internal
-    aggregation: true
+    path: "${AUTOPILOT_DATA_DIR}/evidence"
+    format: json
+
+  metrics:
+    source: prometheus
+    endpoint: "http://localhost:${AUTOPILOT_METRICS_PORT}/metrics"
 
   alerts:
     source: mcp
     via_tools:
       - search_alerts
 
-# Rate limiting
+  events:
+    source: mcp
+    via_tools:
+      - search_events
+
+  agents:
+    source: mcp
+    via_tools:
+      - get_agent
+
+# =============================================================================
+# SELF-HEALING & ERROR RECOVERY
+# =============================================================================
+resilience:
+  retry_policy:
+    max_attempts: 3
+    backoff_type: exponential
+    initial_delay_ms: 1000
+    max_delay_ms: 30000
+
+  fallback_behavior:
+    data_source_unavailable: use_cached_or_skip
+    aggregation_timeout: partial_report
+    slack_unavailable: log_and_continue
+
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    reset_timeout_seconds: 60
+
+# =============================================================================
+# RATE LIMITING
+# =============================================================================
 rate_limits:
-  max_concurrent: 1
-  max_per_minute: 5
+  max_concurrent: 2
+  max_per_minute: 10
+  max_per_hour: 50
   cooldown_on_error_ms: 5000
 
-# Logging configuration
+# =============================================================================
+# CACHING
+# =============================================================================
+caching:
+  enabled: true
+
+  query_cache:
+    enabled: true
+    ttl_minutes: 15
+    max_entries: 1000
+
+  aggregation_cache:
+    enabled: true
+    ttl_minutes: 60
+    max_entries: 500
+
+  report_cache:
+    enabled: true
+    ttl_minutes: 30
+
+# =============================================================================
+# LOGGING & METRICS
+# =============================================================================
 logging:
   level: info
-  include_correlation_id: true
-  redact_secrets: true
+  structured: true
+  fields:
+    - correlation_id
+    - report_type
+    - report_id
+    - generation_time_ms
+    - data_sources_used
+    - sections_generated
+  redact:
+    - password
+    - token
+    - secret
 
-# Metrics to emit
 metrics:
-  - autopilot_reports_generated_total{type}
-  - autopilot_report_generation_latency_seconds
-  - autopilot_kpi_values{metric}
+  - name: autopilot_reports_generated_total
+    type: counter
+    labels: [report_type]
+
+  - name: autopilot_report_generation_latency_seconds
+    type: histogram
+    buckets: [1, 5, 10, 30, 60, 120, 300]
+
+  - name: autopilot_kpi_value
+    type: gauge
+    labels: [kpi_name]
+
+  - name: autopilot_kpi_target_compliance
+    type: gauge
+    labels: [kpi_name]  # 1 = meeting target, 0 = not meeting
+
+  - name: autopilot_trend_direction
+    type: gauge
+    labels: [metric_name]  # -1 = improving, 0 = stable, 1 = degrading
+
+  - name: autopilot_recommendations_generated_total
+    type: counter
+    labels: [category]
+
+  - name: autopilot_metric_alerts_total
+    type: counter
+    labels: [metric_name, severity]

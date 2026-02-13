@@ -1,30 +1,120 @@
-# Wazuh Autopilot - Correlation Agent
-# Role: Groups related alerts/events into case timeline and blast radius
-# Permission Level: READ-ONLY
+# =============================================================================
+# WAZUH OPENCLAW AUTOPILOT - CORRELATION AGENT
+# =============================================================================
+# Role: Pattern detector - Alert clustering, timeline building, blast radius
+# Permission Level: READ-ONLY (Safe for full automation)
+# Autonomy: FULL - Continuously correlates without human intervention
+# =============================================================================
 
 name: wazuh-correlation-agent
-version: "1.0.0"
+version: "2.0.0"
 description: |
-  Correlation Agent clusters related alerts and events to build comprehensive
-  case timelines and assess blast radius. This agent is READ-ONLY.
+  Expert Correlation Agent - The pattern recognition brain of the SOC.
 
-  Responsibilities:
-  - Cluster related alerts within configurable time windows
-  - Build chronological event timelines
-  - Calculate blast radius (affected assets, users, systems)
-  - Identify attack patterns and progression
-  - Update case evidence with correlation findings
+  This agent operates with FULL AUTONOMY, continuously analyzing alerts to
+  identify attack patterns, build comprehensive timelines, and calculate
+  the true blast radius of security incidents.
 
+  CORE MISSION:
+  Connect the dots between isolated alerts to reveal the full scope of
+  attacks, identify kill chain progression, and enable proactive response.
+
+# =============================================================================
+# AGENT IDENTITY
+# =============================================================================
 role: correlation
 autonomy_level: read-only
+autonomous_execution: true
 
-# Tool permissions - strictly read-only operations
+# Wazuh correlation expertise
+wazuh_expertise:
+  # Attack pattern signatures based on Wazuh rule groups
+  attack_patterns:
+    brute_force:
+      indicators:
+        - rule_groups: [authentication_failed, pam, sshd]
+          threshold: 5
+          window_minutes: 10
+      severity_boost: 1
+      mitre: [T1110]
+
+    lateral_movement:
+      indicators:
+        - rule_groups: [sysmon, windows]
+          rule_ids: [92001, 92002, 92003]
+          sequence: true
+      severity_boost: 2
+      mitre: [T1021, T1570]
+
+    privilege_escalation:
+      indicators:
+        - rule_groups: [pam, sudo, windows_security]
+          patterns: ["sudo.*root", "runas", "privilege"]
+      severity_boost: 2
+      mitre: [T1068, T1548]
+
+    data_exfiltration:
+      indicators:
+        - rule_groups: [firewall, ids]
+          data_volume_threshold_mb: 100
+          external_destination: true
+      severity_boost: 3
+      mitre: [T1041, T1048]
+
+    persistence:
+      indicators:
+        - rule_groups: [syscheck, sysmon]
+          paths: ["/etc/cron", "\\Windows\\System32", "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"]
+      severity_boost: 2
+      mitre: [T1053, T1547]
+
+    defense_evasion:
+      indicators:
+        - rule_groups: [sysmon, rootcheck]
+          patterns: ["log.*clear", "audit.*disable", "defender.*disable"]
+      severity_boost: 2
+      mitre: [T1070, T1562]
+
+  # Entity relationships for correlation
+  entity_relationships:
+    - type: same_source_ip
+      weight: 0.9
+    - type: same_target_host
+      weight: 0.95
+    - type: same_user
+      weight: 0.85
+    - type: process_parent_child
+      weight: 1.0
+    - type: network_connection
+      weight: 0.7
+    - type: file_access_sequence
+      weight: 0.8
+    - type: temporal_proximity
+      weight: 0.6
+
+# =============================================================================
+# TOOL PERMISSIONS
+# =============================================================================
 allowed_tools:
-  - get_alert
-  - search_alerts
-  - search_events
-  - get_agent
-  - get_rule_info
+  - name: get_alert
+    purpose: "Retrieve full alert details for correlation"
+    required: true
+
+  - name: search_alerts
+    purpose: "Search for related alerts across time windows"
+    required: true
+
+  - name: search_events
+    purpose: "Search raw events for deeper correlation"
+    required: true
+
+  - name: get_agent
+    purpose: "Get endpoint context for blast radius"
+    required: false
+
+  - name: get_rule_info
+    purpose: "Retrieve rule relationships and groups"
+    required: false
 
 denied_tools:
   - block_ip
@@ -32,118 +122,393 @@ denied_tools:
   - kill_process
   - disable_user
   - quarantine_file
+  - active_response
   - "*_write"
   - "*_execute"
   - "*_modify"
+  - "*_delete"
 
-# Trigger conditions
+# =============================================================================
+# AUTONOMOUS TRIGGERS
+# =============================================================================
 triggers:
+  # Triggered when new case is created
   events:
     - type: case_created
-      auto_correlate: true
-    - type: alert
-      severity:
-        - high
-        - critical
-      when_case_exists: true
+      auto_execute: true
+      priority: high
+
+    - type: case_updated
+      conditions:
+        new_alerts_added: true
+      auto_execute: true
+      priority: medium
+
+    - type: alert_added_to_case
+      auto_execute: true
+      priority: high
+
+  # Manual correlation
   commands:
     - name: correlate
       pattern: "/wazuh correlate <case_id>"
       description: "Manually trigger correlation for a case"
-  scheduled:
-    - cron: "*/5 * * * *"
-      description: "Re-correlate active cases every 5 minutes"
-      condition: has_active_cases
 
-# Correlation configuration
+    - name: expand
+      pattern: "/wazuh expand <case_id> <hours>"
+      description: "Expand correlation time window"
+
+    - name: blast-radius
+      pattern: "/wazuh blast-radius <case_id>"
+      description: "Recalculate blast radius"
+
+  # Continuous correlation
+  scheduled:
+    - name: active_case_recorrelation
+      cron: "*/5 * * * *"
+      description: "Re-correlate all active cases every 5 minutes"
+      condition: "case.status == 'active'"
+
+    - name: deep_correlation_sweep
+      cron: "0 */4 * * *"
+      description: "Deep correlation sweep every 4 hours"
+      window_hours: 24
+      min_severity: medium
+
+# =============================================================================
+# CORRELATION ENGINE
+# =============================================================================
 correlation:
+  enabled: true
+  autonomous: true
+
+  # Time windows
   time_windows:
     default_minutes: 60
-    max_minutes: 1440
+    max_minutes: 1440  # 24 hours
     lookback_minutes: 30
+    lookahead_minutes: 15
+    adaptive: true  # Adjust based on attack velocity
 
+  # Clustering algorithms
   clustering:
+    primary_strategy: hierarchical
     strategies:
-      - entity_overlap    # Same hosts/users/IPs
-      - temporal_proximity # Events close in time
-      - rule_similarity   # Similar rule types/categories
-      - attack_chain      # Known attack progression patterns
+      - name: entity_overlap
+        weight: 0.35
+        description: "Cluster alerts sharing hosts/users/IPs"
+        min_overlap: 0.3
 
+      - name: temporal_proximity
+        weight: 0.25
+        description: "Cluster alerts within time windows"
+        max_gap_seconds: 300
+        decay_factor: 0.9
+
+      - name: rule_similarity
+        weight: 0.20
+        description: "Cluster alerts from similar rule categories"
+        same_group_boost: 0.8
+        related_group_boost: 0.5
+
+      - name: attack_chain
+        weight: 0.20
+        description: "Match known attack progression patterns"
+        patterns: "${wazuh_expertise.attack_patterns}"
+
+  # Minimum correlation score to link
+  thresholds:
+    min_correlation_score: 0.5
+    strong_correlation: 0.8
+    definite_link: 0.95
+
+# =============================================================================
+# TIMELINE CONSTRUCTION
+# =============================================================================
+timeline:
+  enabled: true
+  autonomous: true
+
+  construction:
+    sort: chronological
+    deduplicate: true
+    dedup_strategy: content_hash
+    max_events: 1000
+    group_by_phase: true
+
+  phases:
+    - name: initial_access
+      mitre_tactics: [TA0001]
+      markers: [first_alert, external_connection]
+
+    - name: execution
+      mitre_tactics: [TA0002]
+      markers: [process_creation, script_execution]
+
+    - name: persistence
+      mitre_tactics: [TA0003]
+      markers: [registry_modification, scheduled_task, service_creation]
+
+    - name: privilege_escalation
+      mitre_tactics: [TA0004]
+      markers: [privilege_change, token_manipulation]
+
+    - name: defense_evasion
+      mitre_tactics: [TA0005]
+      markers: [log_clearing, process_injection]
+
+    - name: credential_access
+      mitre_tactics: [TA0006]
+      markers: [credential_dump, keylogging]
+
+    - name: discovery
+      mitre_tactics: [TA0007]
+      markers: [network_scan, system_enumeration]
+
+    - name: lateral_movement
+      mitre_tactics: [TA0008]
+      markers: [remote_connection, file_share_access]
+
+    - name: collection
+      mitre_tactics: [TA0009]
+      markers: [data_staging, archive_creation]
+
+    - name: exfiltration
+      mitre_tactics: [TA0010]
+      markers: [large_transfer, unusual_destination]
+
+    - name: impact
+      mitre_tactics: [TA0040]
+      markers: [encryption, data_destruction]
+
+  event_enrichment:
+    add_phase: true
+    add_sequence_number: true
+    add_time_delta: true
+    add_context_summary: true
+
+# =============================================================================
+# BLAST RADIUS CALCULATION
+# =============================================================================
+blast_radius:
+  enabled: true
+  autonomous: true
+
+  dimensions:
+    hosts_affected:
+      query: "unique agent.name from correlated_alerts"
+      weight: 1.0
+      criticality_multiplier: true
+
+    users_affected:
+      query: "unique user from correlated_alerts"
+      weight: 0.9
+      privileged_multiplier: 2.0
+
+    subnets_affected:
+      query: "unique subnet from agent.ip"
+      weight: 0.8
+      dmz_multiplier: 0.5
+      production_multiplier: 1.5
+
+    services_affected:
+      query: "unique service from alert.data"
+      weight: 0.85
+      critical_service_multiplier: 2.0
+
+    data_classifications:
+      query: "unique data.classification from affected_hosts"
+      weight: 1.0
+      pii_multiplier: 2.0
+      financial_multiplier: 2.0
+
+  scoring:
+    method: weighted_sum_normalized
+    max_score: 100
     thresholds:
-      entity_overlap_min: 0.3
-      temporal_gap_max_seconds: 300
-      similarity_score_min: 0.5
+      contained: [0, 25]
+      limited: [26, 50]
+      significant: [51, 75]
+      severe: [76, 90]
+      critical: [91, 100]
 
-  blast_radius:
-    calculate: true
-    dimensions:
-      - hosts_affected
-      - users_affected
-      - subnets_affected
-      - services_affected
-      - data_classifications
+  asset_criticality:
+    sources:
+      - cmdb_integration
+      - hostname_patterns
+      - manual_tags
+    patterns:
+      critical: ["^prod-", "^db-", "^dc-", "-prod$"]
+      high: ["^app-", "^web-", "^api-"]
+      medium: ["^stage-", "^staging-"]
+      low: ["^dev-", "^test-", "^sandbox-"]
 
-# Output configurations
+# =============================================================================
+# PATTERN DETECTION
+# =============================================================================
+pattern_detection:
+  enabled: true
+  autonomous: true
+
+  detectors:
+    - name: kill_chain_progression
+      description: "Detect movement through attack phases"
+      min_phases: 2
+      alert_on_escalation: true
+
+    - name: lateral_movement_fan_out
+      description: "Detect spreading to multiple hosts"
+      threshold_hosts: 3
+      window_minutes: 30
+
+    - name: credential_stuffing
+      description: "Detect mass authentication attempts"
+      threshold_attempts: 50
+      unique_users_min: 5
+
+    - name: data_staging
+      description: "Detect file collection before exfil"
+      indicators:
+        - archive_creation
+        - compression
+        - sensitive_path_access
+
+    - name: living_off_the_land
+      description: "Detect LOLBIN abuse chains"
+      binaries: ["powershell", "cmd", "wmic", "certutil", "mshta", "rundll32"]
+      chain_length_min: 2
+
+# =============================================================================
+# OUTPUTS
+# =============================================================================
 outputs:
   case:
     update: true
     fields:
+      - correlated_alerts
+      - correlation_score
       - timeline
       - blast_radius
-      - related_alerts
       - attack_pattern
-      - correlation_score
+      - kill_chain_phase
+      - related_cases
+      - entity_graph
+
   evidence_pack:
     update: true
     sections:
+      - correlation_matrix
       - timeline
+      - blast_radius_report
+      - pattern_matches
       - mcp_calls
-      - correlation_metadata
+      - entity_relationships
+
   slack:
+    enabled: true
     update_case_card: true
     notify_on_escalation: true
-    escalation_conditions:
-      - blast_radius_increase
-      - new_critical_entity
-      - attack_progression
+    escalation_triggers:
+      - blast_radius_increase_percent: 25
+      - new_critical_entity: true
+      - kill_chain_progression: true
+      - pattern_match: [lateral_movement, data_exfiltration]
 
-# Processing configuration
-processing:
-  timeline:
+    escalation_card:
+      header: ":warning: Case Escalation"
+      fields:
+        - escalation_reason
+        - new_scope
+        - blast_radius_delta
+        - recommended_actions
+
+# =============================================================================
+# INTER-AGENT COMMUNICATION
+# =============================================================================
+agent_triggers:
+  on_correlation_complete:
+    - target: investigation-agent
+      condition: "case.severity in ['high', 'critical']"
+      priority: high
+
+    - target: response-planner-agent
+      condition: "case.severity == 'critical' OR pattern_match == 'data_exfiltration'"
+      priority: immediate
+
+  on_blast_radius_critical:
+    - target: response-planner-agent
+      condition: "blast_radius.score > 75"
+      priority: immediate
+      include_urgency: true
+
+# =============================================================================
+# SELF-HEALING & ERROR RECOVERY
+# =============================================================================
+resilience:
+  retry_policy:
+    max_attempts: 3
+    backoff_type: exponential
+    initial_delay_ms: 1000
+    max_delay_ms: 30000
+
+  fallback_behavior:
+    mcp_unavailable: queue_for_retry
+    partial_correlation: save_and_continue
+    timeline_gaps: mark_and_continue
+
+  circuit_breaker:
     enabled: true
-    sort: chronological
-    include_context: true
-    max_events: 500
+    failure_threshold: 5
+    reset_timeout_seconds: 60
 
-  pattern_detection:
-    enabled: true
-    patterns:
-      - lateral_movement
-      - privilege_escalation
-      - data_exfiltration
-      - persistence
-      - defense_evasion
-
-  deduplication:
-    enabled: true
-    strategy: content_hash
-
-# Rate limiting and safeguards
+# =============================================================================
+# RATE LIMITING
+# =============================================================================
 rate_limits:
-  max_concurrent: 3
-  max_per_minute: 20
+  max_concurrent: 5
+  max_per_minute: 50
+  max_alerts_per_correlation: 500
   cooldown_on_error_ms: 5000
 
-# Logging configuration
+# =============================================================================
+# LOGGING & METRICS
+# =============================================================================
 logging:
   level: info
-  include_correlation_id: true
-  include_case_id: true
-  redact_secrets: true
+  structured: true
+  fields:
+    - correlation_id
+    - case_id
+    - alerts_correlated
+    - correlation_score
+    - blast_radius_score
+    - patterns_matched
+    - processing_time_ms
+  redact:
+    - password
+    - token
+    - secret
 
-# Metrics to emit
 metrics:
-  - autopilot_correlation_total
-  - autopilot_correlation_latency_seconds
-  - autopilot_correlation_alerts_clustered_total
-  - autopilot_correlation_blast_radius_score
+  - name: autopilot_correlation_total
+    type: counter
+    labels: [case_severity, pattern_type]
+
+  - name: autopilot_correlation_latency_seconds
+    type: histogram
+    buckets: [0.5, 1, 2, 5, 10, 30, 60]
+
+  - name: autopilot_alerts_correlated_total
+    type: counter
+
+  - name: autopilot_blast_radius_score
+    type: gauge
+    labels: [case_id]
+
+  - name: autopilot_patterns_detected_total
+    type: counter
+    labels: [pattern_type]
+
+  - name: autopilot_kill_chain_phase
+    type: gauge
+    labels: [case_id, phase]
