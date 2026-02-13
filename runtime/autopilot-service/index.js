@@ -1,5 +1,6 @@
+#!/usr/bin/env node
 /**
- * Wazuh Autopilot Runtime Service
+ * Wazuh OpenClaw Autopilot Runtime Service
  *
  * Minimal runtime providing:
  * - Evidence pack persistence
