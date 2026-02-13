@@ -292,8 +292,12 @@ async function getCase(caseId) {
     caseId,
     "evidence-pack.json"
   );
-  const content = await fs.readFile(packPath, "utf8");
-  return JSON.parse(content);
+  try {
+    const content = await fs.readFile(packPath, "utf8");
+    return JSON.parse(content);
+  } catch (err) {
+    throw new Error(`Case not found: ${caseId}`);
+  }
 }
 
 async function listCases(options = {}) {
