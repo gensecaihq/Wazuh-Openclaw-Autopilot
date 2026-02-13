@@ -1,0 +1,21 @@
+{
+  "name": "wazuh-autopilot-service",
+  "version": "1.0.0",
+  "description": "Wazuh Autopilot Runtime Service - Evidence packs, approvals, metrics",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "wazuh",
+    "autopilot",
+    "soc",
+    "security",
+    "openclaw"
+  ],
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

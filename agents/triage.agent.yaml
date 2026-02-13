@@ -1,0 +1,127 @@
+# Wazuh Autopilot - Triage Agent
+# Role: Alert → Case summary; extracts entities, builds narrative, posts Slack Case Card
+# Permission Level: READ-ONLY
+
+name: wazuh-triage-agent
+version: "1.0.0"
+description: |
+  Triage Agent performs initial alert assessment and case creation.
+  This agent is READ-ONLY and cannot execute response actions.
+
+  Responsibilities:
+  - Fetch alert details from Wazuh via MCP
+  - Extract entities (hosts, users, IPs, domains, hashes, processes)
+  - Create or update Cases with structured evidence
+  - Build narrative summaries with confidence scoring
+  - Post Case Cards to Slack channels
+
+# Agent identity and role
+role: triage
+autonomy_level: read-only
+
+# Tool permissions - strictly read-only operations
+allowed_tools:
+  - get_alert
+  - search_alerts
+  - search_events
+  - get_agent
+  - get_rule_info
+
+denied_tools:
+  - block_ip
+  - isolate_host
+  - kill_process
+  - disable_user
+  - quarantine_file
+  - "*_write"
+  - "*_execute"
+  - "*_modify"
+
+# Trigger conditions
+triggers:
+  events:
+    - type: alert
+      severity:
+        - high
+        - critical
+      auto_triage: true
+  commands:
+    - name: triage
+      pattern: "/wazuh triage <alert_id>"
+      description: "Manually trigger triage for a specific alert"
+
+# Output configurations
+outputs:
+  case:
+    create: true
+    update: true
+    fields:
+      - title
+      - summary
+      - severity
+      - confidence
+      - entities
+      - timeline
+      - mitre_mapping
+  evidence_pack:
+    update: true
+    sections:
+      - mcp_calls
+      - evidence_refs
+      - entities
+      - timeline
+  slack:
+    post_case_card: true
+    channel_type: alerts
+    include:
+      - case_id
+      - title
+      - severity
+      - confidence
+      - entity_summary
+      - timeline_preview
+      - action_buttons
+
+# Processing configuration
+processing:
+  entity_extraction:
+    enabled: true
+    types:
+      - host
+      - user
+      - ip
+      - domain
+      - hash
+      - process
+  narrative:
+    enabled: true
+    include_context: true
+    max_length: 2000
+  confidence_scoring:
+    enabled: true
+    factors:
+      - entity_count
+      - correlation_strength
+      - historical_matches
+      - rule_severity
+
+# Rate limiting and safeguards
+rate_limits:
+  max_concurrent: 5
+  max_per_minute: 30
+  cooldown_on_error_ms: 5000
+
+# Logging configuration
+logging:
+  level: info
+  include_correlation_id: true
+  include_case_id: true
+  include_alert_id: true
+  redact_secrets: true
+
+# Metrics to emit
+metrics:
+  - autopilot_triage_total
+  - autopilot_triage_latency_seconds
+  - autopilot_triage_errors_total
+  - autopilot_entities_extracted_total

@@ -1,0 +1,153 @@
+# Wazuh Autopilot - Investigation Agent
+# Role: Runs pivots/queries to enrich case with additional context
+# Permission Level: READ-ONLY
+
+name: wazuh-investigation-agent
+version: "1.0.0"
+description: |
+  Investigation Agent performs deep-dive analysis on cases by running
+  additional queries and pivots to enrich understanding. READ-ONLY.
+
+  Responsibilities:
+  - Execute pivot queries based on extracted entities
+  - Enrich cases with historical context
+  - Identify related past incidents
+  - Gather additional IOC context
+  - Build comprehensive investigation notes
+
+role: investigation
+autonomy_level: read-only
+
+# Tool permissions - strictly read-only operations
+allowed_tools:
+  - get_alert
+  - search_alerts
+  - search_events
+  - get_agent
+  - get_rule_info
+
+denied_tools:
+  - block_ip
+  - isolate_host
+  - kill_process
+  - disable_user
+  - quarantine_file
+  - "*_write"
+  - "*_execute"
+  - "*_modify"
+
+# Trigger conditions
+triggers:
+  events:
+    - type: case_created
+      severity:
+        - high
+        - critical
+      auto_investigate: true
+    - type: correlation_complete
+      auto_investigate: true
+  commands:
+    - name: investigate
+      pattern: "/wazuh investigate <case_id>"
+      description: "Manually trigger deep investigation for a case"
+    - name: pivot
+      pattern: "/wazuh pivot <entity_type> <entity_value>"
+      description: "Pivot on a specific entity"
+
+# Investigation configuration
+investigation:
+  pivots:
+    enabled: true
+    types:
+      - ip_history
+      - user_activity
+      - host_events
+      - process_ancestry
+      - network_connections
+      - file_operations
+
+    lookback:
+      default_hours: 24
+      max_hours: 168
+
+    max_results_per_pivot: 100
+
+  enrichment:
+    historical_incidents:
+      enabled: true
+      lookback_days: 90
+      match_on:
+        - entities
+        - rule_ids
+        - attack_patterns
+
+    baseline_comparison:
+      enabled: true
+      compare_to: 7_day_average
+
+    threat_context:
+      enabled: true
+      sources:
+        - mitre_mapping
+        - rule_metadata
+
+# Output configurations
+outputs:
+  case:
+    update: true
+    fields:
+      - investigation_notes
+      - enrichment_data
+      - historical_context
+      - pivot_results
+      - ioc_context
+  evidence_pack:
+    update: true
+    sections:
+      - mcp_calls
+      - pivot_queries
+      - enrichment_results
+  slack:
+    post_findings: true
+    when:
+      - significant_finding
+      - historical_match
+      - baseline_anomaly
+
+# Processing configuration
+processing:
+  query_optimization:
+    enabled: true
+    batch_queries: true
+    max_batch_size: 10
+
+  result_analysis:
+    enabled: true
+    summarize: true
+    highlight_anomalies: true
+
+  note_generation:
+    enabled: true
+    format: structured
+    include_confidence: true
+
+# Rate limiting and safeguards
+rate_limits:
+  max_concurrent: 3
+  max_per_minute: 15
+  max_queries_per_investigation: 50
+  cooldown_on_error_ms: 5000
+
+# Logging configuration
+logging:
+  level: info
+  include_correlation_id: true
+  include_case_id: true
+  redact_secrets: true
+
+# Metrics to emit
+metrics:
+  - autopilot_investigation_total
+  - autopilot_investigation_latency_seconds
+  - autopilot_investigation_pivots_total
+  - autopilot_investigation_findings_total

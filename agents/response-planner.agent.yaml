@@ -1,0 +1,207 @@
+# Wazuh Autopilot - Response Planner Agent
+# Role: Generates response plans (no execution), produces approval requests
+# Permission Level: PLAN-ONLY (no execution capability)
+
+name: wazuh-response-planner-agent
+version: "1.0.0"
+description: |
+  Response Planner Agent analyzes cases and generates recommended response
+  plans. This agent CANNOT execute actions - it only creates plans that
+  require approval before execution by the Responder Agent.
+
+  Responsibilities:
+  - Analyze case severity, confidence, and blast radius
+  - Generate prioritized response action plans
+  - Assess risk and potential impact of each action
+  - Create approval requests with full context
+  - Document reasoning and alternatives
+
+role: response_planner
+autonomy_level: plan-only
+
+# Tool permissions - read-only for planning purposes
+allowed_tools:
+  - get_alert
+  - search_alerts
+  - search_events
+  - get_agent
+  - get_rule_info
+
+# Explicitly cannot use action tools
+denied_tools:
+  - block_ip
+  - isolate_host
+  - kill_process
+  - disable_user
+  - quarantine_file
+  - "*_write"
+  - "*_execute"
+  - "*_modify"
+
+# Trigger conditions
+triggers:
+  events:
+    - type: case_severity_high
+      auto_plan: true
+    - type: case_severity_critical
+      auto_plan: true
+    - type: correlation_complete
+      when_severity:
+        - high
+        - critical
+      auto_plan: true
+  commands:
+    - name: propose
+      pattern: "/wazuh propose <case_id>"
+      description: "Generate response plan for a case"
+    - name: replan
+      pattern: "/wazuh replan <case_id>"
+      description: "Generate alternative response plan"
+
+# Planning configuration
+planning:
+  strategies:
+    - containment_first     # Prioritize isolation/blocking
+    - evidence_preservation # Ensure forensic data retained
+    - minimal_disruption    # Minimize business impact
+    - defense_in_depth      # Multiple layers of response
+
+  action_catalog:
+    # Available actions the planner can recommend
+    containment:
+      - action: isolate_host
+        risk: medium
+        reversible: true
+        requires_approval: true
+      - action: block_ip
+        risk: low
+        reversible: true
+        requires_approval: true
+      - action: disable_user
+        risk: high
+        reversible: true
+        requires_approval: true
+
+    eradication:
+      - action: kill_process
+        risk: medium
+        reversible: false
+        requires_approval: true
+      - action: quarantine_file
+        risk: low
+        reversible: true
+        requires_approval: true
+
+    investigation:
+      - action: collect_forensics
+        risk: low
+        reversible: false
+        requires_approval: false
+
+  risk_assessment:
+    enabled: true
+    factors:
+      - action_reversibility
+      - asset_criticality
+      - business_impact
+      - blast_radius
+      - confidence_level
+
+    thresholds:
+      require_senior_approval:
+        risk_score_min: 7
+        asset_criticality:
+          - critical
+          - production
+
+      auto_deny:
+        risk_score_min: 9
+        confidence_below: 0.6
+
+# Output configurations
+outputs:
+  plan:
+    create: true
+    fields:
+      - plan_id
+      - case_id
+      - actions
+      - risk_assessment
+      - blast_radius
+      - reasoning
+      - alternatives
+      - recommended_approvers
+
+    format:
+      actions:
+        - sequence_number
+        - action_type
+        - target
+        - parameters
+        - risk_level
+        - expected_outcome
+        - rollback_procedure
+
+  evidence_pack:
+    update: true
+    sections:
+      - plans
+      - risk_assessment
+
+  approval_request:
+    create: true
+    include:
+      - case_summary
+      - plan_actions
+      - risk_notes
+      - blast_radius
+      - evidence_links
+      - confidence_score
+      - time_sensitivity
+
+  slack:
+    post_approval_request: true
+    channel_type: approvals
+    include_buttons:
+      - approve
+      - deny
+      - request_changes
+    fallback_commands:
+      approve: "/wazuh approve <plan_id>"
+      deny: "/wazuh deny <plan_id> <reason>"
+
+# Approval configuration
+approval:
+  token:
+    ttl_minutes: 60
+    single_use: true
+    bound_to:
+      - plan_id
+      - case_id
+      - approver_id
+
+  requirements:
+    min_approvers: 1
+    require_reason_on_deny: true
+    escalation_timeout_minutes: 30
+
+# Rate limiting and safeguards
+rate_limits:
+  max_concurrent: 2
+  max_per_minute: 10
+  cooldown_on_error_ms: 5000
+
+# Logging configuration
+logging:
+  level: info
+  include_correlation_id: true
+  include_case_id: true
+  include_plan_id: true
+  redact_secrets: true
+
+# Metrics to emit
+metrics:
+  - autopilot_plans_proposed_total
+  - autopilot_plans_risk_score
+  - autopilot_approvals_requested_total
+  - autopilot_planning_latency_seconds

@@ -1,0 +1,404 @@
+# Wazuh Autopilot - Security Policy Configuration
+# This file is the source of truth for all policy decisions
+# Version: 1.0.0
+
+schema_version: "1.0"
+policy_id: wazuh-autopilot-default
+description: |
+  Default security policy for Wazuh Autopilot.
+  Implements deny-by-default with explicit allowlists.
+
+# =============================================================================
+# AUTONOMY CONFIGURATION
+# =============================================================================
+autonomy:
+  # Global autonomy level: read-only | approval | limited-auto
+  default_level: approval
+
+  # Per-operation autonomy overrides
+  operations:
+    triage:
+      level: read-only
+      auto_execute: true
+
+    correlation:
+      level: read-only
+      auto_execute: true
+
+    investigation:
+      level: read-only
+      auto_execute: true
+
+    response_planning:
+      level: approval
+      auto_execute: false
+
+    action_execution:
+      level: approval
+      auto_execute: false
+
+# =============================================================================
+# SLACK WORKSPACE & CHANNEL ALLOWLISTS
+# =============================================================================
+slack:
+  # Allowed Slack workspaces (by workspace ID)
+  # Get your workspace ID from: https://api.slack.com/methods/auth.test
+  workspace_allowlist:
+    - id: "YOUR_WORKSPACE_ID"
+      name: "Primary Security Team"
+      enabled: true
+
+  # Channel allowlists by purpose
+  channels:
+    # Channels where alerts/case cards can be posted
+    alerts:
+      allowlist:
+        - id: "ALERTS_CHANNEL_ID"
+          name: "#security-alerts"
+      deny_action: log_and_skip
+
+    # Channels where approval requests can be posted
+    approvals:
+      allowlist:
+        - id: "APPROVALS_CHANNEL_ID"
+          name: "#security-approvals"
+      deny_action: log_and_skip
+
+    # Channels where reports can be posted
+    reports:
+      allowlist:
+        - id: "REPORTS_CHANNEL_ID"
+          name: "#security-reports"
+      deny_action: log_and_skip
+
+    # Channels where commands can be issued
+    commands:
+      allowlist:
+        - id: "ALERTS_CHANNEL_ID"
+          name: "#security-alerts"
+        - id: "APPROVALS_CHANNEL_ID"
+          name: "#security-approvals"
+      deny_action: reject_with_message
+
+# =============================================================================
+# APPROVER AUTHORIZATION
+# =============================================================================
+approvers:
+  # Approver groups
+  groups:
+    # Standard approvers - can approve medium risk actions
+    standard:
+      members:
+        - slack_id: "USER_ID_1"
+          name: "Security Analyst 1"
+        - slack_id: "USER_ID_2"
+          name: "Security Analyst 2"
+      can_approve:
+        - block_ip
+        - quarantine_file
+      max_risk_level: medium
+
+    # Elevated approvers - can approve high risk actions
+    elevated:
+      members:
+        - slack_id: "SENIOR_USER_ID_1"
+          name: "Senior Security Engineer"
+        - slack_id: "MANAGER_USER_ID"
+          name: "Security Manager"
+      can_approve:
+        - block_ip
+        - quarantine_file
+        - isolate_host
+        - kill_process
+      max_risk_level: high
+
+    # Admin approvers - can approve critical actions
+    admin:
+      members:
+        - slack_id: "ADMIN_USER_ID"
+          name: "Security Director"
+      can_approve:
+        - block_ip
+        - quarantine_file
+        - isolate_host
+        - kill_process
+        - disable_user
+      max_risk_level: critical
+
+  # Self-approval prevention
+  self_approval:
+    allowed: false
+    exception_groups: []
+
+# =============================================================================
+# ACTION ALLOWLISTS
+# =============================================================================
+actions:
+  # Global action enablement
+  enabled: false  # Set to true to enable action execution
+
+  # Per-action configuration
+  allowlist:
+    block_ip:
+      enabled: true
+      risk_level: low
+      requires_approval: true
+      min_approver_group: standard
+      min_confidence: 0.7
+      min_evidence_items: 2
+      cooldown_minutes: 5
+
+    isolate_host:
+      enabled: true
+      risk_level: medium
+      requires_approval: true
+      min_approver_group: elevated
+      min_confidence: 0.8
+      min_evidence_items: 3
+      cooldown_minutes: 15
+
+    kill_process:
+      enabled: true
+      risk_level: medium
+      requires_approval: true
+      min_approver_group: elevated
+      min_confidence: 0.8
+      min_evidence_items: 2
+      cooldown_minutes: 5
+
+    disable_user:
+      enabled: true
+      risk_level: high
+      requires_approval: true
+      min_approver_group: admin
+      min_confidence: 0.9
+      min_evidence_items: 5
+      cooldown_minutes: 30
+
+    quarantine_file:
+      enabled: true
+      risk_level: low
+      requires_approval: true
+      min_approver_group: standard
+      min_confidence: 0.7
+      min_evidence_items: 2
+      cooldown_minutes: 5
+
+  # Deny all actions not in allowlist
+  deny_unlisted: true
+
+# =============================================================================
+# ASSET CRITICALITY RULES
+# =============================================================================
+assets:
+  # Asset classification rules
+  classifications:
+    critical:
+      patterns:
+        hostnames:
+          - "^prod-.*"
+          - "^db-.*"
+          - "^dc-.*"
+          - ".*-prod$"
+        ips:
+          - "10.0.1.0/24"  # Production subnet
+          - "10.0.2.0/24"  # Database subnet
+      requires_approver_group: admin
+      extra_evidence_required: 2
+
+    production:
+      patterns:
+        hostnames:
+          - "^app-.*"
+          - "^web-.*"
+          - "^api-.*"
+        ips:
+          - "10.0.10.0/24"  # Application subnet
+      requires_approver_group: elevated
+      extra_evidence_required: 1
+
+    development:
+      patterns:
+        hostnames:
+          - "^dev-.*"
+          - "^test-.*"
+          - "^staging-.*"
+        ips:
+          - "10.100.0.0/16"  # Dev network
+      requires_approver_group: standard
+      extra_evidence_required: 0
+
+  # Default classification for unknown assets
+  default_classification: production
+
+# =============================================================================
+# EVIDENCE & CONFIDENCE THRESHOLDS
+# =============================================================================
+thresholds:
+  # Minimum evidence items required
+  evidence:
+    triage:
+      min_items: 1
+    correlation:
+      min_items: 2
+    response_plan:
+      min_items: 3
+    action_execution:
+      min_items: 3
+
+  # Minimum confidence scores
+  confidence:
+    auto_triage:
+      min: 0.0  # Any confidence for read-only
+    response_plan:
+      min: 0.6
+    action_execution:
+      min: 0.7
+    critical_action:
+      min: 0.9
+
+  # Severity requirements
+  severity:
+    auto_plan:
+      min: high  # Only high/critical get auto-planned
+    auto_notify:
+      min: medium
+
+# =============================================================================
+# TIME WINDOW RESTRICTIONS
+# =============================================================================
+time_windows:
+  enabled: false  # Set to true to enable time restrictions
+
+  # Allowed windows for different operations
+  operations:
+    action_execution:
+      # Only allow actions during business hours
+      windows:
+        - days: [mon, tue, wed, thu, fri]
+          start: "06:00"
+          end: "22:00"
+          timezone: UTC
+      outside_window_action: deny
+
+    response_planning:
+      # Allow planning anytime
+      windows:
+        - days: [mon, tue, wed, thu, fri, sat, sun]
+          start: "00:00"
+          end: "23:59"
+          timezone: UTC
+      outside_window_action: allow
+
+  # Emergency override
+  emergency_override:
+    enabled: true
+    requires_approver_group: admin
+    max_duration_hours: 4
+
+# =============================================================================
+# IDEMPOTENCY RULES
+# =============================================================================
+idempotency:
+  enabled: true
+
+  # State checks before action execution
+  checks:
+    block_ip:
+      check_method: verify_ip_not_blocked
+      deny_if_exists: true
+      deny_reason: ALREADY_BLOCKED
+
+    isolate_host:
+      check_method: verify_host_not_isolated
+      deny_if_exists: true
+      deny_reason: ALREADY_ISOLATED
+
+    disable_user:
+      check_method: verify_user_not_disabled
+      deny_if_exists: true
+      deny_reason: ALREADY_DISABLED
+
+    kill_process:
+      check_method: verify_process_running
+      deny_if_not_exists: true
+      deny_reason: PROCESS_NOT_FOUND
+
+    quarantine_file:
+      check_method: verify_file_not_quarantined
+      deny_if_exists: true
+      deny_reason: ALREADY_QUARANTINED
+
+  # Duplicate request detection
+  duplicate_detection:
+    enabled: true
+    window_minutes: 60
+    deny_reason: DUPLICATE_REQUEST
+
+# =============================================================================
+# APPROVAL TOKEN CONFIGURATION
+# =============================================================================
+approval_tokens:
+  ttl_minutes: 60
+  single_use: true
+  require_bound_fields:
+    - plan_id
+    - case_id
+    - approver_id
+  allow_delegation: false
+
+# =============================================================================
+# RATE LIMITS
+# =============================================================================
+rate_limits:
+  # Per-action rate limits
+  actions:
+    block_ip:
+      max_per_hour: 100
+      max_per_day: 500
+
+    isolate_host:
+      max_per_hour: 20
+      max_per_day: 50
+
+    kill_process:
+      max_per_hour: 50
+      max_per_day: 200
+
+    disable_user:
+      max_per_hour: 10
+      max_per_day: 30
+
+    quarantine_file:
+      max_per_hour: 100
+      max_per_day: 500
+
+  # Global rate limits
+  global:
+    max_actions_per_hour: 200
+    max_actions_per_day: 1000
+
+# =============================================================================
+# AUDIT & LOGGING
+# =============================================================================
+audit:
+  # Log all policy decisions
+  log_decisions: true
+
+  # Include detailed evaluation in logs
+  include_evaluation_details: true
+
+  # Retention
+  retention_days: 365
+
+  # Fields to always include
+  required_fields:
+    - timestamp
+    - correlation_id
+    - case_id
+    - plan_id
+    - decision
+    - reason_code
+    - approver_id
+    - action_type
+    - target

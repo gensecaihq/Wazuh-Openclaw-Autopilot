@@ -1,0 +1,149 @@
+# Wazuh Autopilot - Correlation Agent
+# Role: Groups related alerts/events into case timeline and blast radius
+# Permission Level: READ-ONLY
+
+name: wazuh-correlation-agent
+version: "1.0.0"
+description: |
+  Correlation Agent clusters related alerts and events to build comprehensive
+  case timelines and assess blast radius. This agent is READ-ONLY.
+
+  Responsibilities:
+  - Cluster related alerts within configurable time windows
+  - Build chronological event timelines
+  - Calculate blast radius (affected assets, users, systems)
+  - Identify attack patterns and progression
+  - Update case evidence with correlation findings
+
+role: correlation
+autonomy_level: read-only
+
+# Tool permissions - strictly read-only operations
+allowed_tools:
+  - get_alert
+  - search_alerts
+  - search_events
+  - get_agent
+  - get_rule_info
+
+denied_tools:
+  - block_ip
+  - isolate_host
+  - kill_process
+  - disable_user
+  - quarantine_file
+  - "*_write"
+  - "*_execute"
+  - "*_modify"
+
+# Trigger conditions
+triggers:
+  events:
+    - type: case_created
+      auto_correlate: true
+    - type: alert
+      severity:
+        - high
+        - critical
+      when_case_exists: true
+  commands:
+    - name: correlate
+      pattern: "/wazuh correlate <case_id>"
+      description: "Manually trigger correlation for a case"
+  scheduled:
+    - cron: "*/5 * * * *"
+      description: "Re-correlate active cases every 5 minutes"
+      condition: has_active_cases
+
+# Correlation configuration
+correlation:
+  time_windows:
+    default_minutes: 60
+    max_minutes: 1440
+    lookback_minutes: 30
+
+  clustering:
+    strategies:
+      - entity_overlap    # Same hosts/users/IPs
+      - temporal_proximity # Events close in time
+      - rule_similarity   # Similar rule types/categories
+      - attack_chain      # Known attack progression patterns
+
+    thresholds:
+      entity_overlap_min: 0.3
+      temporal_gap_max_seconds: 300
+      similarity_score_min: 0.5
+
+  blast_radius:
+    calculate: true
+    dimensions:
+      - hosts_affected
+      - users_affected
+      - subnets_affected
+      - services_affected
+      - data_classifications
+
+# Output configurations
+outputs:
+  case:
+    update: true
+    fields:
+      - timeline
+      - blast_radius
+      - related_alerts
+      - attack_pattern
+      - correlation_score
+  evidence_pack:
+    update: true
+    sections:
+      - timeline
+      - mcp_calls
+      - correlation_metadata
+  slack:
+    update_case_card: true
+    notify_on_escalation: true
+    escalation_conditions:
+      - blast_radius_increase
+      - new_critical_entity
+      - attack_progression
+
+# Processing configuration
+processing:
+  timeline:
+    enabled: true
+    sort: chronological
+    include_context: true
+    max_events: 500
+
+  pattern_detection:
+    enabled: true
+    patterns:
+      - lateral_movement
+      - privilege_escalation
+      - data_exfiltration
+      - persistence
+      - defense_evasion
+
+  deduplication:
+    enabled: true
+    strategy: content_hash
+
+# Rate limiting and safeguards
+rate_limits:
+  max_concurrent: 3
+  max_per_minute: 20
+  cooldown_on_error_ms: 5000
+
+# Logging configuration
+logging:
+  level: info
+  include_correlation_id: true
+  include_case_id: true
+  redact_secrets: true
+
+# Metrics to emit
+metrics:
+  - autopilot_correlation_total
+  - autopilot_correlation_latency_seconds
+  - autopilot_correlation_alerts_clustered_total
+  - autopilot_correlation_blast_radius_score

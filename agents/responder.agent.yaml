@@ -1,0 +1,221 @@
+# Wazuh Autopilot - Responder Agent
+# Role: Executes approved response actions with verification
+# Permission Level: ACTION EXECUTOR (v2 - requires explicit enablement)
+# WARNING: This agent can execute potentially disruptive actions
+
+name: wazuh-responder-agent
+version: "2.0.0"
+description: |
+  Responder Agent executes approved response actions via MCP.
+  This agent is DISABLED BY DEFAULT and requires explicit enablement.
+
+  Prerequisites for execution:
+  - Valid approval token (not expired, single-use, bound to plan/case/approver)
+  - Policy Guard allow decision
+  - Action tools available in MCP
+  - Idempotency check passed
+
+  Responsibilities:
+  - Execute approved containment actions
+  - Verify action effects
+  - Update evidence pack with execution results
+  - Handle rollback if verification fails
+
+role: responder
+autonomy_level: approval-gated
+
+# IMPORTANT: This agent is disabled by default
+enabled: false
+enable_requires:
+  - config_flag: AUTOPILOT_ENABLE_RESPONDER=true
+  - mcp_tools_available: true
+  - policy_allows_actions: true
+
+# Tool permissions - action tools allowed ONLY after approval
+allowed_tools:
+  # Read operations (always allowed)
+  - get_alert
+  - search_alerts
+  - search_events
+  - get_agent
+  - get_rule_info
+  # Action operations (only after approval + policy allow)
+  - block_ip
+  - isolate_host
+  - kill_process
+  - disable_user
+  - quarantine_file
+
+# Action tool configuration
+action_tools:
+  block_ip:
+    requires:
+      - valid_approval_token
+      - policy_guard_allow
+      - idempotency_check
+    verification:
+      method: check_block_status
+      timeout_seconds: 30
+      retry_count: 3
+    rollback:
+      method: unblock_ip
+      auto_rollback_on_verify_fail: false
+
+  isolate_host:
+    requires:
+      - valid_approval_token
+      - policy_guard_allow
+      - idempotency_check
+    verification:
+      method: check_isolation_status
+      timeout_seconds: 60
+      retry_count: 3
+    rollback:
+      method: unisolate_host
+      auto_rollback_on_verify_fail: false
+
+  kill_process:
+    requires:
+      - valid_approval_token
+      - policy_guard_allow
+      - idempotency_check
+    verification:
+      method: check_process_terminated
+      timeout_seconds: 15
+      retry_count: 2
+    rollback:
+      method: null  # Not reversible
+      auto_rollback_on_verify_fail: false
+
+  disable_user:
+    requires:
+      - valid_approval_token
+      - policy_guard_allow
+      - idempotency_check
+      - elevated_approver  # Always requires elevated approval
+    verification:
+      method: check_user_disabled
+      timeout_seconds: 30
+      retry_count: 3
+    rollback:
+      method: enable_user
+      auto_rollback_on_verify_fail: false
+
+  quarantine_file:
+    requires:
+      - valid_approval_token
+      - policy_guard_allow
+      - idempotency_check
+    verification:
+      method: check_file_quarantined
+      timeout_seconds: 30
+      retry_count: 3
+    rollback:
+      method: restore_file
+      auto_rollback_on_verify_fail: false
+
+# Trigger conditions
+triggers:
+  events:
+    - type: approval_granted
+      when_policy_allows: true
+      auto_execute: false  # Still requires explicit trigger
+  commands:
+    - name: execute
+      pattern: "/wazuh execute <plan_id>"
+      description: "Execute an approved plan"
+      requires:
+        - valid_approval
+        - policy_allow
+
+# Execution configuration
+execution:
+  mode: sequential  # Execute actions one at a time
+
+  pre_execution:
+    - validate_approval_token
+    - check_policy_guard
+    - verify_idempotency
+    - log_execution_start
+
+  post_execution:
+    - verify_action_effect
+    - update_evidence_pack
+    - invalidate_approval_token
+    - notify_slack
+    - log_execution_complete
+
+  on_failure:
+    - log_failure
+    - update_evidence_pack
+    - notify_slack_failure
+    - consider_rollback
+
+  verification:
+    enabled: true
+    timeout_seconds: 60
+    fail_action: halt_and_notify
+
+# Output configurations
+outputs:
+  execution_result:
+    fields:
+      - plan_id
+      - case_id
+      - action
+      - status
+      - verification_result
+      - timestamp
+      - duration_ms
+      - error_details
+
+  evidence_pack:
+    update: true
+    sections:
+      - actions
+      - verification_results
+      - mcp_calls
+
+  slack:
+    notify_on_execution: true
+    notify_on_failure: true
+    include:
+      - action_summary
+      - verification_status
+      - next_steps
+
+# Safety safeguards
+safeguards:
+  max_actions_per_plan: 10
+  max_actions_per_hour: 50
+  require_verification: true
+  halt_on_verify_fail: true
+  cooldown_between_actions_ms: 5000
+
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 3
+    reset_timeout_minutes: 15
+
+# Rate limiting
+rate_limits:
+  max_concurrent: 1  # Only one execution at a time
+  max_per_minute: 5
+  cooldown_on_error_ms: 30000
+
+# Logging configuration
+logging:
+  level: info
+  include_correlation_id: true
+  include_case_id: true
+  include_plan_id: true
+  include_approval_id: true
+  include_action_details: true
+  redact_secrets: true
+
+# Metrics to emit
+metrics:
+  - autopilot_actions_executed_total{action,status}
+  - autopilot_action_execution_latency_seconds{action}
+  - autopilot_action_verification_total{action,result}
+  - autopilot_action_rollbacks_total{action}

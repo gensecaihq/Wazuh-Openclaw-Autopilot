@@ -1,0 +1,154 @@
+# Wazuh Autopilot - Policy Guard Agent
+# Role: Evaluates plans/actions against policies, returns allow/deny with reasons
+# Permission Level: POLICY ENFORCEMENT (no action execution)
+
+name: wazuh-policy-guard-agent
+version: "1.0.0"
+description: |
+  Policy Guard Agent is the gatekeeper for all response actions. It evaluates
+  proposed plans and actions against the organization's security policies,
+  returning explicit allow/deny decisions with detailed reason codes.
+
+  Responsibilities:
+  - Evaluate actions against workspace/channel allowlists
+  - Verify approver authorization
+  - Check action allowlists and asset criticality rules
+  - Enforce evidence/confidence thresholds
+  - Perform idempotency checks
+  - Enforce time window restrictions
+  - Emit audit-ready decision logs
+
+role: policy_guard
+autonomy_level: policy-enforcement
+
+# Tool permissions - read-only for policy checks
+allowed_tools:
+  - get_alert
+  - get_agent
+
+# Cannot execute any actions
+denied_tools:
+  - block_ip
+  - isolate_host
+  - kill_process
+  - disable_user
+  - quarantine_file
+  - "*_write"
+  - "*_execute"
+  - "*_modify"
+
+# Trigger conditions - always triggered before action execution
+triggers:
+  events:
+    - type: approval_granted
+      evaluate: true
+    - type: action_requested
+      evaluate: true
+    - type: plan_proposed
+      evaluate: true
+  commands:
+    - name: check-policy
+      pattern: "/wazuh check-policy <plan_id>"
+      description: "Manually check if a plan passes policy"
+
+# Policy evaluation configuration
+policy_evaluation:
+  # Reference to external policy file
+  policy_file: policies/policy.yaml
+
+  # Evaluation order (first deny wins)
+  evaluation_order:
+    - workspace_allowlist
+    - channel_allowlist
+    - approver_authorization
+    - action_allowlist
+    - asset_criticality
+    - evidence_threshold
+    - confidence_threshold
+    - time_window
+    - idempotency
+
+  # Deny reason codes (for metrics and audit)
+  deny_reason_codes:
+    WORKSPACE_NOT_ALLOWED: "Slack workspace not in allowlist"
+    CHANNEL_NOT_ALLOWED: "Slack channel not in allowlist"
+    APPROVER_NOT_AUTHORIZED: "Approver not authorized for this action type"
+    ACTION_NOT_ALLOWED: "Action type not in allowlist"
+    CRITICAL_ASSET_ELEVATED_APPROVAL: "Critical asset requires elevated approver"
+    INSUFFICIENT_EVIDENCE: "Insufficient evidence for action"
+    LOW_CONFIDENCE: "Confidence score below threshold"
+    OUTSIDE_TIME_WINDOW: "Action requested outside allowed time window"
+    ALREADY_EXECUTED: "Action already executed (idempotency check)"
+    DUPLICATE_REQUEST: "Duplicate approval request detected"
+    EXPIRED_APPROVAL: "Approval token has expired"
+    INVALID_APPROVAL_TOKEN: "Approval token is invalid"
+    MISSING_REQUIRED_CONTEXT: "Required context fields missing"
+
+  # Idempotency configuration
+  idempotency:
+    enabled: true
+    checks:
+      - host_already_isolated
+      - ip_already_blocked
+      - user_already_disabled
+      - process_already_killed
+    cache_ttl_minutes: 60
+
+# Output configurations
+outputs:
+  decision:
+    fields:
+      - decision           # allow | deny
+      - reason_code        # structured code
+      - reason_message     # human-readable
+      - policy_version     # which policy was used
+      - evaluation_details # per-check results
+      - timestamp
+      - correlation_id
+
+  evidence_pack:
+    update: true
+    sections:
+      - policy_decisions
+
+  audit_log:
+    enabled: true
+    include:
+      - all_inputs
+      - all_checks
+      - decision
+      - approver_info
+      - asset_info
+
+# Decision caching
+caching:
+  enabled: true
+  decision_cache_ttl_seconds: 30
+  invalidate_on:
+    - policy_update
+    - new_approval
+    - action_executed
+
+# Rate limiting
+rate_limits:
+  max_concurrent: 10
+  max_per_minute: 100
+  cooldown_on_error_ms: 1000
+
+# Logging configuration
+logging:
+  level: info
+  include_correlation_id: true
+  include_case_id: true
+  include_plan_id: true
+  include_approval_id: true
+  include_decision: true
+  include_reason_code: true
+  redact_secrets: true
+
+# Metrics to emit
+metrics:
+  - autopilot_policy_evaluations_total
+  - autopilot_policy_allows_total
+  - autopilot_policy_denies_total{reason}
+  - autopilot_policy_evaluation_latency_seconds

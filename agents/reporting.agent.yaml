@@ -1,0 +1,221 @@
+# Wazuh Autopilot - Reporting Agent
+# Role: Daily digest, KPIs, and operational metrics reporting
+# Permission Level: READ-ONLY
+
+name: wazuh-reporting-agent
+version: "1.0.0"
+description: |
+  Reporting Agent generates scheduled and on-demand operational reports.
+  This agent is READ-ONLY and focuses on aggregation and presentation.
+
+  Responsibilities:
+  - Generate daily security digest
+  - Calculate and report KPIs
+  - Identify top noisy rules
+  - Track recurring offenders
+  - Report on case/approval/action metrics
+  - Post reports to Slack
+
+role: reporting
+autonomy_level: read-only
+
+# Tool permissions - strictly read-only operations
+allowed_tools:
+  - get_alert
+  - search_alerts
+  - search_events
+  - get_agent
+  - get_rule_info
+
+denied_tools:
+  - block_ip
+  - isolate_host
+  - kill_process
+  - disable_user
+  - quarantine_file
+  - "*_write"
+  - "*_execute"
+  - "*_modify"
+
+# Trigger conditions
+triggers:
+  scheduled:
+    - name: daily_digest
+      cron: "0 8 * * *"  # 8 AM daily
+      timezone: UTC
+      description: "Daily security operations digest"
+
+    - name: weekly_summary
+      cron: "0 9 * * 1"  # 9 AM Monday
+      timezone: UTC
+      description: "Weekly security summary"
+
+  commands:
+    - name: digest
+      pattern: "/wazuh digest"
+      description: "Generate on-demand daily digest"
+    - name: kpis
+      pattern: "/wazuh kpis"
+      description: "Show current KPI metrics"
+    - name: noisy-rules
+      pattern: "/wazuh noisy-rules [days]"
+      description: "Show top noisy rules"
+
+# Report configuration
+reports:
+  daily_digest:
+    name: "Daily Security Digest"
+    lookback_hours: 24
+    sections:
+      - summary_stats
+      - new_cases
+      - updated_cases
+      - closed_cases
+      - approvals_summary
+      - top_noisy_rules
+      - recurring_offenders
+      - kpis
+
+    summary_stats:
+      - total_alerts
+      - alerts_by_severity
+      - cases_created
+      - cases_updated
+      - cases_closed
+      - plans_proposed
+      - approvals_requested
+      - approvals_granted
+      - approvals_denied
+      - actions_executed
+
+    top_noisy_rules:
+      limit: 10
+      include:
+        - rule_id
+        - rule_description
+        - alert_count
+        - trend  # up/down/stable
+
+    recurring_offenders:
+      limit: 10
+      entity_types:
+        - ip
+        - user
+        - host
+      include:
+        - entity
+        - alert_count
+        - case_count
+        - last_seen
+
+  weekly_summary:
+    name: "Weekly Security Summary"
+    lookback_days: 7
+    sections:
+      - week_over_week_comparison
+      - trend_analysis
+      - top_incidents
+      - policy_effectiveness
+      - recommendations
+
+  kpis:
+    metrics:
+      - name: mean_time_to_triage
+        description: "Average time from alert to case creation"
+        unit: minutes
+        target: 15
+
+      - name: mean_time_to_plan
+        description: "Average time from case to response plan"
+        unit: minutes
+        target: 30
+
+      - name: mean_time_to_respond
+        description: "Average time from plan to action execution"
+        unit: minutes
+        target: 60
+
+      - name: cases_per_day
+        description: "Average cases created per day"
+        unit: count
+
+      - name: auto_triage_rate
+        description: "Percentage of alerts auto-triaged"
+        unit: percent
+        target: 80
+
+      - name: approval_grant_rate
+        description: "Percentage of approval requests granted"
+        unit: percent
+
+      - name: policy_deny_rate
+        description: "Percentage of actions denied by policy"
+        unit: percent
+
+      - name: tool_success_rate
+        description: "MCP tool call success rate"
+        unit: percent
+        target: 99
+
+# Output configurations
+outputs:
+  report:
+    formats:
+      - slack_message
+      - json
+    storage:
+      path: "${AUTOPILOT_DATA_DIR}/reports"
+      retention_days: 90
+
+  slack:
+    post_digest: true
+    channel_type: reports
+    format:
+      style: blocks
+      include_charts: false  # Text-based for v1
+      include_links: true
+
+    digest_template:
+      header: ":chart_with_upwards_trend: Daily Security Digest"
+      sections:
+        - type: summary
+          emoji: ":bar_chart:"
+        - type: cases
+          emoji: ":file_folder:"
+        - type: noisy_rules
+          emoji: ":loud_sound:"
+        - type: kpis
+          emoji: ":dart:"
+
+# Data sources
+data_sources:
+  cases:
+    path: "${AUTOPILOT_DATA_DIR}/cases"
+    format: json
+
+  metrics:
+    source: internal
+    aggregation: true
+
+  alerts:
+    source: mcp
+    via_tools:
+      - search_alerts
+
+# Rate limiting
+rate_limits:
+  max_concurrent: 1
+  max_per_minute: 5
+  cooldown_on_error_ms: 5000
+
+# Logging configuration
+logging:
+  level: info
+  include_correlation_id: true
+  redact_secrets: true
+
+# Metrics to emit
+metrics:
+  - autopilot_reports_generated_total{type}
+  - autopilot_report_generation_latency_seconds
+  - autopilot_kpi_values{metric}

@@ -1,0 +1,365 @@
+# Wazuh Autopilot - MCP Tool Mapping Configuration
+# Maps logical operations to actual MCP tool names
+# Version: 1.0.0
+
+schema_version: "1.0"
+description: |
+  This file maps Autopilot's logical operations to the actual tool names
+  exposed by the Wazuh MCP Server. Update the 'mcp_tool' values to match
+  your MCP server's tool naming conventions.
+
+  The doctor utility validates this mapping against available MCP tools.
+
+# =============================================================================
+# READ OPERATIONS (Required for basic functionality)
+# =============================================================================
+read_operations:
+  # Get details of a specific alert
+  get_alert:
+    logical_name: get_alert
+    mcp_tool: wazuh_get_alert
+    description: "Retrieve details of a specific Wazuh alert by ID"
+    required: true
+    parameters:
+      - name: alert_id
+        type: string
+        required: true
+    response_fields:
+      - id
+      - timestamp
+      - rule
+      - agent
+      - data
+
+  # Search for alerts matching criteria
+  search_alerts:
+    logical_name: search_alerts
+    mcp_tool: wazuh_search_alerts
+    description: "Search Wazuh alerts with filters"
+    required: true
+    parameters:
+      - name: query
+        type: string
+        required: false
+      - name: timeframe
+        type: string
+        required: false
+      - name: severity
+        type: string
+        required: false
+      - name: limit
+        type: integer
+        required: false
+        default: 100
+    response_fields:
+      - alerts
+      - total
+      - query_time
+
+  # Search for events/logs
+  search_events:
+    logical_name: search_events
+    mcp_tool: wazuh_search_events
+    description: "Search Wazuh events/logs"
+    required: true
+    parameters:
+      - name: query
+        type: string
+        required: false
+      - name: timeframe
+        type: string
+        required: false
+      - name: agent_id
+        type: string
+        required: false
+      - name: limit
+        type: integer
+        required: false
+        default: 100
+    response_fields:
+      - events
+      - total
+      - query_time
+
+  # Get agent information
+  get_agent:
+    logical_name: get_agent
+    mcp_tool: wazuh_get_agent
+    description: "Get Wazuh agent details"
+    required: false
+    parameters:
+      - name: agent_id
+        type: string
+        required: true
+    response_fields:
+      - id
+      - name
+      - ip
+      - status
+      - os
+      - version
+
+  # Get rule information
+  get_rule_info:
+    logical_name: get_rule_info
+    mcp_tool: wazuh_get_rule
+    description: "Get details of a Wazuh rule"
+    required: false
+    parameters:
+      - name: rule_id
+        type: string
+        required: true
+    response_fields:
+      - id
+      - description
+      - level
+      - groups
+      - mitre
+
+# =============================================================================
+# ACTION OPERATIONS (Optional - enables response capabilities)
+# =============================================================================
+action_operations:
+  # Block an IP address
+  block_ip:
+    logical_name: block_ip
+    mcp_tool: wazuh_block_ip
+    description: "Block an IP address via Wazuh active response"
+    required: false
+    enabled: false  # Explicitly enable when ready
+    risk_level: low
+    reversible: true
+    parameters:
+      - name: ip_address
+        type: string
+        required: true
+      - name: duration
+        type: integer
+        required: false
+        description: "Block duration in seconds (0 = permanent)"
+      - name: agent_id
+        type: string
+        required: false
+        description: "Target agent (empty = all agents)"
+    verification:
+      tool: wazuh_check_blocked_ip
+      field: blocked
+      expected: true
+
+  # Isolate a host
+  isolate_host:
+    logical_name: isolate_host
+    mcp_tool: wazuh_isolate_host
+    description: "Isolate a host from the network"
+    required: false
+    enabled: false
+    risk_level: medium
+    reversible: true
+    parameters:
+      - name: agent_id
+        type: string
+        required: true
+    verification:
+      tool: wazuh_check_agent_isolation
+      field: isolated
+      expected: true
+    rollback:
+      tool: wazuh_unisolate_host
+
+  # Kill a process
+  kill_process:
+    logical_name: kill_process
+    mcp_tool: wazuh_kill_process
+    description: "Terminate a process on an agent"
+    required: false
+    enabled: false
+    risk_level: medium
+    reversible: false
+    parameters:
+      - name: agent_id
+        type: string
+        required: true
+      - name: process_id
+        type: integer
+        required: true
+    verification:
+      tool: wazuh_check_process
+      field: running
+      expected: false
+
+  # Disable a user account
+  disable_user:
+    logical_name: disable_user
+    mcp_tool: wazuh_disable_user
+    description: "Disable a user account"
+    required: false
+    enabled: false
+    risk_level: high
+    reversible: true
+    parameters:
+      - name: agent_id
+        type: string
+        required: true
+      - name: username
+        type: string
+        required: true
+    verification:
+      tool: wazuh_check_user_status
+      field: disabled
+      expected: true
+    rollback:
+      tool: wazuh_enable_user
+
+  # Quarantine a file
+  quarantine_file:
+    logical_name: quarantine_file
+    mcp_tool: wazuh_quarantine_file
+    description: "Quarantine a file on an agent"
+    required: false
+    enabled: false
+    risk_level: low
+    reversible: true
+    parameters:
+      - name: agent_id
+        type: string
+        required: true
+      - name: file_path
+        type: string
+        required: true
+    verification:
+      tool: wazuh_check_file_quarantine
+      field: quarantined
+      expected: true
+    rollback:
+      tool: wazuh_restore_file
+
+# =============================================================================
+# UTILITY OPERATIONS
+# =============================================================================
+utility_operations:
+  # List available MCP tools (for discovery)
+  list_tools:
+    logical_name: list_tools
+    mcp_tool: mcp_list_tools
+    description: "List all available MCP tools"
+    required: false
+    parameters: []
+    response_fields:
+      - tools
+
+  # Health check
+  health_check:
+    logical_name: health_check
+    mcp_tool: wazuh_health
+    description: "Check Wazuh/MCP health status"
+    required: false
+    parameters: []
+    response_fields:
+      - status
+      - version
+      - cluster_status
+
+# =============================================================================
+# TOOL DISCOVERY CONFIGURATION
+# =============================================================================
+discovery:
+  # How to discover available tools
+  method: mcp_list  # mcp_list | static | both
+
+  # Fallback to static list if discovery fails
+  fallback_to_static: true
+
+  # Cache discovery results
+  cache_ttl_minutes: 60
+
+  # Required tools for each autonomy level
+  required_for_level:
+    read-only:
+      - get_alert
+      - search_alerts
+      - search_events
+
+    approval:
+      - get_alert
+      - search_alerts
+      - search_events
+
+    limited-auto:
+      - get_alert
+      - search_alerts
+      - search_events
+      - block_ip  # At minimum
+
+# =============================================================================
+# TOOL CALL CONFIGURATION
+# =============================================================================
+tool_calls:
+  # Default timeout for MCP tool calls
+  default_timeout_ms: 30000
+
+  # Retry configuration
+  retry:
+    enabled: true
+    max_attempts: 3
+    backoff_ms: 1000
+    backoff_multiplier: 2
+
+  # Rate limiting for MCP calls
+  rate_limit:
+    max_per_second: 10
+    max_per_minute: 300
+
+  # Circuit breaker
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    reset_timeout_ms: 60000
+
+# =============================================================================
+# RESPONSE MAPPING
+# =============================================================================
+response_mapping:
+  # How to extract common fields from MCP responses
+  alert:
+    id_field: _id
+    timestamp_field: timestamp
+    severity_field: rule.level
+    rule_id_field: rule.id
+    agent_id_field: agent.id
+    agent_name_field: agent.name
+
+  event:
+    id_field: _id
+    timestamp_field: timestamp
+    agent_id_field: agent.id
+
+  agent:
+    id_field: id
+    name_field: name
+    ip_field: ip
+    status_field: status
+
+# =============================================================================
+# ERROR HANDLING
+# =============================================================================
+error_handling:
+  # Map MCP errors to Autopilot error codes
+  error_mapping:
+    401: AUTH_FAILED
+    403: PERMISSION_DENIED
+    404: NOT_FOUND
+    429: RATE_LIMITED
+    500: MCP_ERROR
+    503: MCP_UNAVAILABLE
+
+  # Default error behavior
+  on_error:
+    log: true
+    retry: true
+    notify: false  # Don't spam Slack on every error
+
+  # Critical errors that should halt processing
+  critical_errors:
+    - AUTH_FAILED
+    - PERMISSION_DENIED
+    - MCP_UNAVAILABLE
