@@ -1,13 +1,13 @@
 <p align="center">
-  <img src="https://wazuh.com/uploads/2022/05/wazuh-logo.png" alt="Wazuh" height="60"/>
-  &nbsp;&nbsp;&nbsp;+&nbsp;&nbsp;&nbsp;
-  <strong style="font-size: 24px;">OpenClaw</strong>
+  <img src="https://img.shields.io/badge/Wazuh-0080FF?style=for-the-badge&logo=wazuh&logoColor=white" alt="Wazuh"/>
+  <img src="https://img.shields.io/badge/+-black?style=for-the-badge" alt="+"/>
+  <img src="https://img.shields.io/badge/OpenClaw-FF6B35?style=for-the-badge&logo=claw&logoColor=white" alt="OpenClaw"/>
 </p>
 
-<h1 align="center">Wazuh OpenClaw Autopilot</h1>
+<h1 align="center">🛡️ Wazuh OpenClaw Autopilot</h1>
 
 <p align="center">
-  <strong>Autonomous SOC Layer for Wazuh via OpenClaw Agents</strong>
+  <b>Autonomous SOC Layer for Wazuh via OpenClaw Agents</b>
 </p>
 
 <p align="center">
