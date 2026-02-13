@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/OpenClaw-FF6B35?style=for-the-badge&logo=claw&logoColor=white" alt="OpenClaw"/>
 </p>
 
-<h1 align="center">🛡️ Wazuh OpenClaw Autopilot</h1>
+<h1 align="center">🛡️ Wazuh OpenClaw Autopilot <sup><img src="https://img.shields.io/badge/BETA-yellow?style=flat-square" alt="Beta"/></sup></h1>
 
 <p align="center">
   <b>Autonomous SOC Layer for Wazuh via OpenClaw Agents</b>
