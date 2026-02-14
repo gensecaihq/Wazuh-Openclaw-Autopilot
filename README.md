@@ -1,7 +1,7 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/Wazuh-0080FF?style=for-the-badge&logo=wazuh&logoColor=white" alt="Wazuh"/>
-  <img src="https://img.shields.io/badge/OpenClaw-FF6B35?style=for-the-badge&logoColor=white" alt="OpenClaw"/>
-  <img src="https://img.shields.io/badge/MCP-6B4FBB?style=for-the-badge&logoColor=white" alt="MCP"/>
+  <a href="https://wazuh.com"><img src="https://img.shields.io/badge/Wazuh-0080FF?style=for-the-badge&logo=wazuh&logoColor=white" alt="Wazuh"/></a>
+  <a href="https://openclaw.ai"><img src="https://img.shields.io/badge/OpenClaw-FF6B35?style=for-the-badge&logoColor=white" alt="OpenClaw"/></a>
+  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-6B4FBB?style=for-the-badge&logoColor=white" alt="MCP"/></a>
 </p>
 
 <h1 align="center">Wazuh OpenClaw Autopilot</h1>
@@ -28,9 +28,45 @@
 
 ---
 
+## Built With
+
+<table>
+<tr>
+<td align="center" width="33%">
+<a href="https://openclaw.ai">
+<img src="https://img.shields.io/badge/OpenClaw-FF6B35?style=flat-square&logoColor=white" alt="OpenClaw" height="28"/>
+</a>
+<br/>
+<sub><b>AI Agent Framework</b></sub>
+<br/>
+<sub><a href="https://github.com/openclaw/openclaw">GitHub</a> · <a href="https://openclaw.ai">Website</a></sub>
+</td>
+<td align="center" width="33%">
+<a href="https://github.com/gensecaihq/Wazuh-MCP-Server">
+<img src="https://img.shields.io/badge/Wazuh_MCP_Server-6B4FBB?style=flat-square&logoColor=white" alt="Wazuh MCP Server" height="28"/>
+</a>
+<br/>
+<sub><b>Wazuh API Bridge</b></sub>
+<br/>
+<sub><a href="https://github.com/gensecaihq/Wazuh-MCP-Server">GitHub</a></sub>
+</td>
+<td align="center" width="33%">
+<a href="https://wazuh.com">
+<img src="https://img.shields.io/badge/Wazuh-0080FF?style=flat-square&logo=wazuh&logoColor=white" alt="Wazuh" height="28"/>
+</a>
+<br/>
+<sub><b>SIEM & XDR Platform</b></sub>
+<br/>
+<sub><a href="https://wazuh.com">Website</a></sub>
+</td>
+</tr>
+</table>
+
+---
+
 ## Overview
 
-**Wazuh OpenClaw Autopilot** adds an autonomous intelligence layer to your Wazuh SIEM. Using OpenClaw AI agents connected via the Model Context Protocol (MCP), it automatically triages alerts, correlates related incidents, and generates risk-assessed response plans—all with mandatory human approval before any action is taken.
+**Wazuh OpenClaw Autopilot** adds an autonomous intelligence layer to your Wazuh SIEM. Using [OpenClaw](https://openclaw.ai) AI agents connected via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io), it automatically triages alerts, correlates related incidents, and generates risk-assessed response plans—all with mandatory human approval before any action is taken.
 
 ### Key Capabilities
 
@@ -128,9 +164,13 @@ Every response action requires explicit human authorization through a two-tier w
 
 ### Prerequisites
 
-- Wazuh Manager (installed and running)
-- Node.js 18+
-- Anthropic API key
+| Requirement | Description |
+|-------------|-------------|
+| [Wazuh Manager](https://wazuh.com) | SIEM platform (installed and running) |
+| [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) | MCP bridge for Wazuh API access |
+| [OpenClaw](https://github.com/openclaw/openclaw) | AI agent framework ([docs](https://openclaw.ai)) |
+| Node.js 18+ | Runtime for autopilot service |
+| Anthropic API Key | For Claude-powered agents |
 
 ### Installation
 
@@ -341,6 +381,16 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ---
 
+## Related Projects
+
+| Project | Description |
+|---------|-------------|
+| [OpenClaw](https://github.com/openclaw/openclaw) | AI agent framework powering the SOC automation agents |
+| [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) | Model Context Protocol server for Wazuh API integration |
+| [OpenClaw.ai](https://openclaw.ai) | Official OpenClaw documentation and resources |
+
+---
+
 ## License
 
 MIT License - see [LICENSE](LICENSE)
@@ -348,6 +398,8 @@ MIT License - see [LICENSE](LICENSE)
 ---
 
 <p align="center">
+  <a href="https://openclaw.ai">OpenClaw</a> •
+  <a href="https://github.com/gensecaihq/Wazuh-MCP-Server">Wazuh MCP Server</a> •
   <a href="https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/issues">Report Issue</a> •
   <a href="https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/issues">Request Feature</a>
 </p>
