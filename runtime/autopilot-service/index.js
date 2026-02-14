@@ -18,6 +18,14 @@ const fs = require("fs").promises;
 const path = require("path");
 const crypto = require("crypto");
 
+// Slack integration (optional)
+let slack = null;
+try {
+  slack = require("./slack");
+} catch (err) {
+  // Slack module not available or dependencies not installed
+}
+
 // =============================================================================
 // CONFIGURATION
 // =============================================================================
@@ -43,6 +51,12 @@ const config = {
   rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "100", 10),
   // MCP timeout
   mcpTimeoutMs: parseInt(process.env.MCP_TIMEOUT_MS || "30000", 10),
+  // Responder capability toggle - DISABLED by default
+  // When enabled, humans can execute approved plans via the two-tier approval workflow
+  // This does NOT enable autonomous execution - human approval is ALWAYS required
+  responderEnabled: process.env.AUTOPILOT_RESPONDER_ENABLED === "true",
+  // Plan expiry
+  planExpiryMinutes: parseInt(process.env.PLAN_EXPIRY_MINUTES || "60", 10),
 };
 
 // =============================================================================
@@ -90,6 +104,15 @@ const metrics = {
   action_plans_proposed_total: 0,
   approvals_requested_total: 0,
   approvals_granted_total: 0,
+  // Two-tier approval metrics
+  plans_created_total: 0,
+  plans_approved_total: 0,
+  plans_executed_total: 0,
+  plans_rejected_total: 0,
+  plans_expired_total: 0,
+  executions_success_total: 0,
+  executions_failed_total: 0,
+  responder_disabled_blocks_total: 0,
   policy_denies_total: {},
   errors_total: {},
 };
@@ -123,8 +146,15 @@ function formatMetrics() {
   const lines = [];
 
   // Simple counters
-  ["cases_created_total", "cases_updated_total", "alerts_ingested_total",
-   "action_plans_proposed_total", "approvals_requested_total", "approvals_granted_total"].forEach((name) => {
+  [
+    "cases_created_total", "cases_updated_total", "alerts_ingested_total",
+    "action_plans_proposed_total", "approvals_requested_total", "approvals_granted_total",
+    // Two-tier approval metrics
+    "plans_created_total", "plans_approved_total", "plans_executed_total",
+    "plans_rejected_total", "plans_expired_total",
+    "executions_success_total", "executions_failed_total",
+    "responder_disabled_blocks_total",
+  ].forEach((name) => {
     lines.push(`# TYPE autopilot_${name} counter`);
     lines.push(`autopilot_${name} ${metrics[name] || 0}`);
   });
@@ -227,6 +257,20 @@ async function createCase(caseId, data) {
 
   incrementMetric("cases_created_total");
   log("info", "evidence-pack", "Case created", { case_id: caseId });
+
+  // Post to Slack alerts channel (async, don't await)
+  if (slack && slack.isInitialized()) {
+    slack.postCaseAlert({
+      case_id: caseId,
+      title: data.title,
+      summary: data.summary,
+      severity: data.severity,
+      entities: data.entities || [],
+      created_at: now,
+    }).catch((err) => {
+      log("warn", "evidence-pack", "Failed to post case to Slack", { error: err.message, case_id: caseId });
+    });
+  }
 
   return evidencePack;
 }
@@ -435,6 +479,355 @@ function consumeApprovalToken(token, approverId, decision, reason = "") {
 }
 
 // Note: Token cleanup is now handled by setupCleanupIntervals() during startup
+
+// =============================================================================
+// RESPONSE PLANS MANAGEMENT (TWO-TIER APPROVAL)
+// =============================================================================
+// Plan states: proposed -> approved -> executing -> completed/failed
+// Tier 1: Human clicks "Approve" to validate the plan
+// Tier 2: Human clicks "Execute" to trigger execution
+
+const responsePlans = new Map();
+const MAX_PLANS = 10000;
+
+// Plan states
+const PLAN_STATES = {
+  PROPOSED: "proposed",
+  APPROVED: "approved",
+  EXECUTING: "executing",
+  COMPLETED: "completed",
+  FAILED: "failed",
+  REJECTED: "rejected",
+  EXPIRED: "expired",
+};
+
+function createResponsePlan(planData) {
+  // Enforce plan limit
+  if (responsePlans.size >= MAX_PLANS) {
+    // Clean up old completed/failed/expired plans
+    let removed = 0;
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000; // 24 hours
+    for (const [planId, plan] of responsePlans.entries()) {
+      if (
+        ["completed", "failed", "rejected", "expired"].includes(plan.state) &&
+        new Date(plan.updated_at) < new Date(cutoff)
+      ) {
+        responsePlans.delete(planId);
+        removed++;
+        if (responsePlans.size < MAX_PLANS * 0.9) break;
+      }
+    }
+    log("warn", "plans", "Plan cleanup triggered", { removed, remaining: responsePlans.size });
+
+    if (responsePlans.size >= MAX_PLANS) {
+      throw new Error("Response plan limit reached");
+    }
+  }
+
+  const planId = `PLAN-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  const now = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + config.planExpiryMinutes * 60 * 1000).toISOString();
+
+  const plan = {
+    plan_id: planId,
+    case_id: planData.case_id,
+    state: PLAN_STATES.PROPOSED,
+    created_at: now,
+    updated_at: now,
+    expires_at: expiresAt,
+    // Plan details
+    title: planData.title || "Response Plan",
+    description: planData.description || "",
+    risk_level: planData.risk_level || "medium",
+    actions: planData.actions || [],
+    // Approval tracking
+    approver_id: null,
+    approved_at: null,
+    approval_reason: null,
+    // Execution tracking
+    executor_id: null,
+    executed_at: null,
+    execution_result: null,
+    // Rejection tracking
+    rejector_id: null,
+    rejected_at: null,
+    rejection_reason: null,
+  };
+
+  responsePlans.set(planId, plan);
+  incrementMetric("plans_created_total");
+  log("info", "plans", "Response plan created", {
+    plan_id: planId,
+    case_id: planData.case_id,
+    actions_count: plan.actions.length,
+    risk_level: plan.risk_level,
+  });
+
+  // Post to Slack for approval (async, don't await)
+  if (slack && slack.isInitialized()) {
+    slack.postPlanForApproval(plan).catch((err) => {
+      log("warn", "plans", "Failed to post plan to Slack", { error: err.message, plan_id: planId });
+    });
+  }
+
+  return plan;
+}
+
+function getPlan(planId) {
+  const plan = responsePlans.get(planId);
+  if (!plan) {
+    throw new Error(`Plan not found: ${planId}`);
+  }
+
+  // Check if plan has expired
+  if (plan.state === PLAN_STATES.PROPOSED || plan.state === PLAN_STATES.APPROVED) {
+    if (new Date(plan.expires_at) < new Date()) {
+      plan.state = PLAN_STATES.EXPIRED;
+      plan.updated_at = new Date().toISOString();
+      incrementMetric("plans_expired_total");
+      log("info", "plans", "Plan expired", { plan_id: planId });
+    }
+  }
+
+  return plan;
+}
+
+function listPlans(options = {}) {
+  const plans = [];
+  const { state, case_id, limit = 100 } = options;
+
+  for (const plan of responsePlans.values()) {
+    // Filter by state
+    if (state && plan.state !== state) continue;
+    // Filter by case
+    if (case_id && plan.case_id !== case_id) continue;
+
+    plans.push(plan);
+  }
+
+  // Sort by created_at descending
+  plans.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  return plans.slice(0, limit);
+}
+
+// TIER 1: Approve a plan (human clicks "Approve")
+function approvePlan(planId, approverId, reason = "") {
+  const plan = getPlan(planId);
+
+  // Validate state
+  if (plan.state !== PLAN_STATES.PROPOSED) {
+    throw new Error(`Cannot approve plan in state: ${plan.state}`);
+  }
+
+  // Check if expired
+  if (new Date(plan.expires_at) < new Date()) {
+    plan.state = PLAN_STATES.EXPIRED;
+    plan.updated_at = new Date().toISOString();
+    incrementMetric("plans_expired_total");
+    throw new Error("Plan has expired");
+  }
+
+  const now = new Date().toISOString();
+  plan.state = PLAN_STATES.APPROVED;
+  plan.approver_id = approverId;
+  plan.approved_at = now;
+  plan.approval_reason = reason;
+  plan.updated_at = now;
+  // Extend expiry after approval (give time for execution)
+  plan.expires_at = new Date(Date.now() + config.planExpiryMinutes * 60 * 1000).toISOString();
+
+  incrementMetric("plans_approved_total");
+  log("info", "plans", "Plan approved (Tier 1)", {
+    plan_id: planId,
+    approver_id: approverId,
+    case_id: plan.case_id,
+  });
+
+  return plan;
+}
+
+// Reject a plan
+function rejectPlan(planId, rejectorId, reason = "") {
+  const plan = getPlan(planId);
+
+  // Can reject from proposed or approved state
+  if (!["proposed", "approved"].includes(plan.state)) {
+    throw new Error(`Cannot reject plan in state: ${plan.state}`);
+  }
+
+  const now = new Date().toISOString();
+  plan.state = PLAN_STATES.REJECTED;
+  plan.rejector_id = rejectorId;
+  plan.rejected_at = now;
+  plan.rejection_reason = reason;
+  plan.updated_at = now;
+
+  incrementMetric("plans_rejected_total");
+  log("info", "plans", "Plan rejected", {
+    plan_id: planId,
+    rejector_id: rejectorId,
+    case_id: plan.case_id,
+    reason,
+  });
+
+  return plan;
+}
+
+// TIER 2: Execute a plan (human clicks "Execute")
+async function executePlan(planId, executorId) {
+  // CRITICAL: Check if responder capability is enabled
+  if (!config.responderEnabled) {
+    incrementMetric("responder_disabled_blocks_total");
+    log("warn", "plans", "Execution blocked - Responder capability is DISABLED", {
+      plan_id: planId,
+      executor_id: executorId,
+      hint: "Set AUTOPILOT_RESPONDER_ENABLED=true to enable execution capability",
+    });
+    throw new Error(
+      "Responder capability is DISABLED. Set AUTOPILOT_RESPONDER_ENABLED=true to enable. " +
+      "Note: Human approval (Approve + Execute) will still be required for every action."
+    );
+  }
+
+  const plan = getPlan(planId);
+
+  // Validate state - must be approved first (Tier 1 complete)
+  if (plan.state !== PLAN_STATES.APPROVED) {
+    if (plan.state === PLAN_STATES.PROPOSED) {
+      throw new Error("Plan must be approved before execution (Tier 1 required)");
+    }
+    throw new Error(`Cannot execute plan in state: ${plan.state}`);
+  }
+
+  // Check if expired
+  if (new Date(plan.expires_at) < new Date()) {
+    plan.state = PLAN_STATES.EXPIRED;
+    plan.updated_at = new Date().toISOString();
+    incrementMetric("plans_expired_total");
+    throw new Error("Plan has expired - approval is no longer valid");
+  }
+
+  const now = new Date().toISOString();
+  plan.state = PLAN_STATES.EXECUTING;
+  plan.executor_id = executorId;
+  plan.executed_at = now;
+  plan.updated_at = now;
+
+  incrementMetric("plans_executed_total");
+  log("info", "plans", "Plan execution started (Tier 2)", {
+    plan_id: planId,
+    executor_id: executorId,
+    case_id: plan.case_id,
+    actions_count: plan.actions.length,
+  });
+
+  // Execute actions
+  const results = [];
+  let allSuccess = true;
+
+  for (const action of plan.actions) {
+    try {
+      // Validate action has required fields
+      if (!action.type || !action.target) {
+        throw new Error("Action missing required fields: type, target");
+      }
+
+      // Call MCP tool for the action
+      const correlationId = `${planId}-${action.type}-${Date.now()}`;
+      const mcpResult = await callMcpTool(action.type, action.params || {}, correlationId);
+
+      results.push({
+        action_type: action.type,
+        target: action.target,
+        status: mcpResult.success ? "success" : "failed",
+        mcp_response: mcpResult.data,
+        timestamp: new Date().toISOString(),
+      });
+
+      if (!mcpResult.success) {
+        allSuccess = false;
+      }
+    } catch (err) {
+      allSuccess = false;
+      results.push({
+        action_type: action.type,
+        target: action.target,
+        status: "error",
+        error: err.message,
+        timestamp: new Date().toISOString(),
+      });
+      log("error", "plans", "Action execution failed", {
+        plan_id: planId,
+        action_type: action.type,
+        target: action.target,
+        error: err.message,
+      });
+    }
+  }
+
+  // Update plan with results
+  plan.execution_result = {
+    success: allSuccess,
+    actions_total: plan.actions.length,
+    actions_success: results.filter((r) => r.status === "success").length,
+    actions_failed: results.filter((r) => r.status !== "success").length,
+    results,
+  };
+  plan.state = allSuccess ? PLAN_STATES.COMPLETED : PLAN_STATES.FAILED;
+  plan.updated_at = new Date().toISOString();
+
+  if (allSuccess) {
+    incrementMetric("executions_success_total");
+  } else {
+    incrementMetric("executions_failed_total");
+  }
+
+  log("info", "plans", "Plan execution completed", {
+    plan_id: planId,
+    case_id: plan.case_id,
+    state: plan.state,
+    actions_success: plan.execution_result.actions_success,
+    actions_failed: plan.execution_result.actions_failed,
+  });
+
+  // Update the associated case with execution results
+  try {
+    await updateCase(plan.case_id, {
+      actions: [
+        {
+          plan_id: planId,
+          executed_at: plan.executed_at,
+          executor_id: executorId,
+          result: plan.execution_result,
+        },
+      ],
+    });
+  } catch (err) {
+    log("warn", "plans", "Failed to update case with execution results", {
+      plan_id: planId,
+      case_id: plan.case_id,
+      error: err.message,
+    });
+  }
+
+  return plan;
+}
+
+// Check responder status
+function getResponderStatus() {
+  return {
+    enabled: config.responderEnabled,
+    message: config.responderEnabled
+      ? "Responder capability ENABLED - humans can execute approved plans (two-tier approval always required)"
+      : "Responder capability DISABLED - execution blocked even after human approval",
+    human_approval_required: true,
+    autonomous_execution: false,
+    environment_variable: "AUTOPILOT_RESPONDER_ENABLED",
+    current_value: process.env.AUTOPILOT_RESPONDER_ENABLED || "false",
+    note: "AI agents cannot execute actions autonomously. Human must always Approve AND Execute.",
+  };
+}
 
 // =============================================================================
 // MCP CLIENT WRAPPER
@@ -857,6 +1250,10 @@ function createServer() {
             data_dir: true,
             metrics: config.metricsEnabled,
           },
+          responder: {
+            enabled: config.responderEnabled,
+            status: config.responderEnabled ? "ACTIVE" : "DISABLED",
+          },
           timestamp: new Date().toISOString(),
         };
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -1139,6 +1536,218 @@ function createServer() {
         return;
       }
 
+      // =================================================================
+      // RESPONDER STATUS ENDPOINT
+      // =================================================================
+      if (url.pathname === "/api/responder/status" && req.method === "GET") {
+        const status = getResponderStatus();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(status));
+        return;
+      }
+
+      // =================================================================
+      // RESPONSE PLANS API - Two-Tier Human-in-the-Loop
+      // =================================================================
+
+      // List plans
+      if (url.pathname === "/api/plans" && req.method === "GET") {
+        const state = url.searchParams.get("state");
+        const case_id = url.searchParams.get("case_id");
+        const plans = listPlans({ state, case_id });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(plans));
+        return;
+      }
+
+      // Create plan (Response Planner agent creates plans)
+      if (url.pathname === "/api/plans" && req.method === "POST") {
+        const authResult = validateAuthorization(req, "write");
+        if (!authResult.valid) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: authResult.reason }));
+          return;
+        }
+
+        const body = await parseJsonBody(req);
+
+        if (!body.case_id) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "case_id is required" }));
+          return;
+        }
+
+        if (!body.actions || !Array.isArray(body.actions) || body.actions.length === 0) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "actions array is required and must not be empty" }));
+          return;
+        }
+
+        try {
+          const plan = createResponsePlan(body);
+
+          // Also update the case with the proposed plan
+          try {
+            await updateCase(body.case_id, {
+              plans: [{
+                plan_id: plan.plan_id,
+                state: plan.state,
+                created_at: plan.created_at,
+                title: plan.title,
+                risk_level: plan.risk_level,
+                actions_count: plan.actions.length,
+              }],
+            });
+          } catch (err) {
+            log("warn", "plans", "Failed to update case with plan", {
+              plan_id: plan.plan_id,
+              case_id: body.case_id,
+              error: err.message,
+            });
+          }
+
+          res.writeHead(201, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            ...plan,
+            message: "Plan created in PROPOSED state. Requires Tier 1 approval before execution.",
+            next_step: "POST /api/plans/" + plan.plan_id + "/approve",
+          }));
+        } catch (err) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+        return;
+      }
+
+      // Get single plan
+      if (url.pathname.match(/^\/api\/plans\/[^/]+$/) && req.method === "GET") {
+        const planId = url.pathname.split("/")[3];
+        try {
+          const plan = getPlan(planId);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(plan));
+        } catch (err) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+        return;
+      }
+
+      // TIER 1: Approve plan
+      if (url.pathname.match(/^\/api\/plans\/[^/]+\/approve$/) && req.method === "POST") {
+        const authResult = validateAuthorization(req, "write");
+        if (!authResult.valid) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: authResult.reason }));
+          return;
+        }
+
+        const planId = url.pathname.split("/")[3];
+        const body = await parseJsonBody(req);
+
+        if (!body.approver_id) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "approver_id is required" }));
+          return;
+        }
+
+        try {
+          const plan = approvePlan(planId, body.approver_id, body.reason || "");
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            ...plan,
+            message: "Plan APPROVED (Tier 1 complete). Ready for execution.",
+            next_step: "POST /api/plans/" + planId + "/execute",
+            responder_status: getResponderStatus(),
+          }));
+        } catch (err) {
+          const statusCode = err.message.includes("not found") ? 404 : 400;
+          res.writeHead(statusCode, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+        return;
+      }
+
+      // Reject plan
+      if (url.pathname.match(/^\/api\/plans\/[^/]+\/reject$/) && req.method === "POST") {
+        const authResult = validateAuthorization(req, "write");
+        if (!authResult.valid) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: authResult.reason }));
+          return;
+        }
+
+        const planId = url.pathname.split("/")[3];
+        const body = await parseJsonBody(req);
+
+        if (!body.rejector_id) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "rejector_id is required" }));
+          return;
+        }
+
+        try {
+          const plan = rejectPlan(planId, body.rejector_id, body.reason || "");
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            ...plan,
+            message: "Plan REJECTED. No actions will be executed.",
+          }));
+        } catch (err) {
+          const statusCode = err.message.includes("not found") ? 404 : 400;
+          res.writeHead(statusCode, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+        return;
+      }
+
+      // TIER 2: Execute plan
+      if (url.pathname.match(/^\/api\/plans\/[^/]+\/execute$/) && req.method === "POST") {
+        const authResult = validateAuthorization(req, "write");
+        if (!authResult.valid) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: authResult.reason }));
+          return;
+        }
+
+        const planId = url.pathname.split("/")[3];
+        const body = await parseJsonBody(req);
+
+        if (!body.executor_id) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "executor_id is required" }));
+          return;
+        }
+
+        try {
+          const plan = await executePlan(planId, body.executor_id);
+          const statusCode = plan.state === PLAN_STATES.COMPLETED ? 200 : 200;
+          res.writeHead(statusCode, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            ...plan,
+            message: plan.state === PLAN_STATES.COMPLETED
+              ? "Plan EXECUTED successfully. All actions completed."
+              : "Plan execution completed with some failures.",
+          }));
+        } catch (err) {
+          // Check if this is a responder disabled error
+          if (err.message.includes("Responder is DISABLED")) {
+            res.writeHead(403, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+              error: err.message,
+              responder_status: getResponderStatus(),
+              resolution: "Contact an administrator to enable AUTOPILOT_RESPONDER_ENABLED=true",
+            }));
+            return;
+          }
+
+          const statusCode = err.message.includes("not found") ? 404 : 400;
+          res.writeHead(statusCode, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+        return;
+      }
+
       // 404 for unknown routes
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Not found" }));
@@ -1249,6 +1858,26 @@ async function main() {
   console.log("╚═══════════════════════════════════════════════════════════╝");
   console.log("");
 
+  // Clear responder status
+  if (config.responderEnabled) {
+    console.log("┌─────────────────────────────────────────────────────────────┐");
+    console.log("│  RESPONDER CAPABILITY: ENABLED                              │");
+    console.log("│                                                             │");
+    console.log("│  Humans CAN execute approved response plans.                │");
+    console.log("│  Two-tier approval ALWAYS required: Approve → Execute       │");
+    console.log("│  AI agents CANNOT execute actions autonomously.             │");
+    console.log("└─────────────────────────────────────────────────────────────┘");
+  } else {
+    console.log("┌─────────────────────────────────────────────────────────────┐");
+    console.log("│  RESPONDER CAPABILITY: DISABLED (Default)                   │");
+    console.log("│                                                             │");
+    console.log("│  Execution is blocked even after human approval.            │");
+    console.log("│  Set AUTOPILOT_RESPONDER_ENABLED=true to enable.            │");
+    console.log("│  Human approval will still be required for every action.    │");
+    console.log("└─────────────────────────────────────────────────────────────┘");
+  }
+  console.log("");
+
   await validateStartup();
 
   // Setup cleanup intervals for memory management
@@ -1265,22 +1894,44 @@ async function main() {
     });
   }
 
+  // Initialize Slack integration (optional)
+  if (slack) {
+    const runtimeExports = module.exports;
+    await slack.initSlack(runtimeExports);
+    if (slack.isInitialized()) {
+      log("info", "startup", "Slack integration active");
+    }
+  }
+
   log("info", "startup", "Wazuh Autopilot started", { mode: config.mode });
 }
 
 // Export for testing
 module.exports = {
+  // Case management
   createCase,
   updateCase,
   getCase,
   listCases,
+  // Legacy approval tokens
   generateApprovalToken,
   validateApprovalToken,
   consumeApprovalToken,
+  // Two-tier approval (Response Plans)
+  createResponsePlan,
+  getPlan,
+  listPlans,
+  approvePlan,
+  rejectPlan,
+  executePlan,
+  getResponderStatus,
+  PLAN_STATES,
+  // MCP
   callMcpTool,
   loadToolmap,
   resolveMcpTool,
   isToolEnabled,
+  // Metrics
   incrementMetric,
   recordLatency,
 };
@@ -1321,6 +1972,43 @@ function setupCleanupIntervals() {
     }
   }, 60000);
   cleanupIntervals.push(rateLimitCleanup);
+
+  // Response plans cleanup (expire old proposed/approved plans)
+  const plansCleanup = setInterval(() => {
+    const now = new Date();
+    let expired = 0;
+    for (const [planId, plan] of responsePlans.entries()) {
+      if (
+        (plan.state === PLAN_STATES.PROPOSED || plan.state === PLAN_STATES.APPROVED) &&
+        new Date(plan.expires_at) < now
+      ) {
+        plan.state = PLAN_STATES.EXPIRED;
+        plan.updated_at = now.toISOString();
+        expired++;
+        incrementMetric("plans_expired_total");
+      }
+    }
+    if (expired > 0) {
+      log("info", "cleanup", "Plans expired", { count: expired });
+    }
+
+    // Also clean up very old completed/failed plans (older than 7 days)
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    let removed = 0;
+    for (const [planId, plan] of responsePlans.entries()) {
+      if (
+        ["completed", "failed", "rejected", "expired"].includes(plan.state) &&
+        new Date(plan.updated_at) < new Date(cutoff)
+      ) {
+        responsePlans.delete(planId);
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      log("debug", "cleanup", "Old plans removed", { count: removed });
+    }
+  }, 60000);
+  cleanupIntervals.push(plansCleanup);
 }
 
 function gracefulShutdown(signal) {

@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
+# =============================================================================
+# WAZUH OPENCLAW AUTOPILOT - SECURE TURNKEY INSTALLER
+# =============================================================================
 #
-# Wazuh Autopilot Installer
-# Universal installer supporting all deployment scenarios
+# Security-hardened installer for autonomous SOC on Wazuh.
 #
-# Scenarios:
-#   1.  All-in-One           - Everything on single server
-#   2.  OpenClaw + Runtime   - For remote MCP (Wazuh+MCP on different server)
-#   3.  Runtime Only         - Just the runtime service (OpenClaw elsewhere)
-#   4.  Agent Pack Only      - Copy agents to existing local OpenClaw
-#   5.  Remote OpenClaw      - Copy agents to remote OpenClaw server
-#   6.  Docker Compose       - Generate docker-compose.yml
-#   7.  Kubernetes           - Generate K8s manifests
-#   8.  Doctor               - Run diagnostics only
-#   9.  Cutover              - Transition to production mode
+# SECURITY FEATURES:
+#   • Gateway NEVER exposed to public internet (localhost binding only)
+#   • Pairing mode for secure initial setup
+#   • Directory permissions hardened (700/600)
+#   • Tailscale zero-trust networking mandatory
+#   • Firewall rules automatically configured
+#   • Credential isolation
+#   • Interactive security guidance
 #
-# Run with --menu for interactive selection
+# Prerequisites:
+#   - Wazuh Manager installed and running
+#   - Root access
+#   - Internet connectivity
 #
+# =============================================================================
 
 set -euo pipefail
 
@@ -23,1336 +27,1396 @@ set -euo pipefail
 # CONFIGURATION
 # =============================================================================
 
+VERSION="3.1.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-VERSION="2.0.0"
 
-# Colors for output
+# Installation directories
+INSTALL_DIR="/opt/wazuh-autopilot"
+CONFIG_DIR="/etc/wazuh-autopilot"
+DATA_DIR="/var/lib/wazuh-autopilot"
+LOG_DIR="/var/log/wazuh-autopilot"
+SECRETS_DIR="/etc/wazuh-autopilot/secrets"
+
+# Upstream repositories
+MCP_SERVER_REPO="https://github.com/gensecaihq/Wazuh-MCP-Server.git"
+MCP_SERVER_DIR="$INSTALL_DIR/wazuh-mcp-server"
+
+# SECURITY: Gateway binds to localhost ONLY
+GATEWAY_BIND="127.0.0.1"
+GATEWAY_PORT="18789"
+MCP_PORT="8080"
+RUNTIME_PORT="9090"
+
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
-NC='\033[0m' # No Color
-
-# Default values
-DEFAULT_DATA_DIR="/var/lib/wazuh-autopilot"
-DEFAULT_OPENCLAW_HOME="/opt/openclaw"
-DEFAULT_CONFIG_DIR="/etc/wazuh-autopilot"
-
-# Runtime variables
-INSTALL_MODE=""
-DEPLOYMENT_MODE="${AUTOPILOT_MODE:-bootstrap}"
-REQUIRE_TAILSCALE="${AUTOPILOT_REQUIRE_TAILSCALE:-true}"
-MCP_URL="${MCP_URL:-}"
-MCP_BOOTSTRAP_URL="${MCP_BOOTSTRAP_URL:-}"
-MCP_AUTH="${AUTOPILOT_MCP_AUTH:-}"
-SLACK_APP_TOKEN="${SLACK_APP_TOKEN:-}"
-SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-}"
-OPENCLAW_HOME="${OPENCLAW_HOME:-$DEFAULT_OPENCLAW_HOME}"
-DATA_DIR="${AUTOPILOT_DATA_DIR:-$DEFAULT_DATA_DIR}"
-CONFIG_DIR="${DEFAULT_CONFIG_DIR}"
-ENABLE_RESPONDER="${AUTOPILOT_ENABLE_RESPONDER:-false}"
-INTERACTIVE=true
-FORCE=false
-REMOTE_HOST=""
-REMOTE_USER="root"
-REMOTE_OPENCLAW_PATH="/opt/openclaw/agents"
+NC='\033[0m'
 
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_step() { echo -e "\n${CYAN}${BOLD}━━━ $1 ━━━${NC}\n"; }
+log_security() { echo -e "${GREEN}[SECURITY]${NC} $1"; }
 
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-log_header() {
-    echo ""
-    echo -e "${BLUE}========================================${NC}"
-    echo -e "${BLUE} $1${NC}"
-    echo -e "${BLUE}========================================${NC}"
-    echo ""
-}
-
-prompt_yes_no() {
+confirm() {
     local prompt="$1"
     local default="${2:-n}"
+    local response
 
-    if [[ "$INTERACTIVE" != "true" ]]; then
-        [[ "$default" == "y" ]] && return 0 || return 1
-    fi
-
-    local yn
     if [[ "$default" == "y" ]]; then
-        read -rp "$prompt [Y/n]: " yn
-        yn=${yn:-y}
+        read -rp "$prompt [Y/n]: " response
+        response="${response:-y}"
     else
-        read -rp "$prompt [y/N]: " yn
-        yn=${yn:-n}
+        read -rp "$prompt [y/N]: " response
+        response="${response:-n}"
     fi
 
-    [[ "$yn" =~ ^[Yy] ]] && return 0 || return 1
+    [[ "$response" =~ ^[Yy]$ ]]
 }
 
-prompt_input() {
-    local prompt="$1"
-    local default="${2:-}"
-    local var_name="$3"
-
-    if [[ "$INTERACTIVE" != "true" ]]; then
-        # Use printf -v instead of eval to prevent command injection
-        printf -v "$var_name" '%s' "$default"
-        return
-    fi
-
-    local input
-    if [[ -n "$default" ]]; then
-        read -rp "$prompt [$default]: " input
-        input=${input:-$default}
-    else
-        read -rp "$prompt: " input
-    fi
-
-    # Use printf -v instead of eval to prevent command injection
-    printf -v "$var_name" '%s' "$input"
+# Generate cryptographically secure random string
+generate_secret() {
+    local length="${1:-32}"
+    openssl rand -hex "$length"
 }
 
-# Input validation functions
-validate_hostname() {
-    local host="$1"
-    # Allow valid hostnames, IPv4, and IPv6 addresses
-    # Hostname: alphanumeric, hyphens, dots, max 253 chars
-    if [[ -z "$host" ]]; then
-        return 1
-    fi
-    if [[ ${#host} -gt 253 ]]; then
-        return 1
-    fi
-    # Check for valid hostname/IP pattern (no special shell chars)
-    if [[ "$host" =~ [^a-zA-Z0-9._:-] ]]; then
-        return 1
-    fi
-    return 0
+# =============================================================================
+# SECURITY BANNER
+# =============================================================================
+
+show_security_banner() {
+    clear
+    echo ""
+    echo -e "${GREEN}${BOLD}"
+    echo "  ╔═══════════════════════════════════════════════════════════════╗"
+    echo "  ║                                                               ║"
+    echo "  ║     WAZUH OPENCLAW AUTOPILOT                                  ║"
+    echo "  ║     Security-Hardened Installation                            ║"
+    echo "  ║                                                               ║"
+    echo "  ║     Version: $VERSION                                            ║"
+    echo "  ║                                                               ║"
+    echo "  ╚═══════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo ""
+    echo -e "  ${CYAN}Security Features:${NC}"
+    echo ""
+    echo "    ✓ Gateway binds to localhost only (never exposed)"
+    echo "    ✓ Tailscale zero-trust networking"
+    echo "    ✓ Pairing mode for secure device registration"
+    echo "    ✓ Directory permissions hardened (700/600)"
+    echo "    ✓ Firewall rules auto-configured"
+    echo "    ✓ Credential isolation"
+    echo "    ✓ Two-tier human approval for all actions"
+    echo ""
+    echo -e "  ${CYAN}What will be installed:${NC}"
+    echo ""
+    echo "    • Tailscale (secure networking)"
+    echo "    • Wazuh MCP Server (localhost only)"
+    echo "    • OpenClaw Gateway (localhost only)"
+    echo "    • 7 SOC Agents (read-only by default)"
+    echo "    • Runtime Service (case management)"
+    echo ""
 }
 
-validate_username() {
-    local user="$1"
-    # Unix usernames: alphanumeric, underscore, hyphen, dollar sign, max 32 chars
-    if [[ -z "$user" ]]; then
-        return 1
-    fi
-    if [[ ${#user} -gt 32 ]]; then
-        return 1
-    fi
-    if [[ "$user" =~ [^a-zA-Z0-9_\$-] ]]; then
-        return 1
-    fi
-    return 0
+# =============================================================================
+# SECURITY GUIDANCE
+# =============================================================================
+
+show_security_guidance() {
+    log_step "Security Configuration Guide"
+
+    echo ""
+    echo -e "  ${YELLOW}${BOLD}IMPORTANT SECURITY INFORMATION${NC}"
+    echo ""
+    echo "  This installer implements security best practices:"
+    echo ""
+    echo -e "  ${GREEN}1. Network Isolation${NC}"
+    echo "     • OpenClaw Gateway binds to 127.0.0.1:$GATEWAY_PORT (localhost only)"
+    echo "     • MCP Server binds to Tailscale IP (never 0.0.0.0)"
+    echo "     • Runtime Service binds to 127.0.0.1:$RUNTIME_PORT"
+    echo "     • NO services are exposed to the public internet"
+    echo ""
+    echo -e "  ${GREEN}2. Access Control${NC}"
+    echo "     • All remote access goes through Tailscale VPN"
+    echo "     • Pairing mode requires explicit device approval"
+    echo "     • DM policy set to 'allowlist' (no public messages)"
+    echo ""
+    echo -e "  ${GREEN}3. File Permissions${NC}"
+    echo "     • Config directories: 700 (owner only)"
+    echo "     • Credential files: 600 (owner read/write only)"
+    echo "     • Secrets directory: 700 with isolated credentials"
+    echo ""
+    echo -e "  ${GREEN}4. Human-in-the-Loop${NC}"
+    echo "     • AI agents can ONLY propose actions"
+    echo "     • Humans must Approve then Execute every action"
+    echo "     • No autonomous execution possible"
+    echo ""
+
+    read -rp "Press Enter to continue..."
 }
 
-validate_path() {
-    local path="$1"
-    # Paths: alphanumeric, slashes, dots, hyphens, underscores
-    # No special shell metacharacters
-    if [[ -z "$path" ]]; then
-        return 1
-    fi
-    if [[ "$path" =~ [^a-zA-Z0-9_./-] ]]; then
-        return 1
-    fi
-    # Must start with /
-    if [[ ! "$path" =~ ^/ ]]; then
-        return 1
-    fi
-    return 0
-}
-
-validate_url() {
-    local url="$1"
-    # Basic URL validation - no shell metacharacters
-    if [[ -z "$url" ]]; then
-        return 0  # Empty URLs are OK (optional)
-    fi
-    # Must start with http:// or https://
-    if [[ ! "$url" =~ ^https?:// ]]; then
-        return 1
-    fi
-    # Allow standard URL characters (use a pattern variable to avoid regex issues)
-    local invalid_pattern='[^a-zA-Z0-9_./:@?&=%-]'
-    if [[ "$url" =~ $invalid_pattern ]]; then
-        return 1
-    fi
-    return 0
-}
+# =============================================================================
+# PREREQUISITE CHECKS
+# =============================================================================
 
 check_root() {
     if [[ $EUID -ne 0 ]]; then
-        log_error "This script must be run as root"
+        log_error "This installer must be run as root"
+        echo "  Run: sudo $0"
         exit 1
     fi
 }
 
-check_ubuntu() {
-    if [[ ! -f /etc/os-release ]]; then
-        log_warn "Cannot determine OS version - continuing anyway"
-        return 0
-    fi
+check_os() {
+    if [[ -f /etc/os-release ]]; then
+        source /etc/os-release
+        log_info "Detected: $PRETTY_NAME"
 
-    source /etc/os-release
-
-    if [[ "$ID" == "ubuntu" ]]; then
-        if [[ ! "$VERSION_ID" =~ ^(22\.04|24\.04)$ ]]; then
-            log_warn "This installer is tested on Ubuntu 22.04/24.04. Your version: $VERSION_ID"
-            if [[ "$INTERACTIVE" == "true" ]] && ! prompt_yes_no "Continue anyway?"; then
-                exit 1
-            fi
-        fi
-        log_success "Ubuntu $VERSION_ID detected"
-    elif [[ "$ID" == "debian" ]]; then
-        log_info "Debian detected - should work but not fully tested"
+        case "$ID" in
+            ubuntu|debian)
+                PKG_UPDATE="apt-get update -qq"
+                PKG_INSTALL="apt-get install -y -qq"
+                FIREWALL_CMD="ufw"
+                ;;
+            centos|rhel|rocky|almalinux|fedora)
+                PKG_UPDATE="yum makecache -q"
+                PKG_INSTALL="yum install -y -q"
+                FIREWALL_CMD="firewalld"
+                ;;
+            *)
+                log_warn "Untested OS: $ID. Proceeding with apt-get..."
+                PKG_UPDATE="apt-get update -qq"
+                PKG_INSTALL="apt-get install -y -qq"
+                FIREWALL_CMD="ufw"
+                ;;
+        esac
     else
-        log_warn "Non-Ubuntu system detected ($ID). Some features may not work."
+        log_error "Cannot detect OS"
+        exit 1
     fi
 }
 
-# =============================================================================
-# DEPENDENCY CHECKS
-# =============================================================================
+check_wazuh() {
+    log_step "Checking Wazuh Installation"
 
-check_dependencies() {
-    log_info "Checking required dependencies..."
-
-    local missing_deps=()
-
-    if ! command -v curl &> /dev/null; then
-        missing_deps+=("curl")
+    if [[ ! -d /var/ossec ]]; then
+        log_error "Wazuh not found at /var/ossec"
+        echo ""
+        echo "  This installer requires Wazuh Manager to be installed."
+        echo "  Install Wazuh first: https://documentation.wazuh.com"
+        echo ""
+        exit 1
     fi
+    log_success "Wazuh installation found"
 
-    if ! command -v jq &> /dev/null; then
-        missing_deps+=("jq")
-    fi
-
-    if ! command -v node &> /dev/null; then
-        log_warn "Node.js not found - required for runtime service"
-        missing_deps+=("nodejs")
+    if systemctl is-active --quiet wazuh-manager 2>/dev/null; then
+        log_success "Wazuh Manager service is running"
+    elif /var/ossec/bin/wazuh-control status 2>/dev/null | grep -q "running"; then
+        log_success "Wazuh Manager is running"
     else
-        local node_version
-        node_version=$(node --version | sed 's/v//' | cut -d. -f1)
-        if [[ "$node_version" -lt 18 ]]; then
-            log_warn "Node.js version $node_version detected. Version 18+ recommended."
-        else
-            log_success "Node.js $(node --version) detected"
-        fi
+        log_error "Wazuh Manager is not running"
+        echo "  Start it with: systemctl start wazuh-manager"
+        exit 1
     fi
 
-    if [[ ${#missing_deps[@]} -gt 0 ]]; then
-        log_warn "Missing dependencies: ${missing_deps[*]}"
-        return 1
-    fi
-
-    log_success "All required dependencies are present"
-    return 0
-}
-
-# =============================================================================
-# DETECTION FUNCTIONS
-# =============================================================================
-
-detect_tailscale() {
-    log_info "Checking Tailscale status..."
-
-    if ! command -v tailscale &> /dev/null; then
-        log_warn "Tailscale is not installed"
-        return 1
-    fi
-
-    local status
-    if status=$(tailscale status --json 2>/dev/null); then
-        local backend_state
-        backend_state=$(echo "$status" | jq -r '.BackendState // empty')
-
-        if [[ "$backend_state" == "Running" ]]; then
-            local tailnet_name
-            tailnet_name=$(echo "$status" | jq -r '.MagicDNSSuffix // empty')
-            log_success "Tailscale is running (Tailnet: $tailnet_name)"
-            return 0
-        fi
-    fi
-
-    log_warn "Tailscale not running"
-    return 1
-}
-
-detect_openclaw() {
-    log_info "Checking OpenClaw installation..."
-
-    local openclaw_found=false
-
-    for dir in "$OPENCLAW_HOME" "/opt/openclaw" "$HOME/.openclaw" "/usr/local/openclaw"; do
-        if [[ -d "$dir" ]] && [[ -f "$dir/package.json" || -f "$dir/openclaw" || -f "$dir/docker-compose.yml" ]]; then
-            OPENCLAW_HOME="$dir"
-            openclaw_found=true
-            break
-        fi
-    done
-
-    if docker ps 2>/dev/null | grep -q "openclaw"; then
-        openclaw_found=true
-        log_success "OpenClaw running in Docker"
-    fi
-
-    if systemctl is-active --quiet openclaw 2>/dev/null; then
-        log_success "OpenClaw running as systemd service"
-        openclaw_found=true
-    fi
-
-    if [[ "$openclaw_found" == "true" ]]; then
-        log_success "OpenClaw found at: $OPENCLAW_HOME"
-        return 0
+    if curl -sk https://localhost:55000 >/dev/null 2>&1; then
+        log_success "Wazuh API is accessible"
     else
-        log_warn "OpenClaw not found"
-        return 1
+        log_warn "Wazuh API not accessible on localhost:55000"
+        log_info "Will configure API connection during setup"
     fi
 }
-
-detect_mcp() {
-    local url="$1"
-
-    if [[ -z "$url" ]]; then
-        return 1
-    fi
-
-    log_info "Testing MCP connectivity at: $url"
-
-    local http_code
-    if [[ -n "$MCP_AUTH" ]]; then
-        http_code=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $MCP_AUTH" \
-            --connect-timeout 10 \
-            "$url/health" 2>/dev/null || echo "000")
-    else
-        http_code=$(curl -s -o /dev/null -w "%{http_code}" \
-            --connect-timeout 10 \
-            "$url/health" 2>/dev/null || echo "000")
-    fi
-
-    case "$http_code" in
-        200|204)
-            log_success "MCP is reachable and healthy"
-            return 0
-            ;;
-        401|403)
-            log_warn "MCP reachable but authentication required/failed"
-            return 2
-            ;;
-        *)
-            log_error "Cannot connect to MCP (HTTP $http_code)"
-            return 1
-            ;;
-    esac
-}
-
-is_tailnet_url() {
-    local url="$1"
-    [[ "$url" =~ \.ts\.net ]] || [[ "$url" =~ ^https?://100\. ]]
-}
-
-# =============================================================================
-# INSTALLATION FUNCTIONS
-# =============================================================================
 
 install_dependencies() {
-    log_header "Installing Dependencies"
+    log_step "Installing Dependencies"
 
-    if command -v apt-get &> /dev/null; then
-        apt-get update -qq
-        apt-get install -y -qq curl jq ca-certificates gnupg lsb-release
-    elif command -v yum &> /dev/null; then
-        yum install -y -q curl jq ca-certificates gnupg
-    else
-        log_warn "Unknown package manager - install curl and jq manually"
+    local deps_needed=()
+
+    command -v curl &>/dev/null || deps_needed+=(curl)
+    command -v git &>/dev/null || deps_needed+=(git)
+    command -v jq &>/dev/null || deps_needed+=(jq)
+    command -v openssl &>/dev/null || deps_needed+=(openssl)
+
+    if [[ ${#deps_needed[@]} -gt 0 ]]; then
+        log_info "Installing: ${deps_needed[*]}"
+        $PKG_UPDATE
+        $PKG_INSTALL "${deps_needed[@]}"
     fi
 
-    log_success "Dependencies installed"
+    # Node.js
+    if ! command -v node &>/dev/null; then
+        log_info "Installing Node.js 20..."
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
+        $PKG_INSTALL nodejs
+    fi
+
+    local node_ver
+    node_ver=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
+    if [[ "$node_ver" -lt 18 ]]; then
+        log_error "Node.js 18+ required. Found: $(node -v)"
+        exit 1
+    fi
+    log_success "Node.js $(node -v)"
+
+    log_success "All dependencies installed"
 }
 
-install_nodejs() {
-    log_header "Installing Node.js"
+# =============================================================================
+# FIREWALL CONFIGURATION
+# =============================================================================
 
-    if command -v node &> /dev/null; then
-        log_info "Node.js already installed"
+configure_firewall() {
+    log_step "Configuring Firewall"
+
+    echo ""
+    echo "  The firewall will be configured to:"
+    echo "    • Block OpenClaw Gateway port ($GATEWAY_PORT) from public"
+    echo "    • Block MCP Server port ($MCP_PORT) from public"
+    echo "    • Allow Tailscale traffic only"
+    echo ""
+
+    if ! confirm "Configure firewall rules?" "y"; then
+        log_warn "Skipping firewall configuration"
+        log_warn "SECURITY WARNING: Manually ensure ports are not exposed"
         return 0
     fi
 
-    # Install Node.js 18 LTS
-    curl -fsSL https://deb.nodesource.com/setup_18.x -o /tmp/nodesource_setup.sh
-    if head -1 /tmp/nodesource_setup.sh | grep -q "^#!"; then
-        bash /tmp/nodesource_setup.sh
-        apt-get install -y nodejs
-        rm /tmp/nodesource_setup.sh
-        log_success "Node.js installed"
+    if command -v ufw &>/dev/null; then
+        log_info "Configuring UFW firewall..."
+
+        # Enable UFW if not active
+        if ! ufw status | grep -q "active"; then
+            log_info "Enabling UFW..."
+            ufw --force enable
+        fi
+
+        # Allow SSH
+        ufw allow ssh >/dev/null 2>&1
+
+        # Block gateway and MCP ports from public (they should be localhost only)
+        # These rules ensure even if binding changes, traffic is blocked
+        ufw deny in on eth0 to any port $GATEWAY_PORT >/dev/null 2>&1 || true
+        ufw deny in on eth0 to any port $MCP_PORT >/dev/null 2>&1 || true
+        ufw deny in on ens3 to any port $GATEWAY_PORT >/dev/null 2>&1 || true
+        ufw deny in on ens3 to any port $MCP_PORT >/dev/null 2>&1 || true
+
+        # Allow Tailscale
+        ufw allow in on tailscale0 >/dev/null 2>&1 || true
+
+        log_success "UFW firewall configured"
+        log_security "Gateway port $GATEWAY_PORT blocked from public interfaces"
+        log_security "MCP port $MCP_PORT blocked from public interfaces"
+        log_security "Tailscale traffic allowed"
+
+    elif command -v firewall-cmd &>/dev/null; then
+        log_info "Configuring firewalld..."
+
+        # Ensure firewalld is running
+        systemctl start firewalld 2>/dev/null || true
+        systemctl enable firewalld 2>/dev/null || true
+
+        # Remove any public rules for our ports
+        firewall-cmd --permanent --remove-port=$GATEWAY_PORT/tcp 2>/dev/null || true
+        firewall-cmd --permanent --remove-port=$MCP_PORT/tcp 2>/dev/null || true
+
+        # Add Tailscale interface to trusted zone
+        firewall-cmd --permanent --zone=trusted --add-interface=tailscale0 2>/dev/null || true
+
+        firewall-cmd --reload 2>/dev/null || true
+
+        log_success "Firewalld configured"
     else
-        log_error "Failed to download Node.js installer"
-        return 1
+        log_warn "No firewall detected - install ufw or firewalld for security"
     fi
 }
+
+# =============================================================================
+# TAILSCALE INSTALLATION
+# =============================================================================
 
 install_tailscale() {
-    log_header "Installing Tailscale"
+    log_step "Installing Tailscale (Mandatory)"
 
-    if command -v tailscale &> /dev/null; then
-        log_info "Tailscale already installed"
-        return 0
-    fi
+    echo ""
+    echo -e "  ${YELLOW}Tailscale is REQUIRED for secure operation${NC}"
+    echo ""
+    echo "  Tailscale provides:"
+    echo "    • Zero-trust VPN between components"
+    echo "    • No public port exposure"
+    echo "    • Encrypted communication"
+    echo "    • Device authentication"
+    echo ""
 
-    local installer_tmp
-    installer_tmp=$(mktemp)
-
-    log_info "Downloading Tailscale installer..."
-    if ! curl -fsSL https://tailscale.com/install.sh -o "$installer_tmp"; then
-        log_error "Failed to download Tailscale installer"
-        rm -f "$installer_tmp"
-        return 1
-    fi
-
-    if head -1 "$installer_tmp" | grep -q "^#!"; then
-        chmod +x "$installer_tmp"
-        sh "$installer_tmp"
-        rm -f "$installer_tmp"
+    if command -v tailscale &>/dev/null; then
+        log_success "Tailscale already installed"
+    else
+        log_info "Installing Tailscale..."
+        curl -fsSL https://tailscale.com/install.sh | sh
         log_success "Tailscale installed"
-        log_info "Run 'sudo tailscale up' to authenticate"
+    fi
+
+    # Check connection status
+    if tailscale status &>/dev/null 2>&1; then
+        TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
+        if [[ -n "$TAILSCALE_IP" ]]; then
+            log_success "Tailscale connected: $TAILSCALE_IP"
+            return 0
+        fi
+    fi
+
+    echo ""
+    echo -e "${YELLOW}${BOLD}Tailscale Authentication Required${NC}"
+    echo ""
+    echo "  You MUST authenticate Tailscale for secure networking."
+    echo "  This creates a private network for MCP/OpenClaw communication."
+    echo ""
+
+    if confirm "Authenticate Tailscale now?" "y"; then
+        echo ""
+        log_info "Opening Tailscale authentication..."
+        echo "  Follow the URL that appears to authenticate."
+        echo ""
+        tailscale up
+
+        sleep 2
+        TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "127.0.0.1")
+        log_success "Tailscale IP: $TAILSCALE_IP"
+        log_security "MCP Server will bind to Tailscale network only"
     else
-        log_error "Invalid installer script"
-        rm -f "$installer_tmp"
-        return 1
+        log_error "Tailscale authentication is required for secure operation"
+        echo ""
+        echo "  Run 'sudo tailscale up' to authenticate, then re-run installer."
+        echo ""
+        exit 1
     fi
 }
 
-install_docker() {
-    log_header "Installing Docker"
+# =============================================================================
+# DIRECTORY SECURITY
+# =============================================================================
 
-    if command -v docker &> /dev/null; then
-        log_info "Docker already installed"
-        return 0
-    fi
+setup_secure_directories() {
+    log_step "Creating Secure Directories"
 
-    local installer_tmp
-    installer_tmp=$(mktemp)
+    # Create directories with restrictive permissions
+    log_info "Creating directories with hardened permissions..."
 
-    log_info "Downloading Docker installer..."
-    if ! curl -fsSL https://get.docker.com -o "$installer_tmp"; then
-        log_error "Failed to download Docker installer"
-        rm -f "$installer_tmp"
-        return 1
-    fi
-
-    if head -1 "$installer_tmp" | grep -q "^#!"; then
-        chmod +x "$installer_tmp"
-        sh "$installer_tmp"
-        rm -f "$installer_tmp"
-        systemctl enable docker
-        systemctl start docker
-        log_success "Docker installed"
-    else
-        log_error "Invalid installer script"
-        rm -f "$installer_tmp"
-        return 1
-    fi
-}
-
-create_directories() {
-    log_header "Creating Directory Structure"
-
-    mkdir -p "$DATA_DIR"/{cases,reports,state}
+    # Main directories - 750 (owner full, group read/execute)
+    mkdir -p "$INSTALL_DIR"
     mkdir -p "$CONFIG_DIR"
+    mkdir -p "$DATA_DIR"/{cases,evidence,plans,reports,state}
+    mkdir -p "$LOG_DIR"
+    mkdir -p "$SECRETS_DIR"
+
+    # Permissions
+    chmod 750 "$INSTALL_DIR"
+    chmod 700 "$CONFIG_DIR"        # More restrictive for config
     chmod 750 "$DATA_DIR"
-    chmod 750 "$CONFIG_DIR"
+    chmod 750 "$LOG_DIR"
+    chmod 700 "$SECRETS_DIR"       # Most restrictive for secrets
 
-    log_success "Directories created"
+    # OpenClaw directories
+    local OC_DIR="$HOME/.openclaw"
+    mkdir -p "$OC_DIR/wazuh-autopilot/agents"
+    mkdir -p "$OC_DIR/wazuh-autopilot/workspace"
+    chmod -R 700 "$OC_DIR"         # Full restriction on OpenClaw dir
+
+    log_security "Config directory: $CONFIG_DIR (mode 700)"
+    log_security "Secrets directory: $SECRETS_DIR (mode 700)"
+    log_security "OpenClaw directory: $OC_DIR (mode 700)"
+
+    log_success "Secure directories created"
 }
 
-install_agent_pack() {
-    log_header "Installing Agent Pack"
+# =============================================================================
+# CREDENTIAL ISOLATION
+# =============================================================================
 
-    local agents_dest="$CONFIG_DIR/agents"
-    local policies_dest="$CONFIG_DIR/policies"
-    local playbooks_dest="$CONFIG_DIR/playbooks"
+setup_credentials() {
+    log_step "Generating Secure Credentials"
 
-    mkdir -p "$agents_dest" "$policies_dest" "$playbooks_dest"
+    echo ""
+    echo "  Generating cryptographically secure tokens..."
+    echo "  These will be stored in $SECRETS_DIR with mode 600"
+    echo ""
 
-    if [[ -d "$PROJECT_ROOT/agents" ]]; then
-        cp -r "$PROJECT_ROOT/agents/"* "$agents_dest/"
-        log_success "Agents installed to $agents_dest"
+    # Generate all secrets
+    local MCP_AUTH_TOKEN OPENCLAW_TOKEN PAIRING_SECRET APPROVAL_SECRET
+
+    MCP_AUTH_TOKEN=$(generate_secret 32)
+    OPENCLAW_TOKEN=$(generate_secret 32)
+    PAIRING_SECRET=$(generate_secret 16)
+    APPROVAL_SECRET=$(generate_secret 32)
+
+    # Store secrets in isolated files
+    echo "$MCP_AUTH_TOKEN" > "$SECRETS_DIR/mcp_token"
+    echo "$OPENCLAW_TOKEN" > "$SECRETS_DIR/openclaw_token"
+    echo "$PAIRING_SECRET" > "$SECRETS_DIR/pairing_code"
+    echo "$APPROVAL_SECRET" > "$SECRETS_DIR/approval_secret"
+
+    # Lock down permissions
+    chmod 600 "$SECRETS_DIR"/*
+
+    log_security "MCP token stored: $SECRETS_DIR/mcp_token (mode 600)"
+    log_security "OpenClaw token stored: $SECRETS_DIR/openclaw_token (mode 600)"
+    log_security "Pairing code stored: $SECRETS_DIR/pairing_code (mode 600)"
+
+    # Export for later use
+    export MCP_AUTH_TOKEN OPENCLAW_TOKEN PAIRING_SECRET APPROVAL_SECRET
+
+    log_success "Credentials generated and isolated"
+}
+
+# =============================================================================
+# WAZUH MCP SERVER INSTALLATION
+# =============================================================================
+
+install_mcp_server() {
+    log_step "Installing Wazuh MCP Server (Localhost Only)"
+
+    mkdir -p "$INSTALL_DIR"
+
+    if [[ -d "$MCP_SERVER_DIR" ]]; then
+        log_info "Updating existing MCP Server..."
+        cd "$MCP_SERVER_DIR"
+        git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || true
     else
-        log_error "Agents directory not found"
-        return 1
+        log_info "Cloning Wazuh MCP Server from upstream..."
+        git clone "$MCP_SERVER_REPO" "$MCP_SERVER_DIR"
     fi
 
-    if [[ -d "$PROJECT_ROOT/policies" ]]; then
-        cp -r "$PROJECT_ROOT/policies/"* "$policies_dest/"
-        log_success "Policies installed to $policies_dest"
-    fi
+    cd "$MCP_SERVER_DIR"
 
-    if [[ -d "$PROJECT_ROOT/playbooks" ]]; then
-        cp -r "$PROJECT_ROOT/playbooks/"* "$playbooks_dest/"
-        log_success "Playbooks installed to $playbooks_dest"
-    fi
-}
+    log_info "Installing dependencies..."
+    npm install --production 2>/dev/null || npm install
 
-link_agents_to_openclaw() {
-    if [[ -d "$OPENCLAW_HOME" ]]; then
-        mkdir -p "$OPENCLAW_HOME/agents" 2>/dev/null || true
-        ln -sf "$CONFIG_DIR/agents"/* "$OPENCLAW_HOME/agents/" 2>/dev/null || true
-        log_info "Agents linked to OpenClaw at $OPENCLAW_HOME/agents"
-    fi
-}
+    # Get Tailscale IP for binding
+    TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "127.0.0.1")
 
-install_runtime_service() {
-    log_header "Installing Runtime Service"
-
-    local runtime_dest="$CONFIG_DIR/runtime"
-    mkdir -p "$runtime_dest"
-
-    if [[ -d "$PROJECT_ROOT/runtime/autopilot-service" ]]; then
-        cp -r "$PROJECT_ROOT/runtime/autopilot-service/"* "$runtime_dest/"
-        log_success "Runtime service installed"
-    fi
-
-    cat > /etc/systemd/system/wazuh-autopilot.service << EOF
+    # Create systemd service with secure binding
+    cat > /etc/systemd/system/wazuh-mcp-server.service << EOF
 [Unit]
-Description=Wazuh Autopilot Service
-After=network.target docker.service
-Wants=docker.service
+Description=Wazuh MCP Server (Tailscale Only)
+Documentation=https://github.com/gensecaihq/Wazuh-MCP-Server
+After=network.target wazuh-manager.service tailscaled.service
+Wants=wazuh-manager.service
+Requires=tailscaled.service
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$runtime_dest
-EnvironmentFile=$CONFIG_DIR/.env
-ExecStart=/usr/bin/node $runtime_dest/index.js
+WorkingDirectory=$MCP_SERVER_DIR
+ExecStart=/usr/bin/node index.js
 Restart=always
 RestartSec=10
+EnvironmentFile=$CONFIG_DIR/.env
+
+# Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=$DATA_DIR $CONFIG_DIR/state
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=$DATA_DIR $LOG_DIR
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    log_success "Systemd service created"
+
+    log_success "Wazuh MCP Server installed"
+    log_security "MCP Server will bind to Tailscale IP: $TAILSCALE_IP:$MCP_PORT"
+    log_security "NOT accessible from public internet"
 }
 
-create_env_file() {
-    log_header "Creating Configuration"
+# =============================================================================
+# OPENCLAW INSTALLATION WITH SECURITY HARDENING
+# =============================================================================
 
-    local env_file="$CONFIG_DIR/.env"
+install_openclaw() {
+    log_step "Installing OpenClaw (Localhost Only)"
 
-    cat > "$env_file" << EOF
-# Wazuh Autopilot Configuration
-# Generated by installer v${VERSION} on $(date -Iseconds)
+    if command -v openclaw &>/dev/null; then
+        local oc_version
+        oc_version=$(openclaw --version 2>/dev/null || echo "unknown")
+        log_success "OpenClaw already installed: $oc_version"
+    else
+        log_info "Installing OpenClaw from upstream..."
+        curl -fsSL https://openclaw.ai/install.sh | sh
 
-# =============================================================================
-# Deployment Mode
-# =============================================================================
-AUTOPILOT_MODE=${DEPLOYMENT_MODE}
-AUTOPILOT_REQUIRE_TAILSCALE=${REQUIRE_TAILSCALE}
+        if command -v openclaw &>/dev/null; then
+            log_success "OpenClaw installed"
+        else
+            log_warn "OpenClaw CLI not in PATH"
+            log_info "You may need to restart your shell or add to PATH"
+        fi
+    fi
 
-# =============================================================================
-# MCP Configuration
-# =============================================================================
-MCP_URL=${MCP_URL}
-MCP_BOOTSTRAP_URL=${MCP_BOOTSTRAP_URL}
-AUTOPILOT_MCP_AUTH=${MCP_AUTH}
-
-# =============================================================================
-# Slack Configuration (Socket Mode)
-# =============================================================================
-SLACK_APP_TOKEN=${SLACK_APP_TOKEN}
-SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
-
-# =============================================================================
-# Data Storage
-# =============================================================================
-AUTOPILOT_DATA_DIR=${DATA_DIR}
-AUTOPILOT_CONFIG_DIR=${CONFIG_DIR}
+    log_security "OpenClaw Gateway will bind to $GATEWAY_BIND:$GATEWAY_PORT"
+    log_security "NOT accessible from public internet"
+}
 
 # =============================================================================
-# Agent Configuration
+# DEPLOY SECURITY-HARDENED OPENCLAW CONFIG
 # =============================================================================
-AUTOPILOT_ENABLE_RESPONDER=${ENABLE_RESPONDER}
 
-# =============================================================================
-# Observability
-# =============================================================================
-METRICS_ENABLED=true
-METRICS_PORT=9090
-METRICS_HOST=127.0.0.1
-LOG_FORMAT=json
-LOG_LEVEL=info
+deploy_agents() {
+    log_step "Deploying Security-Hardened Agents"
 
-# =============================================================================
-# OpenClaw Integration
-# =============================================================================
-OPENCLAW_HOME=${OPENCLAW_HOME}
+    local OC_DIR="$HOME/.openclaw"
+    local AGENTS_SRC="$PROJECT_ROOT/openclaw"
+
+    # Read secrets
+    local OPENCLAW_TOKEN
+    OPENCLAW_TOKEN=$(cat "$SECRETS_DIR/openclaw_token")
+
+    # Create security-hardened OpenClaw configuration
+    cat > "$OC_DIR/openclaw.json" << EOF
+{
+  // =============================================================================
+  // WAZUH OPENCLAW AUTOPILOT - SECURITY HARDENED CONFIGURATION
+  // =============================================================================
+  // SECURITY: Gateway binds to localhost only - never exposed to internet
+  // SECURITY: Pairing mode enabled - explicit device approval required
+  // =============================================================================
+
+  "gateway": {
+    "port": $GATEWAY_PORT,
+    "bind": "loopback",
+    "auth": {
+      "token": "\${OPENCLAW_TOKEN}"
+    },
+    "logging": {
+      "redactSensitive": true
+    },
+    "security": {
+      "cors": {
+        "enabled": false
+      },
+      "rateLimit": {
+        "enabled": true,
+        "maxRequests": 100,
+        "windowMs": 60000
+      }
+    }
+  },
+
+  // =============================================================================
+  // AGENT CONFIGURATION
+  // =============================================================================
+  "agents": {
+    "defaults": {
+      "workspace": "~/.openclaw/wazuh-autopilot/workspace",
+      "agentDir": "~/.openclaw/wazuh-autopilot/agents",
+
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-5",
+        "fallback": "anthropic/claude-haiku-4-5"
+      },
+
+      "sandbox": {
+        "mode": "all",
+        "scope": "session",
+        "workspaceAccess": "rw"
+      },
+
+      "tools": {
+        "profile": "minimal",
+        "deny": [
+          "browser",
+          "canvas",
+          "nodes",
+          "exec",
+          "delete"
+        ]
+      },
+
+      "heartbeat": {
+        "every": "30m",
+        "target": "last",
+        "model": "anthropic/claude-haiku-4-5"
+      },
+
+      "memory": {
+        "enabled": true,
+        "search": {
+          "provider": "openai",
+          "model": "text-embedding-3-small",
+          "hybrid": true
+        }
+      }
+    },
+
+    "list": [
+      {
+        "id": "wazuh-triage",
+        "default": true,
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/triage",
+        "tools": {
+          "profile": "minimal",
+          "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "edit", "exec", "delete", "browser", "canvas"]
+        }
+      },
+      {
+        "id": "wazuh-correlation",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/correlation",
+        "tools": {
+          "profile": "minimal",
+          "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "edit", "exec", "delete", "browser", "canvas"]
+        }
+      },
+      {
+        "id": "wazuh-investigation",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/investigation",
+        "model": {"primary": "anthropic/claude-opus-4-6"},
+        "tools": {
+          "profile": "minimal",
+          "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "edit", "exec", "delete", "browser", "canvas"]
+        }
+      },
+      {
+        "id": "wazuh-response-planner",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/response-planner",
+        "tools": {
+          "profile": "minimal",
+          "allow": ["read", "write", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["exec", "delete", "browser", "canvas"]
+        }
+      },
+      {
+        "id": "wazuh-policy-guard",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/policy-guard",
+        "tools": {
+          "profile": "minimal",
+          "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "edit", "exec", "delete", "browser", "canvas"]
+        }
+      },
+      {
+        "id": "wazuh-responder",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/responder",
+        "tools": {
+          "profile": "coding",
+          "allow": ["read", "write", "exec", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["browser", "canvas", "delete"],
+          "elevated": {
+            "enabled": true,
+            "allowFrom": ["slack"]
+          }
+        },
+        "sandbox": {
+          "mode": "all",
+          "scope": "agent",
+          "workspaceAccess": "rw"
+        }
+      },
+      {
+        "id": "wazuh-reporting",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/reporting",
+        "model": {"primary": "anthropic/claude-haiku-4-5"},
+        "tools": {
+          "profile": "minimal",
+          "allow": ["read", "write", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["exec", "delete", "browser", "canvas"]
+        }
+      }
+    ]
+  },
+
+  // =============================================================================
+  // CHANNEL SECURITY - Pairing mode and allowlists
+  // =============================================================================
+  "channels": {
+    "slack": {
+      "enabled": true,
+      "dmPolicy": "allowlist",
+      "allowFrom": [],
+      "groupPolicy": "mention",
+      "mentionGating": true,
+      "pairing": {
+        "enabled": true,
+        "requireApproval": true
+      }
+    }
+  },
+
+  // =============================================================================
+  // TOOL SECURITY - Strict allowlists
+  // =============================================================================
+  "tools": {
+    "profile": "minimal",
+    "allow": [
+      "read",
+      "sessions_list",
+      "sessions_history"
+    ],
+    "deny": [
+      "browser",
+      "canvas",
+      "nodes",
+      "cron",
+      "exec",
+      "delete"
+    ],
+    "webSearch": {
+      "enabled": false
+    },
+    "sandbox": {
+      "allowlist": [
+        "read",
+        "sessions_list",
+        "sessions_history",
+        "sessions_send"
+      ],
+      "denylist": [
+        "browser",
+        "canvas",
+        "exec",
+        "delete"
+      ]
+    }
+  },
+
+  // =============================================================================
+  // AUTOMATION - Scheduled tasks
+  // =============================================================================
+  "automation": {
+    "cron": [
+      {"id": "hourly-snapshot", "schedule": "0 * * * *", "agentId": "wazuh-reporting"},
+      {"id": "daily-digest", "schedule": "0 8 * * *", "agentId": "wazuh-reporting"},
+      {"id": "shift-handoff", "schedule": "0 6,14,22 * * *", "agentId": "wazuh-reporting"},
+      {"id": "weekly-summary", "schedule": "0 9 * * 1", "agentId": "wazuh-reporting"},
+      {"id": "correlation-sweep", "schedule": "*/5 * * * *", "agentId": "wazuh-correlation"},
+      {"id": "untriaged-sweep", "schedule": "*/10 * * * *", "agentId": "wazuh-triage"}
+    ],
+    "webhooks": [
+      {"path": "/webhook/wazuh-alert", "target": "wazuh-triage"},
+      {"path": "/webhook/case-created", "target": "wazuh-correlation"},
+      {"path": "/webhook/investigation-request", "target": "wazuh-investigation"},
+      {"path": "/webhook/plan-request", "target": "wazuh-response-planner"},
+      {"path": "/webhook/policy-check", "target": "wazuh-policy-guard"},
+      {"path": "/webhook/execute-action", "target": "wazuh-responder"}
+    ]
+  },
+
+  // =============================================================================
+  // MEMORY CONFIGURATION
+  // =============================================================================
+  "memory": {
+    "enabled": true,
+    "search": {
+      "provider": "openai",
+      "model": "text-embedding-3-small",
+      "hybrid": true
+    }
+  },
+
+  // =============================================================================
+  // ENVIRONMENT VARIABLES
+  // =============================================================================
+  "env": {
+    "OPENCLAW_TOKEN": "\${OPENCLAW_TOKEN}",
+    "ANTHROPIC_API_KEY": "\${ANTHROPIC_API_KEY}",
+    "WAZUH_MCP_URL": "\${MCP_URL}",
+    "WAZUH_MCP_TOKEN": "\${MCP_AUTH_TOKEN}"
+  },
+
+  "provider": {
+    "type": "anthropic",
+    "apiKey": "\${ANTHROPIC_API_KEY}",
+    "timeout": 120000
+  }
+}
 EOF
 
-    chmod 600 "$env_file"
-    log_success "Configuration created at $env_file"
+    # Set strict permissions on OpenClaw config
+    chmod 600 "$OC_DIR/openclaw.json"
+
+    # Copy agent instruction files
+    if [[ -d "$AGENTS_SRC/agents" ]]; then
+        log_info "Deploying agent instruction files..."
+        cp -r "$AGENTS_SRC/agents"/* "$OC_DIR/wazuh-autopilot/agents/"
+        chmod -R 700 "$OC_DIR/wazuh-autopilot/agents"
+    fi
+
+    echo ""
+    log_success "7 SOC Agents deployed with security hardening:"
+    echo ""
+    echo "  ┌─────────────────────┬──────────────────────────────────────────┐"
+    echo "  │ Agent               │ Security Profile                         │"
+    echo "  ├─────────────────────┼──────────────────────────────────────────┤"
+    echo "  │ wazuh-triage        │ Read-only, no exec, sandboxed            │"
+    echo "  │ wazuh-correlation   │ Read-only, no exec, sandboxed            │"
+    echo "  │ wazuh-investigation │ Read-only, no exec, sandboxed            │"
+    echo "  │ wazuh-response-plan │ Plan-only, no exec, sandboxed            │"
+    echo "  │ wazuh-policy-guard  │ Read-only, no exec, sandboxed            │"
+    echo "  │ wazuh-responder     │ Elevated only via Slack, full sandbox    │"
+    echo "  │ wazuh-reporting     │ Read/write reports, no exec              │"
+    echo "  └─────────────────────┴──────────────────────────────────────────┘"
+    echo ""
+
+    log_security "OpenClaw config: $OC_DIR/openclaw.json (mode 600)"
+    log_security "Gateway binding: $GATEWAY_BIND:$GATEWAY_PORT (localhost only)"
+    log_security "DM policy: allowlist (no public messages)"
+    log_security "Pairing mode: enabled (requires approval)"
 }
 
-bootstrap_openclaw() {
-    log_header "Bootstrapping OpenClaw"
+# =============================================================================
+# RUNTIME SERVICE INSTALLATION
+# =============================================================================
 
-    if detect_openclaw; then
-        log_info "OpenClaw already installed"
+install_runtime_service() {
+    log_step "Installing Runtime Service (Localhost Only)"
+
+    local RUNTIME_SRC="$PROJECT_ROOT/runtime/autopilot-service"
+    local RUNTIME_DST="$INSTALL_DIR/runtime"
+
+    mkdir -p "$RUNTIME_DST"
+    cp -r "$RUNTIME_SRC"/* "$RUNTIME_DST/"
+
+    cd "$RUNTIME_DST"
+    log_info "Installing dependencies..."
+    npm install --production 2>/dev/null || npm install
+
+    # Create systemd service with security hardening
+    cat > /etc/systemd/system/wazuh-autopilot.service << EOF
+[Unit]
+Description=Wazuh OpenClaw Autopilot Runtime (Localhost Only)
+Documentation=https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot
+After=network.target wazuh-mcp-server.service
+Wants=wazuh-mcp-server.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$RUNTIME_DST
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=10
+EnvironmentFile=$CONFIG_DIR/.env
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=$DATA_DIR $LOG_DIR
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+
+    log_success "Runtime Service installed"
+    log_security "Runtime binding: $GATEWAY_BIND:$RUNTIME_PORT (localhost only)"
+}
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+configure_system() {
+    log_step "System Configuration"
+
+    # Get Tailscale IP
+    TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "127.0.0.1")
+
+    # Read secrets
+    local MCP_AUTH_TOKEN OPENCLAW_TOKEN APPROVAL_SECRET PAIRING_SECRET
+    MCP_AUTH_TOKEN=$(cat "$SECRETS_DIR/mcp_token")
+    OPENCLAW_TOKEN=$(cat "$SECRETS_DIR/openclaw_token")
+    APPROVAL_SECRET=$(cat "$SECRETS_DIR/approval_secret")
+    PAIRING_SECRET=$(cat "$SECRETS_DIR/pairing_code")
+
+    echo ""
+    echo -e "${CYAN}${BOLD}Wazuh API Configuration${NC}"
+    echo ""
+    echo "  Enter your Wazuh API credentials."
+    echo ""
+
+    local WAZUH_API_URL WAZUH_API_USER WAZUH_API_PASSWORD
+    read -rp "  Wazuh API URL [https://127.0.0.1:55000]: " WAZUH_API_URL
+    WAZUH_API_URL="${WAZUH_API_URL:-https://127.0.0.1:55000}"
+
+    read -rp "  Wazuh API Username [wazuh-wui]: " WAZUH_API_USER
+    WAZUH_API_USER="${WAZUH_API_USER:-wazuh-wui}"
+
+    read -rsp "  Wazuh API Password: " WAZUH_API_PASSWORD
+    echo ""
+
+    echo ""
+    echo -e "${CYAN}${BOLD}API Keys Configuration${NC}"
+    echo ""
+    echo "  You need an Anthropic API key for the AI agents."
+    echo "  Get one at: https://console.anthropic.com/"
+    echo ""
+
+    local ANTHROPIC_API_KEY
+    read -rsp "  Anthropic API Key (sk-ant-...): " ANTHROPIC_API_KEY
+    echo ""
+
+    echo ""
+    echo -e "${CYAN}${BOLD}Slack Integration (Optional)${NC}"
+    echo ""
+    echo "  Slack is used for:"
+    echo "    • Alert notifications"
+    echo "    • Two-tier approval workflow (Approve → Execute)"
+    echo "    • Case cards and reports"
+    echo ""
+
+    local SLACK_APP_TOKEN="" SLACK_BOT_TOKEN=""
+    local SLACK_ALERTS_CHANNEL="" SLACK_APPROVALS_CHANNEL=""
+
+    if confirm "  Configure Slack now?" "n"; then
+        echo ""
+        echo "  Create a Slack app at: https://api.slack.com/apps"
+        echo ""
+        read -rp "  Slack App Token (xapp-...): " SLACK_APP_TOKEN
+        read -rp "  Slack Bot Token (xoxb-...): " SLACK_BOT_TOKEN
+        read -rp "  Alerts Channel ID (C...): " SLACK_ALERTS_CHANNEL
+        read -rp "  Approvals Channel ID (C...): " SLACK_APPROVALS_CHANNEL
+    fi
+
+    # Create configuration file
+    cat > "$CONFIG_DIR/.env" << EOF
+# =============================================================================
+# WAZUH OPENCLAW AUTOPILOT - SECURITY HARDENED CONFIGURATION
+# =============================================================================
+# Generated: $(date -Iseconds)
+# Version: $VERSION
+#
+# SECURITY NOTES:
+# - Gateway binds to localhost only (never exposed)
+# - MCP Server binds to Tailscale IP only
+# - Credentials isolated in $SECRETS_DIR
+# - Two-tier human approval required for all actions
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# WAZUH API CONNECTION
+# -----------------------------------------------------------------------------
+WAZUH_API_URL=$WAZUH_API_URL
+WAZUH_API_USER=$WAZUH_API_USER
+WAZUH_API_PASSWORD=$WAZUH_API_PASSWORD
+
+# -----------------------------------------------------------------------------
+# MCP SERVER (Tailscale Only - NOT public)
+# -----------------------------------------------------------------------------
+# SECURITY: MCP binds to Tailscale IP, not 0.0.0.0
+MCP_HOST=$TAILSCALE_IP
+MCP_PORT=$MCP_PORT
+MCP_URL=http://$TAILSCALE_IP:$MCP_PORT
+MCP_AUTH_TOKEN=$MCP_AUTH_TOKEN
+
+# -----------------------------------------------------------------------------
+# OPENCLAW GATEWAY (Localhost Only - NOT public)
+# -----------------------------------------------------------------------------
+# SECURITY: Gateway binds to 127.0.0.1 only
+OPENCLAW_HOST=$GATEWAY_BIND
+OPENCLAW_PORT=$GATEWAY_PORT
+OPENCLAW_TOKEN=$OPENCLAW_TOKEN
+
+# -----------------------------------------------------------------------------
+# AI PROVIDER
+# -----------------------------------------------------------------------------
+ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+
+# -----------------------------------------------------------------------------
+# RUNTIME SERVICE (Localhost Only)
+# -----------------------------------------------------------------------------
+# SECURITY: Runtime binds to 127.0.0.1 only
+AUTOPILOT_HOST=$GATEWAY_BIND
+AUTOPILOT_PORT=$RUNTIME_PORT
+AUTOPILOT_DATA_DIR=$DATA_DIR
+AUTOPILOT_LOG_DIR=$LOG_DIR
+AUTOPILOT_CONFIG_DIR=$CONFIG_DIR
+
+# -----------------------------------------------------------------------------
+# APPROVAL SYSTEM
+# -----------------------------------------------------------------------------
+AUTOPILOT_TOKEN_SECRET=$APPROVAL_SECRET
+AUTOPILOT_TOKEN_TTL_MINUTES=60
+
+# -----------------------------------------------------------------------------
+# PAIRING MODE
+# -----------------------------------------------------------------------------
+# SECURITY: Devices must pair with this code before connecting
+AUTOPILOT_PAIRING_CODE=$PAIRING_SECRET
+AUTOPILOT_PAIRING_ENABLED=true
+
+# -----------------------------------------------------------------------------
+# RESPONDER AGENT - TWO-TIER HUMAN APPROVAL
+# -----------------------------------------------------------------------------
+#
+# SAFETY: Response execution is DISABLED by default.
+#
+# Even when enabled, EVERY action requires:
+#   1. Human clicks "Approve" (Tier 1)
+#   2. Human clicks "Execute" (Tier 2)
+#
+# AI agents CANNOT execute actions autonomously.
+#
+# To enable: Set to "true" and restart services
+# -----------------------------------------------------------------------------
+AUTOPILOT_RESPONDER_ENABLED=false
+
+# -----------------------------------------------------------------------------
+# SLACK INTEGRATION
+# -----------------------------------------------------------------------------
+SLACK_APP_TOKEN=$SLACK_APP_TOKEN
+SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN
+SLACK_ALERTS_CHANNEL=$SLACK_ALERTS_CHANNEL
+SLACK_APPROVALS_CHANNEL=$SLACK_APPROVALS_CHANNEL
+
+# -----------------------------------------------------------------------------
+# TAILSCALE
+# -----------------------------------------------------------------------------
+TAILSCALE_IP=$TAILSCALE_IP
+EOF
+
+    chmod 600 "$CONFIG_DIR/.env"
+
+    # Copy policies
+    if [[ -d "$PROJECT_ROOT/policies" ]]; then
+        mkdir -p "$CONFIG_DIR/policies"
+        cp -r "$PROJECT_ROOT/policies"/* "$CONFIG_DIR/policies/"
+        chmod -R 640 "$CONFIG_DIR/policies"
+    fi
+
+    log_success "Configuration saved"
+    log_security "Config file: $CONFIG_DIR/.env (mode 600)"
+}
+
+# =============================================================================
+# WAZUH INTEGRATOR CONFIGURATION
+# =============================================================================
+
+configure_wazuh_integrator() {
+    log_step "Configuring Wazuh Alert Forwarding"
+
+    local OSSEC_CONF="/var/ossec/etc/ossec.conf"
+
+    if [[ ! -f "$OSSEC_CONF" ]]; then
+        log_warn "ossec.conf not found - skipping integrator setup"
         return 0
     fi
 
-    install_docker
+    if grep -q "wazuh-autopilot" "$OSSEC_CONF" 2>/dev/null; then
+        log_info "Wazuh Integrator already configured"
+        return 0
+    fi
 
-    mkdir -p "$OPENCLAW_HOME"/{agents,config,data}
+    echo ""
+    echo "  The Wazuh Integrator will forward high-severity alerts"
+    echo "  (level 10+) to Autopilot for autonomous triage."
+    echo ""
+    echo "  Alerts go to localhost only - no external exposure."
+    echo ""
 
-    cat > "$OPENCLAW_HOME/docker-compose.yml" << 'EOF'
-version: '3.8'
+    if confirm "  Configure automatic alert forwarding?" "y"; then
+        # Create integrator script
+        cat > /var/ossec/integrations/wazuh-autopilot << 'SCRIPT'
+#!/bin/bash
+# Wazuh OpenClaw Autopilot Integration
+# Forwards alerts to localhost runtime service
 
-services:
-  openclaw:
-    image: openclaw/openclaw:latest
-    container_name: openclaw
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:3000:3000"
-    volumes:
-      - ./agents:/app/agents:ro
-      - ./config:/app/config:ro
-      - ./data:/app/data
-    environment:
-      - NODE_ENV=production
-      - MCP_URL=${MCP_URL:-}
-      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
-    networks:
-      - autopilot
+ALERT_FILE="$1"
+WEBHOOK="http://127.0.0.1:9090/api/alerts"
 
-networks:
-  autopilot:
-    driver: bridge
-EOF
+if [[ -f "$ALERT_FILE" ]]; then
+    curl -s -X POST "$WEBHOOK" \
+        -H "Content-Type: application/json" \
+        -d @"$ALERT_FILE" \
+        --connect-timeout 5 \
+        >/dev/null 2>&1 || true
+fi
 
-    log_success "OpenClaw bootstrap files created at $OPENCLAW_HOME"
-    log_info "Start OpenClaw with: cd $OPENCLAW_HOME && docker-compose up -d"
+exit 0
+SCRIPT
+
+        chmod 750 /var/ossec/integrations/wazuh-autopilot
+        chown root:wazuh /var/ossec/integrations/wazuh-autopilot
+
+        # Backup ossec.conf
+        cp "$OSSEC_CONF" "$OSSEC_CONF.backup.$(date +%Y%m%d%H%M%S)"
+
+        # Add integration config
+        local INTEGRATOR_CONFIG='
+  <!-- Wazuh OpenClaw Autopilot - Localhost Only -->
+  <integration>
+    <name>wazuh-autopilot</name>
+    <hook_url>http://127.0.0.1:9090/api/alerts</hook_url>
+    <level>10</level>
+    <alert_format>json</alert_format>
+  </integration>
+'
+        sed -i "s|</ossec_config>|$INTEGRATOR_CONFIG</ossec_config>|" "$OSSEC_CONF"
+
+        log_success "Alert forwarding configured (level 10+)"
+        log_security "Alerts sent to localhost only"
+    fi
 }
 
 # =============================================================================
-# SCENARIO HANDLERS
+# RESPONDER ACTIVATION PROMPT
 # =============================================================================
 
-scenario_all_in_one() {
-    log_header "Scenario: All-in-One Installation"
-    log_info "Installing everything on this server"
-
-    check_dependencies || install_dependencies
-    install_nodejs
-    install_tailscale
-    bootstrap_openclaw
-    create_directories
-    install_agent_pack
-    link_agents_to_openclaw
-    install_runtime_service
-    create_env_file
+prompt_responder_activation() {
+    log_step "Responder Agent Configuration"
 
     echo ""
-    log_success "All-in-One installation complete!"
+    echo -e "  ${YELLOW}${BOLD}RESPONDER AGENT${NC}"
     echo ""
-    echo "  Architecture:"
-    echo "  ┌─────────────────────────────────────────┐"
-    echo "  │ This Server                             │"
-    echo "  │  Wazuh + MCP + OpenClaw + Runtime       │"
-    echo "  └─────────────────────────────────────────┘"
+    echo "  The Responder Agent can execute Wazuh Active Response actions:"
     echo ""
-    echo "  Next steps:"
-    echo "  1. Install Wazuh MCP Server if not done"
-    echo "  2. Configure: $CONFIG_DIR/.env"
-    echo "  3. Start OpenClaw: cd $OPENCLAW_HOME && docker-compose up -d"
-    echo "  4. Start Runtime: systemctl start wazuh-autopilot"
+    echo "    • Block IP addresses"
+    echo "    • Isolate hosts from network"
+    echo "    • Terminate processes"
+    echo "    • Disable user accounts"
+    echo "    • Quarantine files"
     echo ""
-}
-
-scenario_openclaw_runtime() {
-    log_header "Scenario: OpenClaw + Runtime Installation"
-    log_info "For when MCP is on a remote server"
-
-    prompt_input "Enter remote MCP URL" "https://mcp-server:8080" MCP_URL
-    prompt_input "Enter MCP Auth Token (optional)" "" MCP_AUTH
-
-    # Validate MCP URL
-    if [[ -n "$MCP_URL" ]] && ! validate_url "$MCP_URL"; then
-        log_error "Invalid MCP URL format: $MCP_URL"
-        log_info "URL must start with http:// or https:// and contain only valid URL characters"
-        exit 1
-    fi
-
-    check_dependencies || install_dependencies
-    install_nodejs
-    install_tailscale
-    bootstrap_openclaw
-    create_directories
-    install_agent_pack
-    link_agents_to_openclaw
-    install_runtime_service
-    create_env_file
-
+    echo -e "  ${GREEN}SAFETY CONTROLS (always enforced):${NC}"
     echo ""
-    log_success "OpenClaw + Runtime installation complete!"
+    echo "    ✓ Two-tier human approval:"
+    echo "        1. Human clicks 'Approve' - validates the plan"
+    echo "        2. Human clicks 'Execute' - triggers the action"
     echo ""
-    echo "  Architecture:"
-    echo "  ┌─────────────────────┐    ┌─────────────────────┐"
-    echo "  │ Remote Server       │    │ This Server         │"
-    echo "  │  Wazuh + MCP        │◀───│  OpenClaw + Runtime │"
-    echo "  └─────────────────────┘    └─────────────────────┘"
-    echo ""
-    echo "  MCP URL: $MCP_URL"
-    echo ""
-}
-
-scenario_runtime_only() {
-    log_header "Scenario: Runtime Only Installation"
-    log_info "When OpenClaw is on a different server"
-
-    prompt_input "Enter MCP URL" "https://mcp-server:8080" MCP_URL
-    prompt_input "Enter MCP Auth Token (optional)" "" MCP_AUTH
-
-    # Validate MCP URL
-    if [[ -n "$MCP_URL" ]] && ! validate_url "$MCP_URL"; then
-        log_error "Invalid MCP URL format: $MCP_URL"
-        log_info "URL must start with http:// or https:// and contain only valid URL characters"
-        exit 1
-    fi
-
-    check_dependencies || install_dependencies
-    install_nodejs
-    create_directories
-    install_agent_pack
-    install_runtime_service
-    create_env_file
-
-    echo ""
-    log_success "Runtime Only installation complete!"
-    echo ""
-    echo "  Architecture:"
-    echo "  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐"
-    echo "  │ Server A    │  │ Server B    │  │ This Server │"
-    echo "  │ Wazuh + MCP │◀─│ OpenClaw    │  │ Runtime     │"
-    echo "  └─────────────┘  └─────────────┘  └─────────────┘"
-    echo ""
-    echo "  Note: Copy agents to OpenClaw server separately"
-    echo ""
-}
-
-scenario_agent_pack() {
-    log_header "Scenario: Agent Pack Only"
-    log_info "Installing agents into existing local OpenClaw"
-
-    if ! detect_openclaw; then
-        log_error "OpenClaw not found on this server"
-        log_info "Use 'Remote OpenClaw' option to copy to a remote server"
-        exit 1
-    fi
-
-    create_directories
-    install_agent_pack
-    link_agents_to_openclaw
-
-    echo ""
-    log_success "Agent pack installed!"
-    echo ""
-    echo "  Agents installed to: $CONFIG_DIR/agents"
-    echo "  Linked to OpenClaw: $OPENCLAW_HOME/agents"
-    echo ""
-    echo "  Restart OpenClaw to load new agents"
-    echo ""
-}
-
-scenario_remote_openclaw() {
-    log_header "Scenario: Remote OpenClaw"
-    log_info "Copy agents to a remote OpenClaw server"
-
-    prompt_input "Enter remote server hostname/IP" "" REMOTE_HOST
-    prompt_input "Enter SSH user" "root" REMOTE_USER
-    prompt_input "Enter remote OpenClaw agents path" "/opt/openclaw/agents" REMOTE_OPENCLAW_PATH
-
-    # Validate all inputs to prevent command injection
-    if [[ -z "$REMOTE_HOST" ]]; then
-        log_error "Remote host is required"
-        exit 1
-    fi
-
-    if ! validate_hostname "$REMOTE_HOST"; then
-        log_error "Invalid hostname format: $REMOTE_HOST"
-        log_info "Hostname must contain only alphanumeric characters, dots, hyphens, and colons"
-        exit 1
-    fi
-
-    if ! validate_username "$REMOTE_USER"; then
-        log_error "Invalid username format: $REMOTE_USER"
-        log_info "Username must contain only alphanumeric characters, underscores, and hyphens"
-        exit 1
-    fi
-
-    if ! validate_path "$REMOTE_OPENCLAW_PATH"; then
-        log_error "Invalid path format: $REMOTE_OPENCLAW_PATH"
-        log_info "Path must start with / and contain only alphanumeric characters, slashes, dots, hyphens, and underscores"
-        exit 1
-    fi
-
-    log_info "Testing SSH connection..."
-    # Use -- to prevent option injection
-    if ! ssh -o ConnectTimeout=10 -o BatchMode=yes -- "${REMOTE_USER}@${REMOTE_HOST}" "echo ok" &>/dev/null; then
-        log_warn "SSH connection test failed - make sure SSH keys are set up"
-        if ! prompt_yes_no "Continue anyway?"; then
-            exit 1
-        fi
-    fi
-
-    log_info "Copying agents to remote server..."
-
-    # Use -- to prevent option injection, quote all variables
-    ssh -- "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '${REMOTE_OPENCLAW_PATH}'"
-    scp -r -- "$PROJECT_ROOT/agents/"* "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_OPENCLAW_PATH}/"
-
-    log_info "Copying policies..."
-    local config_path="${REMOTE_OPENCLAW_PATH%/agents}/config"
-    ssh -- "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p '${config_path}'"
-    scp -r -- "$PROJECT_ROOT/policies/"* "${REMOTE_USER}@${REMOTE_HOST}:${config_path}/"
-
-    echo ""
-    log_success "Agents copied to remote server!"
-    echo ""
-    echo "  Remote server: ${REMOTE_USER}@${REMOTE_HOST}"
-    echo "  Agents path:   ${REMOTE_OPENCLAW_PATH}"
-    echo ""
-    echo "  Next: Restart OpenClaw on the remote server"
-    echo "        ssh -- ${REMOTE_USER}@${REMOTE_HOST} 'docker restart openclaw'"
-    echo ""
-}
-
-scenario_docker_compose() {
-    log_header "Scenario: Docker Compose Generation"
-    log_info "Generating docker-compose.yml for full stack"
-
-    local output_dir="${1:-$PROJECT_ROOT/deploy/docker}"
-    mkdir -p "$output_dir"
-
-    prompt_input "Enter MCP URL (or leave empty for same container)" "" MCP_URL
-
-    # Validate MCP URL if provided
-    if [[ -n "$MCP_URL" ]] && ! validate_url "$MCP_URL"; then
-        log_error "Invalid MCP URL format: $MCP_URL"
-        log_info "URL must start with http:// or https:// and contain only valid URL characters"
-        exit 1
-    fi
-
-    cat > "$output_dir/docker-compose.yml" << 'COMPOSE_EOF'
-version: '3.8'
-
-services:
-  # Wazuh Manager (optional - remove if using external Wazuh)
-  wazuh:
-    image: wazuh/wazuh-manager:latest
-    container_name: wazuh-manager
-    restart: unless-stopped
-    ports:
-      - "1514:1514/udp"
-      - "1515:1515"
-      - "55000:55000"
-    volumes:
-      - wazuh-data:/var/ossec/data
-      - wazuh-logs:/var/ossec/logs
-    networks:
-      - autopilot-net
-
-  # Wazuh MCP Server
-  mcp:
-    image: gensecaihq/wazuh-mcp-server:latest
-    container_name: wazuh-mcp
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    environment:
-      - WAZUH_API_URL=https://wazuh:55000
-      - WAZUH_API_USER=${WAZUH_API_USER:-wazuh}
-      - WAZUH_API_PASSWORD=${WAZUH_API_PASSWORD:-wazuh}
-    depends_on:
-      - wazuh
-    networks:
-      - autopilot-net
-
-  # OpenClaw Agent Orchestration
-  openclaw:
-    image: openclaw/openclaw:latest
-    container_name: openclaw
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:3000:3000"
-    volumes:
-      - ./agents:/app/agents:ro
-      - ./config:/app/config:ro
-      - openclaw-data:/app/data
-    environment:
-      - NODE_ENV=production
-      - MCP_URL=http://mcp:8080
-      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN:-}
-    depends_on:
-      - mcp
-    networks:
-      - autopilot-net
-
-  # Autopilot Runtime Service
-  runtime:
-    image: node:18-slim
-    container_name: autopilot-runtime
-    restart: unless-stopped
-    working_dir: /app
-    ports:
-      - "127.0.0.1:9090:9090"
-    volumes:
-      - ./runtime:/app:ro
-      - autopilot-data:/var/lib/wazuh-autopilot
-    environment:
-      - MCP_URL=http://mcp:8080
-      - AUTOPILOT_MCP_AUTH=${MCP_AUTH_TOKEN:-}
-      - AUTOPILOT_DATA_DIR=/var/lib/wazuh-autopilot
-      - AUTOPILOT_MODE=bootstrap
-      - METRICS_HOST=0.0.0.0
-    command: node index.js
-    depends_on:
-      - mcp
-    networks:
-      - autopilot-net
-
-networks:
-  autopilot-net:
-    driver: bridge
-
-volumes:
-  wazuh-data:
-  wazuh-logs:
-  openclaw-data:
-  autopilot-data:
-COMPOSE_EOF
-
-    # Copy agents, policies, and runtime
-    mkdir -p "$output_dir"/{agents,config,runtime}
-    cp -r "$PROJECT_ROOT/agents/"* "$output_dir/agents/"
-    cp -r "$PROJECT_ROOT/policies/"* "$output_dir/config/"
-    cp -r "$PROJECT_ROOT/runtime/autopilot-service/"* "$output_dir/runtime/"
-
-    # Create .env template
-    cat > "$output_dir/.env" << 'ENV_EOF'
-# Wazuh API credentials
-WAZUH_API_USER=wazuh
-WAZUH_API_PASSWORD=wazuh
-
-# MCP Authentication Token
-MCP_AUTH_TOKEN=your-secure-token-here
-
-# Slack (optional)
-SLACK_APP_TOKEN=
-SLACK_BOT_TOKEN=
-ENV_EOF
-
-    echo ""
-    log_success "Docker Compose files generated!"
-    echo ""
-    echo "  Output directory: $output_dir"
-    echo ""
-    echo "  Files created:"
-    echo "    - docker-compose.yml"
-    echo "    - .env (configure this)"
-    echo "    - agents/"
-    echo "    - config/"
-    echo "    - runtime/"
-    echo ""
-    echo "  To start:"
-    echo "    cd $output_dir"
-    echo "    docker-compose up -d"
-    echo ""
-}
-
-scenario_kubernetes() {
-    log_header "Scenario: Kubernetes Manifests Generation"
-    log_info "Generating K8s manifests"
-
-    local output_dir="${1:-$PROJECT_ROOT/deploy/kubernetes}"
-    mkdir -p "$output_dir"
-
-    # ConfigMap for agents
-    cat > "$output_dir/configmap-agents.yaml" << 'K8S_EOF'
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: autopilot-agents
-  namespace: wazuh-autopilot
-data:
-  # Agent YAML files will be added here
-  # Use: kubectl create configmap autopilot-agents --from-file=agents/
-K8S_EOF
-
-    # Deployment
-    cat > "$output_dir/deployment.yaml" << 'K8S_EOF'
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: wazuh-autopilot
-  namespace: wazuh-autopilot
-  labels:
-    app: wazuh-autopilot
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: wazuh-autopilot
-  template:
-    metadata:
-      labels:
-        app: wazuh-autopilot
-    spec:
-      containers:
-      # OpenClaw
-      - name: openclaw
-        image: openclaw/openclaw:latest
-        ports:
-        - containerPort: 3000
-        env:
-        - name: MCP_URL
-          valueFrom:
-            configMapKeyRef:
-              name: autopilot-config
-              key: mcp_url
-        - name: MCP_AUTH_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: autopilot-secrets
-              key: mcp_auth_token
-        volumeMounts:
-        - name: agents
-          mountPath: /app/agents
-          readOnly: true
-
-      # Runtime
-      - name: runtime
-        image: node:18-slim
-        workingDir: /app
-        command: ["node", "index.js"]
-        ports:
-        - containerPort: 9090
-        env:
-        - name: MCP_URL
-          valueFrom:
-            configMapKeyRef:
-              name: autopilot-config
-              key: mcp_url
-        - name: AUTOPILOT_DATA_DIR
-          value: /var/lib/wazuh-autopilot
-        - name: METRICS_HOST
-          value: "0.0.0.0"
-        volumeMounts:
-        - name: runtime-code
-          mountPath: /app
-          readOnly: true
-        - name: data
-          mountPath: /var/lib/wazuh-autopilot
-
-      volumes:
-      - name: agents
-        configMap:
-          name: autopilot-agents
-      - name: runtime-code
-        configMap:
-          name: autopilot-runtime
-      - name: data
-        persistentVolumeClaim:
-          claimName: autopilot-data
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: wazuh-autopilot
-  namespace: wazuh-autopilot
-spec:
-  selector:
-    app: wazuh-autopilot
-  ports:
-  - name: openclaw
-    port: 3000
-    targetPort: 3000
-  - name: metrics
-    port: 9090
-    targetPort: 9090
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: autopilot-data
-  namespace: wazuh-autopilot
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 10Gi
-K8S_EOF
-
-    # Namespace
-    cat > "$output_dir/namespace.yaml" << 'K8S_EOF'
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: wazuh-autopilot
-K8S_EOF
-
-    # ConfigMap template
-    cat > "$output_dir/configmap.yaml" << 'K8S_EOF'
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: autopilot-config
-  namespace: wazuh-autopilot
-data:
-  mcp_url: "http://wazuh-mcp:8080"
-K8S_EOF
-
-    # Secret template
-    cat > "$output_dir/secret.yaml" << 'K8S_EOF'
-apiVersion: v1
-kind: Secret
-metadata:
-  name: autopilot-secrets
-  namespace: wazuh-autopilot
-type: Opaque
-stringData:
-  mcp_auth_token: "your-token-here"
-  slack_app_token: ""
-  slack_bot_token: ""
-K8S_EOF
-
-    echo ""
-    log_success "Kubernetes manifests generated!"
-    echo ""
-    echo "  Output directory: $output_dir"
-    echo ""
-    echo "  Files created:"
-    echo "    - namespace.yaml"
-    echo "    - configmap.yaml"
-    echo "    - configmap-agents.yaml"
-    echo "    - secret.yaml"
-    echo "    - deployment.yaml"
-    echo ""
-    echo "  To deploy:"
-    echo "    kubectl apply -f $output_dir/namespace.yaml"
-    echo "    kubectl create configmap autopilot-agents -n wazuh-autopilot --from-file=$PROJECT_ROOT/agents/"
-    echo "    kubectl create configmap autopilot-runtime -n wazuh-autopilot --from-file=$PROJECT_ROOT/runtime/autopilot-service/"
-    echo "    kubectl apply -f $output_dir/"
-    echo ""
-}
-
-# =============================================================================
-# TAILNET CUTOVER
-# =============================================================================
-
-tailnet_cutover() {
-    log_header "Tailnet Cutover Workflow"
-
-    echo "This workflow transitions from bootstrap to production mode."
+    echo "    ✓ AI agents CANNOT bypass human approval"
+    echo "    ✓ Full audit trail for compliance"
+    echo "    ✓ Rollback capability for reversible actions"
     echo ""
 
-    if ! detect_tailscale; then
-        log_error "Tailscale is not running. Install and configure first."
+    if confirm "  Enable Responder Agent capability?" "n"; then
+        sed -i 's/AUTOPILOT_RESPONDER_ENABLED=false/AUTOPILOT_RESPONDER_ENABLED=true/' "$CONFIG_DIR/.env"
         echo ""
-        echo "  curl -fsSL https://tailscale.com/install.sh | sh"
-        echo "  sudo tailscale up"
-        exit 1
+        log_success "Responder capability ENABLED"
+        echo ""
+        echo -e "  ${YELLOW}Remember: Human approval still required for every action${NC}"
+        echo ""
+    else
+        echo ""
+        log_info "Responder remains DISABLED (read-only mode)"
+        echo ""
+        echo "  Enable later by setting AUTOPILOT_RESPONDER_ENABLED=true"
+        echo ""
+    fi
+}
+
+# =============================================================================
+# PAIRING MODE DISPLAY
+# =============================================================================
+
+show_pairing_info() {
+    log_step "Pairing Mode Information"
+
+    local PAIRING_CODE
+    PAIRING_CODE=$(cat "$SECRETS_DIR/pairing_code")
+
+    echo ""
+    echo -e "  ${GREEN}${BOLD}SECURE PAIRING MODE${NC}"
+    echo ""
+    echo "  New devices must pair before connecting to the gateway."
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────┐"
+    echo "  │                                                         │"
+    echo -e "  │  ${BOLD}Pairing Code:${NC}  $PAIRING_CODE                   │"
+    echo "  │                                                         │"
+    echo "  │  Store this code securely.                              │"
+    echo "  │  It's required when adding new devices.                 │"
+    echo "  │                                                         │"
+    echo "  │  Location: $SECRETS_DIR/pairing_code      │"
+    echo "  │                                                         │"
+    echo "  └─────────────────────────────────────────────────────────┘"
+    echo ""
+}
+
+# =============================================================================
+# START SERVICES
+# =============================================================================
+
+start_services() {
+    log_step "Starting Services"
+
+    # Start MCP Server
+    log_info "Starting Wazuh MCP Server..."
+    systemctl enable wazuh-mcp-server >/dev/null 2>&1
+    systemctl start wazuh-mcp-server
+
+    sleep 3
+
+    if systemctl is-active --quiet wazuh-mcp-server; then
+        log_success "Wazuh MCP Server running (Tailscale only)"
+    else
+        log_error "MCP Server failed to start"
+        echo "  Check: journalctl -u wazuh-mcp-server -n 50"
     fi
 
-    local new_mcp_url
-    prompt_input "Enter the Tailnet MCP URL" "" new_mcp_url
+    # Start Runtime Service
+    log_info "Starting Runtime Service..."
+    systemctl enable wazuh-autopilot >/dev/null 2>&1
+    systemctl start wazuh-autopilot
 
-    if [[ -z "$new_mcp_url" ]]; then
-        log_error "MCP URL is required"
-        exit 1
-    fi
-
-    if ! is_tailnet_url "$new_mcp_url"; then
-        log_warn "URL doesn't look like a Tailnet URL (.ts.net or 100.x.x.x)"
-        if ! prompt_yes_no "Continue anyway?"; then
-            exit 1
-        fi
-    fi
-
-    log_info "Testing MCP connectivity..."
-    if ! detect_mcp "$new_mcp_url"; then
-        log_error "Cannot connect to MCP"
-        exit 1
-    fi
-
-    local env_file="$CONFIG_DIR/.env"
-    if [[ -f "$env_file" ]]; then
-        cp "$env_file" "$env_file.bak.$(date +%Y%m%d%H%M%S)"
-        sed -i.tmp "s|^MCP_URL=.*|MCP_URL=$new_mcp_url|" "$env_file"
-        sed -i.tmp "s|^AUTOPILOT_MODE=.*|AUTOPILOT_MODE=production|" "$env_file"
-        rm -f "$env_file.tmp"
-        log_success "Configuration updated"
-    fi
+    sleep 3
 
     if systemctl is-active --quiet wazuh-autopilot; then
-        systemctl restart wazuh-autopilot
-        log_success "Service restarted"
-    fi
-
-    log_success "Cutover complete!"
-}
-
-# =============================================================================
-# DOCTOR
-# =============================================================================
-
-run_doctor() {
-    if [[ -x "$SCRIPT_DIR/doctor.sh" ]]; then
-        exec "$SCRIPT_DIR/doctor.sh"
+        log_success "Runtime Service running (localhost only)"
     else
-        log_error "Doctor script not found"
-        exit 1
+        log_error "Runtime Service failed to start"
+        echo "  Check: journalctl -u wazuh-autopilot -n 50"
+    fi
+
+    # Restart Wazuh if integrator configured
+    if grep -q "wazuh-autopilot" /var/ossec/etc/ossec.conf 2>/dev/null; then
+        log_info "Restarting Wazuh Manager..."
+        systemctl restart wazuh-manager 2>/dev/null || /var/ossec/bin/wazuh-control restart
+        log_success "Wazuh Manager restarted"
     fi
 }
 
 # =============================================================================
-# INTERACTIVE MENU
+# SECURITY AUDIT
 # =============================================================================
 
-show_menu() {
-    clear
+run_security_audit() {
+    log_step "Security Audit"
+
     echo ""
-    echo -e "${BOLD}╔═══════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}║           Wazuh Autopilot Installer v${VERSION}                       ║${NC}"
-    echo -e "${BOLD}║       Autonomous SOC Layer for Wazuh via OpenClaw Agents          ║${NC}"
-    echo -e "${BOLD}╚═══════════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "${CYAN}Select your deployment scenario:${NC}"
-    echo ""
-    echo -e "${BOLD}  Single Server:${NC}"
-    echo "    1) All-in-One         - Wazuh + MCP + OpenClaw + Runtime on this server"
-    echo ""
-    echo -e "${BOLD}  Distributed (MCP on remote server):${NC}"
-    echo "    2) OpenClaw + Runtime - Install OpenClaw and Runtime here (MCP elsewhere)"
-    echo "    3) Runtime Only       - Just the Runtime service (OpenClaw also elsewhere)"
-    echo ""
-    echo -e "${BOLD}  Existing OpenClaw:${NC}"
-    echo "    4) Agent Pack (Local) - Add agents to existing local OpenClaw"
-    echo "    5) Agent Pack (Remote)- Copy agents to remote OpenClaw via SSH"
-    echo ""
-    echo -e "${BOLD}  Container Deployments:${NC}"
-    echo "    6) Docker Compose     - Generate docker-compose.yml"
-    echo "    7) Kubernetes         - Generate K8s manifests"
-    echo ""
-    echo -e "${BOLD}  Utilities:${NC}"
-    echo "    8) Doctor             - Run diagnostics"
-    echo "    9) Cutover            - Transition to production mode (Tailscale)"
-    echo ""
-    echo "    0) Exit"
+    echo "  Checking security configuration..."
     echo ""
 
-    local choice
-    read -rp "Enter choice [0-9]: " choice
+    local issues=0
 
-    case $choice in
-        1) check_root; check_ubuntu; scenario_all_in_one ;;
-        2) check_root; check_ubuntu; scenario_openclaw_runtime ;;
-        3) check_root; check_ubuntu; scenario_runtime_only ;;
-        4) check_root; scenario_agent_pack ;;
-        5) scenario_remote_openclaw ;;
-        6) scenario_docker_compose ;;
-        7) scenario_kubernetes ;;
-        8) run_doctor ;;
-        9) check_root; tailnet_cutover ;;
-        0) echo "Goodbye!"; exit 0 ;;
-        *) log_error "Invalid choice"; show_menu ;;
-    esac
+    # Check gateway binding
+    if grep -q "bind.*loopback\|bind.*127.0.0.1" "$HOME/.openclaw/openclaw.json" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} Gateway binds to localhost"
+    else
+        echo -e "  ${RED}✗${NC} Gateway binding not verified"
+        ((issues++))
+    fi
+
+    # Check directory permissions
+    local config_perms
+    config_perms=$(stat -c %a "$CONFIG_DIR" 2>/dev/null || echo "000")
+    if [[ "$config_perms" == "700" ]]; then
+        echo -e "  ${GREEN}✓${NC} Config directory permissions (700)"
+    else
+        echo -e "  ${YELLOW}!${NC} Config directory permissions: $config_perms (should be 700)"
+        ((issues++))
+    fi
+
+    # Check secrets permissions
+    local secrets_perms
+    secrets_perms=$(stat -c %a "$SECRETS_DIR" 2>/dev/null || echo "000")
+    if [[ "$secrets_perms" == "700" ]]; then
+        echo -e "  ${GREEN}✓${NC} Secrets directory permissions (700)"
+    else
+        echo -e "  ${YELLOW}!${NC} Secrets directory permissions: $secrets_perms (should be 700)"
+        ((issues++))
+    fi
+
+    # Check env file permissions
+    local env_perms
+    env_perms=$(stat -c %a "$CONFIG_DIR/.env" 2>/dev/null || echo "000")
+    if [[ "$env_perms" == "600" ]]; then
+        echo -e "  ${GREEN}✓${NC} Environment file permissions (600)"
+    else
+        echo -e "  ${YELLOW}!${NC} Environment file permissions: $env_perms (should be 600)"
+        ((issues++))
+    fi
+
+    # Check Tailscale
+    if tailscale status &>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} Tailscale connected"
+    else
+        echo -e "  ${RED}✗${NC} Tailscale not connected"
+        ((issues++))
+    fi
+
+    # Check firewall
+    if ufw status 2>/dev/null | grep -q "active"; then
+        echo -e "  ${GREEN}✓${NC} Firewall active (UFW)"
+    elif firewall-cmd --state 2>/dev/null | grep -q "running"; then
+        echo -e "  ${GREEN}✓${NC} Firewall active (firewalld)"
+    else
+        echo -e "  ${YELLOW}!${NC} No firewall detected"
+        ((issues++))
+    fi
+
+    # Check responder status
+    if grep -q "AUTOPILOT_RESPONDER_ENABLED=true" "$CONFIG_DIR/.env" 2>/dev/null; then
+        echo -e "  ${YELLOW}!${NC} Responder ENABLED (two-tier approval active)"
+    else
+        echo -e "  ${GREEN}✓${NC} Responder DISABLED (safe mode)"
+    fi
+
+    echo ""
+    if [[ $issues -eq 0 ]]; then
+        log_success "Security audit passed"
+    else
+        log_warn "Security audit found $issues issue(s) - review above"
+    fi
 }
 
 # =============================================================================
-# USAGE
+# COMPLETION SUMMARY
 # =============================================================================
 
-usage() {
-    cat << EOF
-Wazuh Autopilot Installer v${VERSION}
+print_summary() {
+    TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "127.0.0.1")
 
-Usage: $0 [OPTIONS]
+    echo ""
+    echo -e "${GREEN}${BOLD}"
+    echo "  ╔═══════════════════════════════════════════════════════════════╗"
+    echo "  ║                                                               ║"
+    echo "  ║     INSTALLATION COMPLETE                                     ║"
+    echo "  ║     Security-Hardened Configuration                           ║"
+    echo "  ║                                                               ║"
+    echo "  ╚═══════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo ""
+    echo -e "  ${CYAN}Network Security:${NC}"
+    echo "    • Gateway:    127.0.0.1:$GATEWAY_PORT (localhost only)"
+    echo "    • MCP Server: $TAILSCALE_IP:$MCP_PORT (Tailscale only)"
+    echo "    • Runtime:    127.0.0.1:$RUNTIME_PORT (localhost only)"
+    echo "    • NO services exposed to public internet"
+    echo ""
+    echo -e "  ${CYAN}Configuration:${NC}"
+    echo "    • Config:   $CONFIG_DIR/.env (mode 600)"
+    echo "    • Secrets:  $SECRETS_DIR (mode 700)"
+    echo "    • Data:     $DATA_DIR"
+    echo ""
+    echo -e "  ${CYAN}Commands:${NC}"
+    echo "    • View logs:       journalctl -u wazuh-autopilot -f"
+    echo "    • Check health:    curl http://127.0.0.1:$RUNTIME_PORT/health"
+    echo "    • Start OpenClaw:  openclaw gateway start"
+    echo "    • Security audit:  openclaw doctor --fix"
+    echo ""
+    echo -e "  ${CYAN}Next Steps:${NC}"
+    echo "    1. Start OpenClaw: openclaw gateway start"
+    echo "    2. Configure Slack channels in $CONFIG_DIR/policies/policy.yaml"
+    echo "    3. Test alert ingestion"
+    echo ""
 
-Interactive Mode:
-  --menu                     Show interactive deployment menu
-
-Installation Modes:
-  --mode all-in-one          Everything on single server
-  --mode openclaw-runtime    OpenClaw + Runtime (MCP elsewhere)
-  --mode runtime-only        Runtime service only
-  --mode agent-pack          Agents into existing local OpenClaw
-  --mode remote-openclaw     Copy agents to remote OpenClaw
-  --mode docker              Generate Docker Compose files
-  --mode kubernetes          Generate Kubernetes manifests
-  --mode doctor              Run diagnostics
-  --mode cutover             Transition to production mode
-
-Options:
-  --mcp-url URL              MCP Server URL
-  --mcp-auth TOKEN           MCP Authentication token
-  --remote-host HOST         Remote server for SSH operations
-  --remote-user USER         SSH user (default: root)
-  --output-dir DIR           Output directory for generated files
-  --non-interactive          Run without prompts
-  --force                    Force installation
-  -h, --help                 Show this help
-
-Environment Variables:
-  MCP_URL                    MCP Server URL
-  AUTOPILOT_MCP_AUTH         MCP Authentication token
-  AUTOPILOT_MODE             bootstrap | production
-  OPENCLAW_HOME              OpenClaw installation directory
-  AUTOPILOT_DATA_DIR         Data directory
-
-Examples:
-  # Interactive menu
-  sudo $0 --menu
-
-  # All-in-one installation
-  sudo $0 --mode all-in-one
-
-  # OpenClaw + Runtime with remote MCP
-  sudo $0 --mode openclaw-runtime --mcp-url https://mcp.example.com:8080
-
-  # Copy agents to remote OpenClaw
-  $0 --mode remote-openclaw --remote-host openclaw.example.com
-
-  # Generate Docker Compose
-  $0 --mode docker --output-dir ./deploy
-
-EOF
+    if grep -q "AUTOPILOT_RESPONDER_ENABLED=true" "$CONFIG_DIR/.env" 2>/dev/null; then
+        echo -e "  ${YELLOW}Responder: ENABLED - human approval required for every action${NC}"
+    else
+        echo -e "  ${GREEN}Responder: DISABLED - system is in read-only mode${NC}"
+    fi
+    echo ""
 }
 
 # =============================================================================
@@ -1360,109 +1424,35 @@ EOF
 # =============================================================================
 
 main() {
-    # No arguments - show menu
-    if [[ $# -eq 0 ]]; then
-        show_menu
+    show_security_banner
+
+    if ! confirm "Continue with security-hardened installation?" "y"; then
+        echo "Installation cancelled."
         exit 0
     fi
 
-    # Parse arguments
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --menu)
-                show_menu
-                exit 0
-                ;;
-            --mode)
-                INSTALL_MODE="$2"
-                shift 2
-                ;;
-            --mcp-url)
-                MCP_URL="$2"
-                shift 2
-                ;;
-            --mcp-auth)
-                MCP_AUTH="$2"
-                shift 2
-                ;;
-            --remote-host)
-                REMOTE_HOST="$2"
-                shift 2
-                ;;
-            --remote-user)
-                REMOTE_USER="$2"
-                shift 2
-                ;;
-            --output-dir)
-                OUTPUT_DIR="$2"
-                shift 2
-                ;;
-            --non-interactive)
-                INTERACTIVE=false
-                shift
-                ;;
-            --force)
-                FORCE=true
-                shift
-                ;;
-            -h|--help)
-                usage
-                exit 0
-                ;;
-            *)
-                log_error "Unknown option: $1"
-                usage
-                exit 1
-                ;;
-        esac
-    done
+    show_security_guidance
 
-    # Run selected mode
-    case "$INSTALL_MODE" in
-        all-in-one|fresh)
-            check_root
-            check_ubuntu
-            scenario_all_in_one
-            ;;
-        openclaw-runtime|bootstrap-openclaw)
-            check_root
-            check_ubuntu
-            scenario_openclaw_runtime
-            ;;
-        runtime-only|runtime)
-            check_root
-            check_ubuntu
-            scenario_runtime_only
-            ;;
-        agent-pack|agents)
-            check_root
-            scenario_agent_pack
-            ;;
-        remote-openclaw|remote)
-            scenario_remote_openclaw
-            ;;
-        docker|docker-compose)
-            scenario_docker_compose "${OUTPUT_DIR:-}"
-            ;;
-        kubernetes|k8s)
-            scenario_kubernetes "${OUTPUT_DIR:-}"
-            ;;
-        doctor)
-            run_doctor
-            ;;
-        cutover)
-            check_root
-            tailnet_cutover
-            ;;
-        "")
-            show_menu
-            ;;
-        *)
-            log_error "Unknown mode: $INSTALL_MODE"
-            usage
-            exit 1
-            ;;
-    esac
+    check_root
+    check_os
+    check_wazuh
+    install_dependencies
+    configure_firewall
+    install_tailscale
+    setup_secure_directories
+    setup_credentials
+    install_mcp_server
+    install_openclaw
+    deploy_agents
+    install_runtime_service
+    configure_system
+    configure_wazuh_integrator
+    prompt_responder_activation
+    show_pairing_info
+    start_services
+    run_security_audit
+    print_summary
 }
 
+# Run
 main "$@"

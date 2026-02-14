@@ -30,5 +30,9 @@
   "license": "MIT",
   "engines": {
     "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@slack/bolt": "^3.17.0",
+    "@slack/web-api": "^7.0.0"
   }
 }

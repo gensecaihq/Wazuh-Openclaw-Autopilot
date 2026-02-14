@@ -1,0 +1,485 @@
+{
+  // =============================================================================
+  // WAZUH OPENCLAW AUTOPILOT - OPENCLAW GATEWAY CONFIGURATION
+  // =============================================================================
+  // This file configures all 7 SOC automation agents for use with OpenClaw.
+  // Copy to ~/.openclaw/openclaw.json after customizing.
+  // =============================================================================
+
+  "gateway": {
+    "port": 18789,
+    "bind": "loopback",
+    "auth": {
+      "token": "${OPENCLAW_TOKEN}"
+    },
+    "logging": {
+      "redactSensitive": true
+    }
+  },
+
+  // =============================================================================
+  // AGENT CONFIGURATION
+  // =============================================================================
+  "agents": {
+    "defaults": {
+      "workspace": "~/.openclaw/wazuh-autopilot/workspace",
+      "agentDir": "~/.openclaw/wazuh-autopilot/agents",
+
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-5",
+        "fallback": "anthropic/claude-haiku-4-5"
+      },
+
+      "sandbox": {
+        "mode": "non-main",
+        "scope": "session",
+        "workspaceAccess": "rw"
+      },
+
+      "tools": {
+        "profile": "minimal",
+        "deny": [
+          "browser",
+          "canvas",
+          "nodes",
+          "exec"
+        ]
+      },
+
+      "heartbeat": {
+        "every": "30m",
+        "target": "last",
+        "model": "anthropic/claude-haiku-4-5"
+      },
+
+      "memory": {
+        "enabled": true,
+        "search": {
+          "provider": "openai",
+          "model": "text-embedding-3-small",
+          "hybrid": true
+        }
+      }
+    },
+
+    "list": [
+      // =========================================================================
+      // TRIAGE AGENT - First responder for alert analysis
+      // =========================================================================
+      {
+        "id": "wazuh-triage",
+        "default": true,
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/triage",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/triage/state",
+
+        "model": {
+          "primary": "anthropic/claude-sonnet-4-5"
+        },
+
+        "tools": {
+          "profile": "minimal",
+          "allow": [
+            "read",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send"
+          ],
+          "deny": [
+            "write",
+            "edit",
+            "exec",
+            "delete",
+            "browser",
+            "canvas"
+          ]
+        },
+
+        "heartbeat": {
+          "every": "10m"
+        }
+      },
+
+      // =========================================================================
+      // CORRELATION AGENT - Pattern detection and timeline building
+      // =========================================================================
+      {
+        "id": "wazuh-correlation",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/correlation",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/correlation/state",
+
+        "model": {
+          "primary": "anthropic/claude-sonnet-4-5"
+        },
+
+        "tools": {
+          "profile": "minimal",
+          "allow": [
+            "read",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send"
+          ],
+          "deny": [
+            "write",
+            "edit",
+            "exec",
+            "delete",
+            "browser",
+            "canvas"
+          ]
+        }
+      },
+
+      // =========================================================================
+      // INVESTIGATION AGENT - Deep analysis and evidence gathering
+      // =========================================================================
+      {
+        "id": "wazuh-investigation",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/investigation",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/investigation/state",
+
+        "model": {
+          "primary": "anthropic/claude-opus-4-6"
+        },
+
+        "tools": {
+          "profile": "minimal",
+          "allow": [
+            "read",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send"
+          ],
+          "deny": [
+            "write",
+            "edit",
+            "exec",
+            "delete",
+            "browser",
+            "canvas"
+          ]
+        }
+      },
+
+      // =========================================================================
+      // RESPONSE PLANNER AGENT - Generate response plans (no execution)
+      // =========================================================================
+      {
+        "id": "wazuh-response-planner",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/response-planner",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/response-planner/state",
+
+        "model": {
+          "primary": "anthropic/claude-sonnet-4-5"
+        },
+
+        "tools": {
+          "profile": "minimal",
+          "allow": [
+            "read",
+            "write",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send"
+          ],
+          "deny": [
+            "exec",
+            "delete",
+            "browser",
+            "canvas"
+          ]
+        }
+      },
+
+      // =========================================================================
+      // POLICY GUARD AGENT - Constitutional enforcement
+      // =========================================================================
+      {
+        "id": "wazuh-policy-guard",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/policy-guard",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/policy-guard/state",
+
+        "model": {
+          "primary": "anthropic/claude-sonnet-4-5"
+        },
+
+        "tools": {
+          "profile": "minimal",
+          "allow": [
+            "read",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send"
+          ],
+          "deny": [
+            "write",
+            "edit",
+            "exec",
+            "delete",
+            "browser",
+            "canvas"
+          ]
+        }
+      },
+
+      // =========================================================================
+      // RESPONDER AGENT - Action execution (requires elevated permissions)
+      // =========================================================================
+      {
+        "id": "wazuh-responder",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/responder",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/responder/state",
+
+        "model": {
+          "primary": "anthropic/claude-sonnet-4-5"
+        },
+
+        "tools": {
+          "profile": "coding",
+          "allow": [
+            "read",
+            "write",
+            "exec",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send"
+          ],
+          "deny": [
+            "browser",
+            "canvas",
+            "delete"
+          ],
+          "elevated": {
+            "enabled": true,
+            "allowFrom": ["slack"]
+          }
+        },
+
+        "sandbox": {
+          "mode": "all",
+          "scope": "agent",
+          "workspaceAccess": "rw"
+        }
+      },
+
+      // =========================================================================
+      // REPORTING AGENT - Metrics, KPIs, and digest generation
+      // =========================================================================
+      {
+        "id": "wazuh-reporting",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/reporting",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/reporting/state",
+
+        "model": {
+          "primary": "anthropic/claude-haiku-4-5"
+        },
+
+        "tools": {
+          "profile": "minimal",
+          "allow": [
+            "read",
+            "write",
+            "sessions_list",
+            "sessions_history",
+            "sessions_send"
+          ],
+          "deny": [
+            "exec",
+            "delete",
+            "browser",
+            "canvas"
+          ]
+        }
+      }
+    ]
+  },
+
+  // =============================================================================
+  // CHANNEL ROUTING - Route messages to appropriate agents
+  // =============================================================================
+  "bindings": [
+    // Default triage handles alerts channel
+    {
+      "agentId": "wazuh-triage",
+      "match": {
+        "channel": "slack",
+        "peer": {
+          "kind": "group"
+        }
+      }
+    },
+
+    // Responder handles approval actions
+    {
+      "agentId": "wazuh-responder",
+      "match": {
+        "channel": "slack",
+        "peer": {
+          "id": "approvals"
+        }
+      }
+    }
+  ],
+
+  // =============================================================================
+  // CHANNEL CONFIGURATION
+  // =============================================================================
+  "channels": {
+    "slack": {
+      "enabled": true,
+      "dmPolicy": "allowlist",
+      "allowFrom": [],
+      "groupPolicy": "mention",
+      "mentionGating": true
+    }
+  },
+
+  // =============================================================================
+  // TOOL CONFIGURATION
+  // =============================================================================
+  "tools": {
+    "profile": "minimal",
+    "allow": [
+      "read",
+      "sessions_list",
+      "sessions_history"
+    ],
+    "deny": [
+      "browser",
+      "canvas",
+      "nodes",
+      "cron"
+    ],
+    "webSearch": {
+      "enabled": false
+    },
+    "sandbox": {
+      "allowlist": [
+        "read",
+        "sessions_list",
+        "sessions_history",
+        "sessions_send"
+      ],
+      "denylist": [
+        "browser",
+        "canvas",
+        "exec",
+        "delete"
+      ]
+    }
+  },
+
+  // =============================================================================
+  // AUTOMATION - Cron jobs for scheduled reports
+  // =============================================================================
+  "automation": {
+    "cron": [
+      {
+        "id": "hourly-snapshot",
+        "schedule": "0 * * * *",
+        "agentId": "wazuh-reporting",
+        "model": "anthropic/claude-haiku-4-5"
+      },
+      {
+        "id": "daily-digest",
+        "schedule": "0 8 * * *",
+        "agentId": "wazuh-reporting",
+        "model": "anthropic/claude-haiku-4-5"
+      },
+      {
+        "id": "shift-handoff",
+        "schedule": "0 6,14,22 * * *",
+        "agentId": "wazuh-reporting",
+        "model": "anthropic/claude-haiku-4-5"
+      },
+      {
+        "id": "weekly-summary",
+        "schedule": "0 9 * * 1",
+        "agentId": "wazuh-reporting",
+        "model": "anthropic/claude-sonnet-4-5"
+      },
+      {
+        "id": "correlation-sweep",
+        "schedule": "*/5 * * * *",
+        "agentId": "wazuh-correlation",
+        "model": "anthropic/claude-haiku-4-5"
+      },
+      {
+        "id": "untriaged-sweep",
+        "schedule": "*/10 * * * *",
+        "agentId": "wazuh-triage",
+        "model": "anthropic/claude-haiku-4-5"
+      }
+    ],
+    "webhooks": [
+      {
+        "path": "/webhook/wazuh-alert",
+        "target": "wazuh-triage",
+        "trigger": "wazuh-alert"
+      },
+      {
+        "path": "/webhook/case-created",
+        "target": "wazuh-correlation",
+        "trigger": "case-created"
+      },
+      {
+        "path": "/webhook/investigation-request",
+        "target": "wazuh-investigation",
+        "trigger": "investigation-request"
+      },
+      {
+        "path": "/webhook/plan-request",
+        "target": "wazuh-response-planner",
+        "trigger": "plan-request"
+      },
+      {
+        "path": "/webhook/policy-check",
+        "target": "wazuh-policy-guard",
+        "trigger": "policy-check"
+      },
+      {
+        "path": "/webhook/execute-action",
+        "target": "wazuh-responder",
+        "trigger": "execute-action"
+      }
+    ]
+  },
+
+  // =============================================================================
+  // MEMORY CONFIGURATION
+  // =============================================================================
+  "memory": {
+    "enabled": true,
+    "search": {
+      "provider": "openai",
+      "model": "text-embedding-3-small",
+      "hybrid": true,
+      "bm25Weight": 0.3,
+      "vectorWeight": 0.7
+    },
+    "compaction": {
+      "enabled": true,
+      "schedule": "daily"
+    }
+  },
+
+  // =============================================================================
+  // ENVIRONMENT VARIABLES
+  // =============================================================================
+  "env": {
+    "OPENCLAW_TOKEN": "${OPENCLAW_TOKEN}",
+    "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+    "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+    "WAZUH_MCP_URL": "${MCP_URL}",
+    "WAZUH_MCP_TOKEN": "${AUTOPILOT_MCP_AUTH}"
+  },
+
+  // =============================================================================
+  // PROVIDER CONFIGURATION
+  // =============================================================================
+  "provider": {
+    "type": "anthropic",
+    "apiKey": "${ANTHROPIC_API_KEY}",
+    "timeout": 120000
+  }
+}

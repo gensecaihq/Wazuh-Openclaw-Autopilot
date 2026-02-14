@@ -7,7 +7,7 @@
 <h1 align="center">Wazuh OpenClaw Autopilot</h1>
 
 <p align="center">
-  <b>SOC Automation Framework for Wazuh using OpenClaw Agents</b>
+  <b>Turnkey SOC Automation for Wazuh with AI-Powered Agents</b>
 </p>
 
 <p align="center">
@@ -20,74 +20,32 @@
 </p>
 
 <p align="center">
-  <a href="#what-this-provides">What This Provides</a> •
   <a href="#quick-start">Quick Start</a> •
+  <a href="#human-in-the-loop">Human-in-the-Loop</a> •
   <a href="#architecture">Architecture</a> •
-  <a href="#configuration">Configuration</a> •
+  <a href="#agents">Agents</a> •
   <a href="#documentation">Documentation</a>
 </p>
 
 ---
 
-## What This Provides
+## What This Is
 
-**Wazuh OpenClaw Autopilot** is a framework for building automated SOC workflows on top of Wazuh. It includes:
+**Wazuh OpenClaw Autopilot** is a **turnkey installer** that transforms your existing Wazuh deployment into an autonomous SOC with AI-powered agents. The installer downloads and configures all dependencies automatically.
 
-| Component | Description |
-|-----------|-------------|
-| **Agent Configurations** | 7 pre-configured OpenClaw agent YAML files for triage, correlation, investigation, response planning, policy enforcement, execution, and reporting |
-| **Runtime Service** | Node.js service providing case/evidence management, approval tokens, metrics, and MCP client |
-| **Policy Framework** | Declarative YAML policies for access control, rate limits, and approval workflows |
-| **Toolmap** | MCP tool mappings for Wazuh operations (alerts, agents, active response) |
-| **Playbooks** | 7 response playbooks for common attack scenarios |
-| **Installer** | Multi-scenario installer supporting 9 deployment configurations |
+### Key Features
 
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                       WAZUH OPENCLAW AUTOPILOT                              │
-│                                                                             │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
-│  │   Wazuh     │───▶│  MCP Server │───▶│  OpenClaw   │───▶│   Runtime   │  │
-│  │   Manager   │    │  (External) │    │  (External) │    │   Service   │  │
-│  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
-│                            │                  │                  │         │
-│                     Wazuh API          Agent Configs       Cases/Evidence  │
-│                                                                             │
-│  External Dependencies:                                                     │
-│  • Wazuh MCP Server (github.com/gensecaihq/Wazuh-MCP-Server)               │
-│  • OpenClaw Framework (github.com/openclaw/openclaw)                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Agent Workflow
-
-The agent configurations define a complete SOC workflow:
-
-```
-Wazuh Alert
-    │
-    ▼
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Triage    │────▶│ Correlation │────▶│Investigation│
-│   Agent     │     │    Agent    │     │    Agent    │
-└─────────────┘     └─────────────┘     └─────────────┘
-                                               │
-    ┌──────────────────────────────────────────┘
-    ▼
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Response   │────▶│   Policy    │────▶│  Responder  │
-│  Planner    │     │   Guard     │     │   Agent     │
-└─────────────┘     └─────────────┘     └─────────────┘
-                                               │
-                                        ┌──────┴──────┐
-                                        ▼             ▼
-                                   ┌─────────┐  ┌──────────┐
-                                   │Reporting│  │ Evidence │
-                                   │  Agent  │  │  Packs   │
-                                   └─────────┘  └──────────┘
-```
+| Feature | Description |
+|---------|-------------|
+| **Security-Hardened** | Gateway NEVER exposed to internet, localhost binding only |
+| **Turnkey Installation** | Single script with interactive security guidance |
+| **Pairing Mode** | Explicit device approval required before connecting |
+| **7 SOC Agents** | Triage, Correlation, Investigation, Response Planning, Policy Guard, Responder, Reporting |
+| **Human-in-the-Loop** | Two-tier approval: human must Approve AND Execute every response action |
+| **No Autonomous Execution** | AI agents propose actions; humans always make the final decision |
+| **Slack Integration** | Interactive buttons for approvals in Slack |
+| **Zero-Trust Networking** | Tailscale mandatory for all inter-component communication |
+| **Credential Isolation** | Secrets stored in isolated directory with 600 permissions |
 
 ---
 
@@ -95,13 +53,10 @@ Wazuh Alert
 
 ### Prerequisites
 
-| Requirement | Description |
-|-------------|-------------|
-| **Ubuntu 22.04/24.04** | Or compatible Linux distribution |
-| **Node.js 18+** | For runtime service |
-| **Wazuh Manager** | Installed and running |
-| **Wazuh MCP Server** | [gensecaihq/Wazuh-MCP-Server](https://github.com/gensecaihq/Wazuh-MCP-Server) deployed |
-| **OpenClaw** | [openclaw/openclaw](https://github.com/openclaw/openclaw) for agent orchestration |
+- **Ubuntu 22.04/24.04** (or compatible Linux)
+- **Wazuh Manager** installed and running
+- **Node.js 18+**
+- **Anthropic API Key** (for AI agents)
 
 ### Installation
 
@@ -110,230 +65,391 @@ Wazuh Alert
 git clone https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot.git
 cd Wazuh-Openclaw-Autopilot
 
-# Interactive installation
+# Run the security-hardened installer
 sudo ./install/install.sh
-
-# Or choose a specific mode:
-sudo ./install/install.sh --mode all-in-one      # Everything on one server
-sudo ./install/install.sh --mode agent-pack      # Just agent configs
-sudo ./install/install.sh --mode docker          # Generate Docker Compose
 ```
 
-### Configuration
+The installer provides **interactive security guidance** and will:
 
-After installation, configure the environment:
+1. **Configure firewall** - Block gateway ports from public access
+2. **Install Tailscale** - Zero-trust networking (mandatory)
+3. **Create secure directories** - Hardened permissions (700/600)
+4. **Generate credentials** - Isolated in secrets directory
+5. **Install MCP Server** - Binds to Tailscale IP only
+6. **Install OpenClaw** - Binds to localhost only
+7. **Deploy SOC agents** - Read-only by default
+8. **Run security audit** - Verify configuration
+
+### Security Features Applied
+
+```
+✓ Gateway binds to localhost only (never exposed)
+✓ MCP Server binds to Tailscale IP (not 0.0.0.0)
+✓ Pairing mode enabled (device approval required)
+✓ Credentials isolated (/etc/wazuh-autopilot/secrets)
+✓ Directory permissions hardened (700/600)
+✓ Firewall rules configured
+✓ Two-tier human approval for all actions
+```
+
+### Post-Installation
 
 ```bash
+# Configure API keys
 sudo nano /etc/wazuh-autopilot/.env
+
+# Required:
+ANTHROPIC_API_KEY=sk-ant-...
+MCP_URL=https://your-mcp-server:8080
+
+# Optional (Slack integration):
+SLACK_APP_TOKEN=xapp-...
+SLACK_BOT_TOKEN=xoxb-...
+
+# Restart to apply
+sudo systemctl restart wazuh-autopilot
 ```
 
-**Required settings:**
-```bash
-# MCP Server connection
-MCP_URL=https://<your-mcp-server>:8080
-AUTOPILOT_MCP_AUTH=<your-mcp-token>
-
-# Slack integration (optional but recommended)
-SLACK_APP_TOKEN=xapp-1-<your-app-token>
-SLACK_BOT_TOKEN=xoxb-<your-bot-token>
-```
-
-**Configure Slack IDs in policy:**
-```bash
-sudo nano /etc/wazuh-autopilot/policies/policy.yaml
-```
-
-Replace all placeholder values:
-- `<SLACK_WORKSPACE_ID>` - Your Slack workspace ID
-- `<SLACK_CHANNEL_ALERTS>` - Channel ID for alerts
-- `<SLACK_CHANNEL_APPROVALS>` - Channel ID for approvals
-- `<SLACK_USER_*>` - Slack user IDs for approvers
-
-### Start the Service
+### Verify Installation
 
 ```bash
-# Start runtime service
-sudo systemctl start wazuh-autopilot
-sudo systemctl enable wazuh-autopilot
-
-# Verify
+# Check health
 curl http://127.0.0.1:9090/health
+
+# Check responder status
+curl http://127.0.0.1:9090/api/responder/status
 ```
 
 ---
 
-## Deployment Scenarios
+## Human-in-the-Loop
 
-| Scenario | Description | Command |
-|----------|-------------|---------|
-| **All-in-One** | Single server deployment | `--mode all-in-one` |
-| **OpenClaw + Runtime** | MCP on remote server | `--mode openclaw-runtime` |
-| **Runtime Only** | OpenClaw elsewhere | `--mode runtime-only` |
-| **Agent Pack** | Add to existing OpenClaw | `--mode agent-pack` |
-| **Remote OpenClaw** | Copy to remote server via SSH | `--mode remote-openclaw` |
-| **Docker Compose** | Generate docker-compose.yml | `--mode docker` |
-| **Kubernetes** | Generate K8s manifests | `--mode kubernetes` |
-| **Doctor** | Run diagnostics | `--mode doctor` |
-| **Cutover** | Switch to production mode | `--mode cutover` |
+**Every response action requires human approval.** AI agents analyze alerts, correlate events, and propose response plans - but humans make the final decision.
 
-See [SCENARIOS.md](docs/SCENARIOS.md) for detailed deployment diagrams.
+### Two-Tier Approval Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    TWO-TIER APPROVAL WORKFLOW                    │
+│                                                                  │
+│   AI proposes plan     Human Approves      Human Executes       │
+│   ┌─────────┐         ┌─────────────┐      ┌─────────────┐      │
+│   │ proposed│────────▶│  approved   │─────▶│  executing  │      │
+│   └─────────┘         └─────────────┘      └─────────────┘      │
+│        │                    │                    │               │
+│   AI creates plan      Human reviews       Human triggers        │
+│   with risk            and clicks          actual execution      │
+│   assessment           "Approve"           by clicking "Execute" │
+│                                                  │               │
+│                                                  ▼               │
+│                                           ┌─────────────┐        │
+│                                           │ completed/  │        │
+│                                           │  failed     │        │
+│                                           └─────────────┘        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### How It Works
+
+| Step | Actor | Action |
+|------|-------|--------|
+| 1 | AI Agent | Analyzes alert, creates response plan with risk assessment |
+| 2 | Human | Reviews plan, clicks **Approve** (Tier 1) |
+| 3 | Human | Reviews approved plan, clicks **Execute** (Tier 2) |
+| 4 | System | Executes the approved actions via Wazuh Active Response |
+
+**Both human approvals are mandatory.** There is no way for AI agents to execute response actions autonomously.
+
+### Responder Capability Toggle
+
+The system has an additional safety layer: `AUTOPILOT_RESPONDER_ENABLED`
+
+| Setting | Behavior |
+|---------|----------|
+| `false` (default) | Execution capability disabled. Even if human clicks Execute, actions are blocked. |
+| `true` | Execution capability enabled. Human approval still required for every action. |
+
+**Important:** Setting `AUTOPILOT_RESPONDER_ENABLED=true` does NOT enable autonomous execution. It only enables the capability for humans to execute approved plans. Human approval is always required.
+
+```bash
+# Enable execution capability (human approval still required)
+echo "AUTOPILOT_RESPONDER_ENABLED=true" >> /etc/wazuh-autopilot/.env
+sudo systemctl restart wazuh-autopilot
+```
+
+### Why Two Tiers?
+
+1. **Tier 1 (Approve)**: Human validates the AI's analysis is correct and the proposed actions are appropriate
+2. **Tier 2 (Execute)**: Human confirms they want to proceed with the actual execution right now
+
+This separation prevents accidental execution - a human must consciously make two separate decisions.
 
 ---
 
-## Runtime Service
+## Architecture
 
-The runtime service provides:
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                      YOUR INFRASTRUCTURE                           │
+│                                                                    │
+│  ┌─────────────┐                                                   │
+│  │   Wazuh     │──┐                                                │
+│  │   Manager   │  │                                                │
+│  └─────────────┘  │                                                │
+│                   │ Alerts (localhost)                             │
+│                   ▼                                                │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │                  WAZUH AUTOPILOT                             │  │
+│  │              (All services localhost/Tailscale only)         │  │
+│  │                                                              │  │
+│  │  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐ │  │
+│  │  │  MCP Server    │  │ OpenClaw       │  │ Runtime        │ │  │
+│  │  │  Tailscale:8080│◀▶│ localhost:18789│◀▶│ localhost:9090 │ │  │
+│  │  │  (NOT public)  │  │ (NOT public)   │  │ (NOT public)   │ │  │
+│  │  └────────────────┘  └────────────────┘  └────────────────┘ │  │
+│  │         │                   │                   │            │  │
+│  │    Wazuh API          AI Agents           Cases/Plans        │  │
+│  │   (Tailscale)        (sandboxed)       (human approval)      │  │
+│  │                                                              │  │
+│  │  Security:                                                   │  │
+│  │  ✓ Gateway NEVER exposed to internet                         │  │
+│  │  ✓ Pairing mode for device registration                      │  │
+│  │  ✓ Credentials isolated (mode 600)                           │  │
+│  │  ✓ Two-tier human approval mandatory                         │  │
+│  │                                                              │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+│                   │                                                │
+│                   │ Tailscale VPN (encrypted)                      │
+│                   ▼                                                │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │                      SLACK                                   │  │
+│  │  #security-alerts    #security-approvals                     │  │
+│  │                                                              │  │
+│  │  Human reviews and clicks:                                   │  │
+│  │  [Approve]  then  [Execute]  or  [Reject]                    │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────┘
+```
 
-### REST API
+### Agent Workflow
+
+```
+Wazuh Alert
+    │
+    ▼
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Triage    │────▶│ Correlation │────▶│Investigation│
+│   Agent     │     │    Agent    │     │    Agent    │
+│  (auto)     │     │   (auto)    │     │   (auto)    │
+└─────────────┘     └─────────────┘     └─────────────┘
+                                              │
+    ┌─────────────────────────────────────────┘
+    ▼
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Response   │────▶│   Policy    │────▶│  Responder  │
+│  Planner    │     │   Guard     │     │   Agent     │
+│ (proposes)  │     │  (checks)   │     │ (executes)  │
+└─────────────┘     └─────────────┘     └─────────────┘
+       │                                      │
+       │ AI creates plan                      │ Executes ONLY after
+       │                                      │ human approval
+       ▼                                      ▼
+┌─────────────────────────────────────────────────────────┐
+│           HUMAN APPROVAL REQUIRED                        │
+│                                                          │
+│   Step 1: Human clicks [Approve]                         │
+│   Step 2: Human clicks [Execute]                         │
+│                                                          │
+│   No autonomous execution - humans always decide         │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Agents
+
+| Agent | What It Does | Autonomy |
+|-------|--------------|----------|
+| **Triage** | Analyzes alerts, extracts entities, creates cases | Automatic |
+| **Correlation** | Links related alerts, builds attack timelines | Automatic |
+| **Investigation** | Deep analysis, process trees, enrichment | Automatic |
+| **Response Planner** | Proposes response plans with risk assessment | Creates proposals only |
+| **Policy Guard** | Validates actions against security policies | Advisory only |
+| **Responder** | Executes actions via Wazuh Active Response | Human-controlled |
+| **Reporting** | Generates metrics, KPIs, and reports | Automatic |
+
+**Note:** "Automatic" agents only read and analyze data. They cannot modify systems or execute response actions.
+
+---
+
+## Runtime Service API
+
+### Core Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Health check with version and uptime |
-| `/ready` | GET | Readiness probe |
+| `/health` | GET | Health check with responder status |
 | `/metrics` | GET | Prometheus metrics |
-| `/api/cases` | GET | List all cases |
-| `/api/cases` | POST | Create new case |
-| `/api/cases/:id` | GET | Get case by ID |
-| `/api/cases/:id` | PUT | Update case |
-| `/api/alerts` | POST | Ingest alert and auto-create case |
+| `/api/responder/status` | GET | Check responder capability status |
+| `/api/cases` | GET/POST | List or create cases |
+| `/api/alerts` | POST | Ingest Wazuh alert |
 
-### Alert Ingestion
+### Response Plan Endpoints (Human Approval Required)
 
-Send Wazuh alerts directly to create cases:
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/plans` | GET | List response plans |
+| `/api/plans` | POST | Create new response plan (AI creates these) |
+| `/api/plans/:id` | GET | Get plan details |
+| `/api/plans/:id/approve` | POST | **Tier 1:** Human approves plan |
+| `/api/plans/:id/execute` | POST | **Tier 2:** Human triggers execution |
+| `/api/plans/:id/reject` | POST | Human rejects plan |
+
+### Example: Complete Human Approval Workflow
 
 ```bash
-curl -X POST http://127.0.0.1:9090/api/alerts \
+# 1. AI agent creates a response plan
+curl -X POST http://127.0.0.1:9090/api/plans \
   -H "Content-Type: application/json" \
   -d '{
-    "alert_id": "1234567890",
-    "rule": {
-      "id": "5712",
-      "level": 10,
-      "description": "SSH brute force attack"
-    },
-    "agent": {
-      "id": "001",
-      "name": "server-01",
-      "ip": "10.0.1.50"
-    },
-    "data": {
-      "srcip": "192.168.1.100"
-    }
+    "case_id": "CASE-20240101-abc12345",
+    "title": "Block brute force attacker",
+    "risk_level": "low",
+    "actions": [{"type": "block_ip", "target": "192.168.1.100"}]
   }'
-```
+# Returns: {"plan_id": "PLAN-1234-abc", "state": "proposed", ...}
 
-### Prometheus Metrics
+# 2. Human reviews and approves (Tier 1)
+curl -X POST http://127.0.0.1:9090/api/plans/PLAN-1234-abc/approve \
+  -H "Content-Type: application/json" \
+  -d '{"approver_id": "U1234567890", "reason": "Attack confirmed"}'
+# Returns: {"state": "approved", ...}
 
-```prometheus
-autopilot_cases_created_total
-autopilot_cases_updated_total
-autopilot_alerts_ingested_total
-autopilot_mcp_tool_calls_total{tool,status}
-autopilot_approvals_requested_total
-autopilot_approvals_granted_total
+# 3. Human confirms and executes (Tier 2)
+curl -X POST http://127.0.0.1:9090/api/plans/PLAN-1234-abc/execute \
+  -H "Content-Type: application/json" \
+  -d '{"executor_id": "U1234567890"}'
+# Returns: {"state": "completed", "execution_result": {...}}
 ```
 
 ---
 
-## Agent Configurations
+## Slack Integration
 
-### Included Agents
+Interactive buttons in Slack for the two-tier human approval:
 
-| Agent | File | Autonomy | Purpose |
-|-------|------|----------|---------|
-| **Triage** | `triage.agent.yaml` | Auto | Alert analysis, entity extraction, case creation |
-| **Correlation** | `correlation.agent.yaml` | Auto | Link related alerts, build timelines |
-| **Investigation** | `investigation.agent.yaml` | Auto | Deep analysis, process trees, enrichment |
-| **Response Planner** | `response-planner.agent.yaml` | Approval | Generate response plans with risk assessment |
-| **Policy Guard** | `policy-guard.agent.yaml` | Approval | Enforce policies, validate approvals |
-| **Responder** | `responder.agent.yaml` | Approval | Execute approved actions (disabled by default) |
-| **Reporting** | `reporting.agent.yaml` | Auto | Generate reports and KPIs |
+### Step 1: Plan Proposed (by AI)
+```
+┌─────────────────────────────────────────────────────────┐
+│  Response Plan Requires Approval                         │
+│                                                          │
+│  Plan: PLAN-1234-abc                                     │
+│  Case: CASE-20240101-abc12345                           │
+│  Risk: LOW                                               │
+│                                                          │
+│  Proposed Actions:                                       │
+│  • block_ip: 192.168.1.100                              │
+│                                                          │
+│  [Approve (Tier 1)]  [Reject]                           │
+└─────────────────────────────────────────────────────────┘
+```
 
-### Using with OpenClaw
+### Step 2: Human Approves (Tier 1)
+```
+┌─────────────────────────────────────────────────────────┐
+│  Plan Approved - Ready for Execution                     │
+│                                                          │
+│  Approved by: @analyst                                   │
+│                                                          │
+│  Click Execute to run the actions now.                   │
+│                                                          │
+│  [Execute (Tier 2)]  [Reject]                           │
+└─────────────────────────────────────────────────────────┘
+```
 
-These YAML configurations are designed for the [OpenClaw](https://github.com/openclaw/openclaw) agent framework. To use them:
+### Slack Commands
 
-1. Install OpenClaw following their documentation
-2. Copy agent configs to OpenClaw's agents directory:
-   ```bash
-   cp /etc/wazuh-autopilot/agents/*.yaml /opt/openclaw/agents/
-   ```
-3. Configure OpenClaw to connect to your MCP server
-4. Restart OpenClaw to load the agents
-
-See [AGENT_CONFIGURATION.md](docs/AGENT_CONFIGURATION.md) for customization options.
+```
+/wazuh status              # Check responder capability status
+/wazuh plans proposed      # List plans awaiting human approval
+/wazuh approve PLAN-1234   # Tier 1: Human approves plan
+/wazuh execute PLAN-1234   # Tier 2: Human triggers execution
+/wazuh reject PLAN-1234    # Human rejects plan
+```
 
 ---
 
-## Policy Configuration
+## Security Model
 
-### Security Policies
+### Network Security (Never Exposed)
 
-The `policy.yaml` file controls:
+| Component | Binding | Accessible From |
+|-----------|---------|-----------------|
+| OpenClaw Gateway | `127.0.0.1:18789` | Localhost only |
+| MCP Server | `<tailscale-ip>:8080` | Tailscale network only |
+| Runtime Service | `127.0.0.1:9090` | Localhost only |
 
-- **Autonomy levels** - Which operations run automatically vs require approval
-- **Slack integration** - Workspace and channel allowlists
-- **Approver groups** - Who can approve which actions
-- **Action allowlists** - Enabled actions with risk levels
-- **Asset criticality** - Rules for production vs development systems
-- **Rate limits** - Per-action and global limits
-- **Idempotency** - Prevent duplicate actions
+**No services are exposed to the public internet.** All remote access requires Tailscale VPN.
 
-### Required Configuration
+### Access Control
 
-Before production use, you must configure:
+| Control | Description |
+|---------|-------------|
+| **Pairing mode** | New devices must pair with secret code before connecting |
+| **DM policy: allowlist** | No public messages accepted |
+| **Mention gating** | Agents only respond when explicitly mentioned |
+| **Tailscale mandatory** | All inter-component traffic encrypted via VPN |
 
-```yaml
-# Slack workspace (get from api.slack.com/methods/auth.test)
-workspace_allowlist:
-  - id: "<SLACK_WORKSPACE_ID>"
+### File Permissions
 
-# Slack channels (get channel ID from Slack)
-channels:
-  alerts:
-    allowlist:
-      - id: "<SLACK_CHANNEL_ALERTS>"
-  approvals:
-    allowlist:
-      - id: "<SLACK_CHANNEL_APPROVALS>"
+| Directory | Mode | Purpose |
+|-----------|------|---------|
+| `/etc/wazuh-autopilot` | 700 | Configuration (owner only) |
+| `/etc/wazuh-autopilot/secrets` | 700 | Credential isolation |
+| `~/.openclaw` | 700 | OpenClaw config (owner only) |
+| `.env` files | 600 | Environment secrets |
 
-# Approver Slack user IDs
-approvers:
-  groups:
-    standard:
-      members:
-        - slack_id: "<SLACK_USER_ANALYST_1>"
-        - slack_id: "<SLACK_USER_ANALYST_2>"
-    elevated:
-      members:
-        - slack_id: "<SLACK_USER_SENIOR>"
-    admin:
-      members:
-        - slack_id: "<SLACK_USER_ADMIN>"
-```
+### Human-in-the-Loop
 
-See [POLICY_AND_APPROVALS.md](docs/POLICY_AND_APPROVALS.md) for complete documentation.
+| Control | Description |
+|---------|-------------|
+| **Human approval mandatory** | Every response action requires Approve + Execute by human |
+| **No autonomous execution** | AI agents cannot execute actions without human approval |
+| **Responder capability toggle** | Additional safety: disabled by default |
+| **Plan expiration** | Plans expire after 60 minutes |
+| **Rate limiting** | Per-action and global limits |
+| **Protected entities** | Cannot block internal IPs or kill system processes |
+| **Audit logging** | All actions logged with correlation IDs |
+
+### What AI Agents CAN Do (Automatically)
+- Read and analyze Wazuh alerts
+- Extract entities (IPs, users, hosts)
+- Correlate related alerts
+- Build attack timelines
+- Generate reports and metrics
+- **Propose** response plans
+
+### What AI Agents CANNOT Do
+- Execute any response actions
+- Modify any systems
+- Bypass human approval
+- Auto-approve their own proposals
 
 ---
 
 ## Documentation
 
 ### Getting Started
-- [QUICKSTART.md](docs/QUICKSTART.md) - Get running in 15 minutes
-- [SCENARIOS.md](docs/SCENARIOS.md) - Deployment scenarios with diagrams
-- [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) - Command-line reference
+- [QUICKSTART.md](docs/QUICKSTART.md) - Installation walkthrough
+- [SLACK_SOCKET_MODE.md](docs/SLACK_SOCKET_MODE.md) - Slack setup
 
 ### Configuration
-- [AGENT_CONFIGURATION.md](docs/AGENT_CONFIGURATION.md) - Customize agent behavior
+- [AGENT_CONFIGURATION.md](docs/AGENT_CONFIGURATION.md) - Customize agents
 - [POLICY_AND_APPROVALS.md](docs/POLICY_AND_APPROVALS.md) - Policy framework
 - [MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md) - MCP server setup
-- [SLACK_SOCKET_MODE.md](docs/SLACK_SOCKET_MODE.md) - Slack integration
-- [TAILSCALE_MANDATORY.md](docs/TAILSCALE_MANDATORY.md) - Zero-trust networking
 
 ### Reference
-- [RUNTIME_API.md](docs/RUNTIME_API.md) - REST API documentation
-- [EVIDENCE_PACK_SCHEMA.md](docs/EVIDENCE_PACK_SCHEMA.md) - Evidence pack structure
-- [OBSERVABILITY_EXPORT.md](docs/OBSERVABILITY_EXPORT.md) - Metrics and logging
+- [RUNTIME_API.md](docs/RUNTIME_API.md) - API documentation
 - [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) - Common issues
 
 ---
@@ -342,63 +458,66 @@ See [POLICY_AND_APPROVALS.md](docs/POLICY_AND_APPROVALS.md) for complete documen
 
 ```
 Wazuh-Openclaw-Autopilot/
-├── agents/                    # OpenClaw agent configurations
-│   ├── triage.agent.yaml
-│   ├── correlation.agent.yaml
-│   ├── investigation.agent.yaml
-│   ├── response-planner.agent.yaml
-│   ├── policy-guard.agent.yaml
-│   ├── responder.agent.yaml
-│   └── reporting.agent.yaml
+├── install/
+│   └── install.sh            # Turnkey installer
+├── openclaw/
+│   ├── openclaw.json         # OpenClaw gateway config
+│   └── agents/               # Agent system prompts
+├── runtime/
+│   └── autopilot-service/    # Node.js runtime service
+│       ├── index.js          # Main service (two-tier approval)
+│       └── slack.js          # Slack integration
 ├── policies/
 │   ├── policy.yaml           # Security policies
 │   └── toolmap.yaml          # MCP tool mappings
-├── playbooks/                 # Response playbooks
-├── runtime/
-│   └── autopilot-service/    # Node.js runtime service
-├── install/
-│   └── install.sh            # Multi-scenario installer
-├── docs/                      # Documentation
-└── README.md
+├── agents/                   # YAML agent specs (reference)
+├── playbooks/                # Response playbooks
+└── docs/                     # Documentation
 ```
 
 ---
 
-## Security Model
+## FAQ
 
-| Control | Description |
-|---------|-------------|
-| **Read-only by default** | Action agents disabled until explicitly enabled |
-| **Approval-gated** | Response actions require human approval |
-| **Policy enforcement** | All actions checked against declarative policies |
-| **Input validation** | All inputs validated to prevent injection |
-| **Authorization** | Write endpoints require authentication |
-| **Rate limiting** | Configurable per-action and global limits |
-| **Audit logging** | Structured JSON logs with correlation IDs |
+### Can AI agents execute response actions automatically?
+**No.** AI agents can only propose actions. Every response action requires a human to click Approve (Tier 1) and then Execute (Tier 2).
 
----
+### What does AUTOPILOT_RESPONDER_ENABLED control?
+This toggle enables or disables the execution capability. When disabled (default), even if a human clicks Execute, actions are blocked. When enabled, humans can execute approved plans. **It does not enable autonomous execution.**
 
-## External Dependencies
+### What happens if I enable responder?
+Nothing changes about the approval workflow. Humans still must Approve and Execute every plan. The toggle just allows the execution step to actually run the Wazuh Active Response commands.
 
-This framework requires:
+### Can I skip the two-tier approval?
+**No.** The two-tier approval is built into the system architecture. Both human actions are required.
 
-| Dependency | Purpose | Link |
-|------------|---------|------|
-| **Wazuh MCP Server** | Provides MCP interface to Wazuh | [gensecaihq/Wazuh-MCP-Server](https://github.com/gensecaihq/Wazuh-MCP-Server) |
-| **OpenClaw** | Agent orchestration framework | [openclaw/openclaw](https://github.com/openclaw/openclaw) |
-| **Tailscale** | Zero-trust networking (recommended) | [tailscale.com](https://tailscale.com) |
+### Is the gateway exposed to the internet?
+**No.** The OpenClaw gateway binds to `127.0.0.1:18789` (localhost only). The MCP Server binds to your Tailscale IP. Neither service is accessible from the public internet.
+
+### What is pairing mode?
+Pairing mode requires explicit approval before a new device can connect to the gateway. A pairing code is generated during installation and stored in `/etc/wazuh-autopilot/secrets/pairing_code`. New devices must provide this code.
+
+### Where are credentials stored?
+Credentials are isolated in `/etc/wazuh-autopilot/secrets/` with mode 700. Individual credential files have mode 600. The main `.env` file also has mode 600.
+
+### What firewall rules are created?
+The installer configures UFW/firewalld to:
+- Block gateway port (18789) from public interfaces
+- Block MCP port (8080) from public interfaces
+- Allow Tailscale traffic
 
 ---
 
 ## Contributing
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
 ```bash
 # Run tests
 cd runtime/autopilot-service
+npm install
 npm test
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ---
 
