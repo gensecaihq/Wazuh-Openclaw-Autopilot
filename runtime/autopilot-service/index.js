@@ -83,6 +83,7 @@ function log(level, component, msg, extra = {}) {
 const metrics = {
   cases_created_total: 0,
   cases_updated_total: 0,
+  alerts_ingested_total: 0,
   triage_latency_seconds: [],
   mcp_tool_calls_total: {},
   mcp_tool_call_latency_seconds: {},
@@ -122,8 +123,8 @@ function formatMetrics() {
   const lines = [];
 
   // Simple counters
-  ["cases_created_total", "cases_updated_total", "action_plans_proposed_total",
-   "approvals_requested_total", "approvals_granted_total"].forEach((name) => {
+  ["cases_created_total", "cases_updated_total", "alerts_ingested_total",
+   "action_plans_proposed_total", "approvals_requested_total", "approvals_granted_total"].forEach((name) => {
     lines.push(`# TYPE autopilot_${name} counter`);
     lines.push(`autopilot_${name} ${metrics[name] || 0}`);
   });
@@ -439,18 +440,161 @@ function consumeApprovalToken(token, approverId, decision, reason = "") {
 // MCP CLIENT WRAPPER
 // =============================================================================
 
+// Simple YAML parser for toolmap (handles basic key-value and nested structures)
+function parseSimpleYaml(content) {
+  const result = {};
+  const lines = content.split('\n');
+  const stack = [{ indent: -1, obj: result }];
+
+  for (const line of lines) {
+    // Skip comments and empty lines
+    if (line.trim().startsWith('#') || line.trim() === '') continue;
+
+    const indent = line.search(/\S/);
+    if (indent === -1) continue;
+
+    // Pop stack to find parent
+    while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
+      stack.pop();
+    }
+
+    const parent = stack[stack.length - 1].obj;
+    const trimmed = line.trim();
+
+    // Handle list items
+    if (trimmed.startsWith('- ')) {
+      const value = trimmed.substring(2).trim();
+      const lastKey = Object.keys(parent).pop();
+      if (lastKey && !Array.isArray(parent[lastKey])) {
+        parent[lastKey] = [];
+      }
+      if (lastKey) {
+        if (value.includes(':')) {
+          const obj = {};
+          const [k, v] = value.split(':').map(s => s.trim());
+          obj[k] = v.replace(/^["']|["']$/g, '');
+          parent[lastKey].push(obj);
+        } else {
+          parent[lastKey].push(value.replace(/^["']|["']$/g, ''));
+        }
+      }
+      continue;
+    }
+
+    // Handle key: value pairs
+    const colonIndex = trimmed.indexOf(':');
+    if (colonIndex > 0) {
+      const key = trimmed.substring(0, colonIndex).trim();
+      let value = trimmed.substring(colonIndex + 1).trim();
+
+      if (value === '' || value === '|' || value === '>') {
+        // Nested object or multiline string
+        parent[key] = {};
+        stack.push({ indent, obj: parent[key] });
+      } else {
+        // Parse value
+        if (value === 'true') value = true;
+        else if (value === 'false') value = false;
+        else if (value === 'null') value = null;
+        else if (/^\d+$/.test(value)) value = parseInt(value, 10);
+        else if (/^\d+\.\d+$/.test(value)) value = parseFloat(value);
+        else value = value.replace(/^["']|["']$/g, '');
+
+        parent[key] = value;
+      }
+    }
+  }
+
+  return result;
+}
+
+// Loaded toolmap configuration
+let toolmapConfig = null;
+
 async function loadToolmap() {
   const toolmapPath = path.join(config.configDir, "policies", "toolmap.yaml");
   try {
-    // For simplicity, we'll just check if file exists
-    // In production, use a proper YAML parser
-    await fs.access(toolmapPath);
-    log("info", "mcp", "Toolmap loaded", { path: toolmapPath });
-    return true;
+    const content = await fs.readFile(toolmapPath, "utf8");
+    toolmapConfig = parseSimpleYaml(content);
+
+    // Count loaded tools
+    let toolCount = 0;
+    if (toolmapConfig.read_operations) {
+      toolCount += Object.keys(toolmapConfig.read_operations).length;
+    }
+    if (toolmapConfig.action_operations) {
+      toolCount += Object.keys(toolmapConfig.action_operations).length;
+    }
+
+    log("info", "mcp", "Toolmap loaded and parsed", {
+      path: toolmapPath,
+      tools_loaded: toolCount,
+    });
+    return toolmapConfig;
   } catch (err) {
-    log("warn", "mcp", "Toolmap not found, using defaults", { path: toolmapPath });
-    return false;
+    log("warn", "mcp", "Toolmap not found or invalid, using defaults", {
+      path: toolmapPath,
+      error: err.message,
+    });
+    // Provide default tool mappings
+    toolmapConfig = {
+      read_operations: {
+        get_alert: { mcp_tool: "wazuh_get_alert", enabled: true },
+        search_alerts: { mcp_tool: "wazuh_search_alerts", enabled: true },
+        search_events: { mcp_tool: "wazuh_search_events", enabled: true },
+        get_agent: { mcp_tool: "wazuh_get_agent", enabled: true },
+        get_rule_info: { mcp_tool: "wazuh_get_rule", enabled: true },
+      },
+      action_operations: {
+        block_ip: { mcp_tool: "wazuh_block_ip", enabled: false },
+        isolate_host: { mcp_tool: "wazuh_isolate_host", enabled: false },
+        kill_process: { mcp_tool: "wazuh_kill_process", enabled: false },
+      },
+    };
+    return toolmapConfig;
   }
+}
+
+// Resolve logical tool name to MCP tool name
+function resolveMcpTool(logicalName) {
+  if (!toolmapConfig) return logicalName;
+
+  // Check read operations
+  if (toolmapConfig.read_operations && toolmapConfig.read_operations[logicalName]) {
+    const tool = toolmapConfig.read_operations[logicalName];
+    if (typeof tool === 'object' && tool.mcp_tool) {
+      return tool.mcp_tool;
+    }
+  }
+
+  // Check action operations
+  if (toolmapConfig.action_operations && toolmapConfig.action_operations[logicalName]) {
+    const tool = toolmapConfig.action_operations[logicalName];
+    if (typeof tool === 'object' && tool.mcp_tool) {
+      return tool.mcp_tool;
+    }
+  }
+
+  return logicalName;
+}
+
+// Check if a tool is enabled
+function isToolEnabled(logicalName) {
+  if (!toolmapConfig) return true;
+
+  // Check read operations (default enabled)
+  if (toolmapConfig.read_operations && toolmapConfig.read_operations[logicalName]) {
+    const tool = toolmapConfig.read_operations[logicalName];
+    return typeof tool === 'object' ? tool.enabled !== false : true;
+  }
+
+  // Check action operations (default disabled)
+  if (toolmapConfig.action_operations && toolmapConfig.action_operations[logicalName]) {
+    const tool = toolmapConfig.action_operations[logicalName];
+    return typeof tool === 'object' ? tool.enabled === true : false;
+  }
+
+  return true;
 }
 
 async function callMcpTool(toolName, params, correlationId) {
@@ -461,9 +605,18 @@ async function callMcpTool(toolName, params, correlationId) {
     throw new Error("MCP_URL not configured");
   }
 
+  // Check if tool is enabled
+  if (!isToolEnabled(toolName)) {
+    incrementMetric("errors_total", { component: "mcp" });
+    throw new Error(`Tool '${toolName}' is disabled in toolmap configuration`);
+  }
+
+  // Resolve logical tool name to MCP tool name
+  const mcpToolName = resolveMcpTool(toolName);
+
   const requestHash = crypto
     .createHash("sha256")
-    .update(JSON.stringify({ toolName, params }))
+    .update(JSON.stringify({ toolName: mcpToolName, params }))
     .digest("hex")
     .substring(0, 16);
 
@@ -472,7 +625,7 @@ async function callMcpTool(toolName, params, correlationId) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), config.mcpTimeoutMs);
 
-    const response = await fetch(`${config.mcpUrl}/tools/${toolName}`, {
+    const response = await fetch(`${config.mcpUrl}/tools/${mcpToolName}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -817,6 +970,175 @@ function createServer() {
         return;
       }
 
+      // =================================================================
+      // ALERT INGESTION ENDPOINT - Core autonomous triage
+      // =================================================================
+      if (url.pathname === "/api/alerts" && req.method === "POST") {
+        const triageStart = Date.now();
+
+        // Require authorization for alert ingestion
+        const authResult = validateAuthorization(req, "write");
+        if (!authResult.valid) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: authResult.reason }));
+          return;
+        }
+
+        const alert = await parseJsonBody(req);
+
+        // Validate alert has minimum required fields
+        if (!alert.alert_id && !alert._id && !alert.id) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Alert must have alert_id, _id, or id field" }));
+          return;
+        }
+
+        // Generate case ID from alert
+        const alertId = alert.alert_id || alert._id || alert.id;
+        const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
+        const caseId = `CASE-${timestamp}-${alertId.toString().substring(0, 8)}`;
+
+        // Extract entities from alert (basic triage)
+        const entities = [];
+
+        // Extract IPs
+        const ipFields = ['srcip', 'dstip', 'src_ip', 'dst_ip'];
+        for (const field of ipFields) {
+          const ip = alert.data?.[field] || alert[field];
+          if (ip && /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+            entities.push({
+              type: 'ip',
+              value: ip,
+              role: field.includes('src') ? 'source' : 'destination',
+              extracted_from: `data.${field}`,
+            });
+          }
+        }
+
+        // Extract users
+        const userFields = ['srcuser', 'dstuser', 'user'];
+        for (const field of userFields) {
+          const user = alert.data?.[field] || alert[field];
+          if (user && typeof user === 'string' && user.length > 0) {
+            entities.push({
+              type: 'user',
+              value: user,
+              role: field === 'srcuser' ? 'actor' : 'target',
+              extracted_from: `data.${field}`,
+            });
+          }
+        }
+
+        // Extract host/agent info
+        if (alert.agent?.name) {
+          entities.push({
+            type: 'host',
+            value: alert.agent.name,
+            role: 'victim',
+            agent_id: alert.agent.id,
+            agent_ip: alert.agent.ip,
+          });
+        }
+
+        // Determine severity from rule level
+        let severity = 'medium';
+        const ruleLevel = alert.rule?.level || alert.level || 0;
+        if (ruleLevel >= 13) severity = 'critical';
+        else if (ruleLevel >= 10) severity = 'high';
+        else if (ruleLevel >= 7) severity = 'medium';
+        else if (ruleLevel >= 4) severity = 'low';
+        else severity = 'informational';
+
+        // Build timeline entry
+        const timeline = [{
+          timestamp: alert.timestamp || new Date().toISOString(),
+          event_type: 'alert_received',
+          description: alert.rule?.description || 'Alert received',
+          source: 'wazuh',
+          raw_data: {
+            rule_id: alert.rule?.id,
+            rule_level: ruleLevel,
+            agent_id: alert.agent?.id,
+          },
+        }];
+
+        // Extract MITRE ATT&CK mappings
+        const mitre = [];
+        if (alert.rule?.mitre) {
+          const mitreData = alert.rule.mitre;
+          if (Array.isArray(mitreData.id)) {
+            for (let i = 0; i < mitreData.id.length; i++) {
+              mitre.push({
+                technique_id: mitreData.id[i],
+                tactic: mitreData.tactic?.[i] || 'unknown',
+                technique: mitreData.technique?.[i] || 'unknown',
+              });
+            }
+          } else if (mitreData.id) {
+            mitre.push({
+              technique_id: mitreData.id,
+              tactic: mitreData.tactic || 'unknown',
+              technique: mitreData.technique || 'unknown',
+            });
+          }
+        }
+
+        // Create the case with triage data
+        const caseData = {
+          title: `[${severity.toUpperCase()}] ${alert.rule?.description || 'Security Alert'} on ${alert.agent?.name || 'Unknown Host'}`,
+          summary: `Automated triage of Wazuh alert. Rule: ${alert.rule?.id || 'N/A'}, Level: ${ruleLevel}, Agent: ${alert.agent?.name || 'N/A'}`,
+          severity,
+          confidence: ruleLevel >= 10 ? 0.8 : ruleLevel >= 7 ? 0.6 : 0.4,
+          entities,
+          timeline,
+          mitre,
+          evidence_refs: [{
+            type: 'wazuh_alert',
+            ref_id: alertId,
+            timestamp: alert.timestamp || new Date().toISOString(),
+          }],
+        };
+
+        // Check if case already exists (idempotency)
+        let existingCase = null;
+        try {
+          existingCase = await getCase(caseId);
+        } catch (e) {
+          // Case doesn't exist, which is expected
+        }
+
+        let result;
+        if (existingCase) {
+          // Update existing case with new evidence
+          result = await updateCase(caseId, {
+            entities: caseData.entities,
+            timeline: caseData.timeline,
+            evidence_refs: caseData.evidence_refs,
+          });
+          log("info", "triage", "Updated existing case with new alert", { case_id: caseId, alert_id: alertId });
+        } else {
+          // Create new case
+          result = await createCase(caseId, caseData);
+          log("info", "triage", "Created new case from alert", { case_id: caseId, alert_id: alertId, severity });
+        }
+
+        // Record metrics
+        incrementMetric("alerts_ingested_total");
+        const triageLatency = (Date.now() - triageStart) / 1000;
+        recordLatency("triage_latency_seconds", triageLatency);
+
+        res.writeHead(existingCase ? 200 : 201, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          case_id: caseId,
+          status: existingCase ? 'updated' : 'created',
+          severity,
+          entities_extracted: entities.length,
+          mitre_mappings: mitre.length,
+          triage_latency_ms: Math.round(triageLatency * 1000),
+        }));
+        return;
+      }
+
       // 404 for unknown routes
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Not found" }));
@@ -897,7 +1219,7 @@ async function validateStartup() {
     const policyContent = await fs.readFile(policyPath, "utf8");
 
     // Simple placeholder check (in production, parse YAML properly)
-    const placeholderMatches = policyContent.match(/(YOUR_|USER_ID_|ADMIN_USER_ID|_CHANNEL_ID)/g);
+    const placeholderMatches = policyContent.match(/(<SLACK_[A-Z_]+>|YOUR_|USER_ID_|ADMIN_USER_ID|_CHANNEL_ID)/g);
     if (placeholderMatches && placeholderMatches.length > 0) {
       log("warn", "startup", "Policy contains placeholder values - configure before production use", {
         placeholders_found: placeholderMatches.length,
@@ -956,6 +1278,9 @@ module.exports = {
   validateApprovalToken,
   consumeApprovalToken,
   callMcpTool,
+  loadToolmap,
+  resolveMcpTool,
+  isToolEnabled,
   incrementMetric,
   recordLatency,
 };

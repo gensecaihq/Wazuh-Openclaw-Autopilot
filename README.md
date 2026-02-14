@@ -4,10 +4,10 @@
   <img src="https://img.shields.io/badge/OpenClaw-FF6B35?style=for-the-badge&logo=claw&logoColor=white" alt="OpenClaw"/>
 </p>
 
-<h1 align="center">Wazuh OpenClaw Autopilot <sup><img src="https://img.shields.io/badge/v2.0-blue?style=flat-square" alt="v2.0"/></sup></h1>
+<h1 align="center">Wazuh OpenClaw Autopilot</h1>
 
 <p align="center">
-  <b>Autonomous SOC Layer for Wazuh via OpenClaw Agents</b>
+  <b>SOC Automation Framework for Wazuh using OpenClaw Agents</b>
 </p>
 
 <p align="center">
@@ -17,60 +17,79 @@
   <a href="https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/issues">
     <img src="https://img.shields.io/github/issues/gensecaihq/Wazuh-Openclaw-Autopilot" alt="Issues">
   </a>
-  <a href="https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/stargazers">
-    <img src="https://img.shields.io/github/stars/gensecaihq/Wazuh-Openclaw-Autopilot" alt="Stars">
-  </a>
 </p>
 
 <p align="center">
+  <a href="#what-this-provides">What This Provides</a> •
   <a href="#quick-start">Quick Start</a> •
-  <a href="#features">Features</a> •
-  <a href="#deployment-scenarios">Deployment</a> •
   <a href="#architecture">Architecture</a> •
+  <a href="#configuration">Configuration</a> •
   <a href="#documentation">Documentation</a>
 </p>
 
 ---
 
-**Wazuh OpenClaw Autopilot** transforms Wazuh alerts into actionable, audit-ready security cases through intelligent automation. It provides an autonomous incident workflow layer that operates safely within your security policies.
+## What This Provides
+
+**Wazuh OpenClaw Autopilot** is a framework for building automated SOC workflows on top of Wazuh. It includes:
+
+| Component | Description |
+|-----------|-------------|
+| **Agent Configurations** | 7 pre-configured OpenClaw agent YAML files for triage, correlation, investigation, response planning, policy enforcement, execution, and reporting |
+| **Runtime Service** | Node.js service providing case/evidence management, approval tokens, metrics, and MCP client |
+| **Policy Framework** | Declarative YAML policies for access control, rate limits, and approval workflows |
+| **Toolmap** | MCP tool mappings for Wazuh operations (alerts, agents, active response) |
+| **Playbooks** | 7 response playbooks for common attack scenarios |
+| **Installer** | Multi-scenario installer supporting 9 deployment configurations |
+
+### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                       WAZUH OPENCLAW AUTOPILOT                              │
 │                                                                             │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
-│  │   Wazuh     │───▶│  MCP Server │───▶│  OpenClaw   │───▶│   Slack     │  │
-│  │   Manager   │    │             │    │   Agents    │    │  (Optional) │  │
+│  │   Wazuh     │───▶│  MCP Server │───▶│  OpenClaw   │───▶│   Runtime   │  │
+│  │   Manager   │    │  (External) │    │  (External) │    │   Service   │  │
 │  └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘  │
-│        │                   │                  │                  │         │
-│        │            ┌──────┴──────┐    ┌─────┴─────┐      ┌─────┴─────┐   │
-│        │            │  Tailscale  │    │  Evidence │      │ Approvals │   │
-│        │            │  (Secure)   │    │   Packs   │      │ & Reports │   │
-│        │            └─────────────┘    └───────────┘      └───────────┘   │
-│        │                                                                   │
-│        └──────────────────── Alerts ──────────────────────────────────────│
+│                            │                  │                  │         │
+│                     Wazuh API          Agent Configs       Cases/Evidence  │
+│                                                                             │
+│  External Dependencies:                                                     │
+│  • Wazuh MCP Server (github.com/gensecaihq/Wazuh-MCP-Server)               │
+│  • OpenClaw Framework (github.com/openclaw/openclaw)                        │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Features
+### Agent Workflow
 
-- **Case-First Approach** - Automatically creates structured security cases from alerts
-- **Safe Autonomy** - Read-only operations run automatically; actions require approval
-- **Evidence Packs** - Every case produces audit-ready, structured evidence bundles
-- **Tailscale-First Security** - Production deployments use Tailnet for zero-trust connectivity
-- **Policy-Driven** - All behavior controlled by declarative YAML policies
-- **Observable** - Prometheus metrics and structured JSON logs out of the box
-- **Flexible Deployment** - 9 deployment scenarios from single-server to Kubernetes
+The agent configurations define a complete SOC workflow:
 
-## How It Works
+```
+Wazuh Alert
+    │
+    ▼
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Triage    │────▶│ Correlation │────▶│Investigation│
+│   Agent     │     │    Agent    │     │    Agent    │
+└─────────────┘     └─────────────┘     └─────────────┘
+                                               │
+    ┌──────────────────────────────────────────┘
+    ▼
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Response   │────▶│   Policy    │────▶│  Responder  │
+│  Planner    │     │   Guard     │     │   Agent     │
+└─────────────┘     └─────────────┘     └─────────────┘
+                                               │
+                                        ┌──────┴──────┐
+                                        ▼             ▼
+                                   ┌─────────┐  ┌──────────┐
+                                   │Reporting│  │ Evidence │
+                                   │  Agent  │  │  Packs   │
+                                   └─────────┘  └──────────┘
+```
 
-1. **Auto-Triage** - New high/critical alerts are automatically analyzed, entities extracted, and cases created
-2. **Correlation** - Related alerts are clustered into timelines with blast radius assessment
-3. **Investigation** - Deep-dive analysis with process trees, network mapping, and user profiling
-4. **Response Planning** - Generates response plans with risk assessment (no automatic execution)
-5. **Policy Guard** - Evaluates all actions against configurable security policies
-6. **Approval Workflow** - Risky actions require human approval via Slack
-7. **Execution & Verification** - Approved actions are executed with verification and rollback capability
+---
 
 ## Quick Start
 
@@ -78,9 +97,11 @@
 
 | Requirement | Description |
 |-------------|-------------|
-| **Ubuntu** | 22.04 or 24.04 LTS (other Linux supported) |
-| **Wazuh** | Installed and running ([wazuh.com](https://wazuh.com)) |
-| **Wazuh MCP Server** | Deployed and accessible ([gensecaihq/Wazuh-MCP-Server](https://github.com/gensecaihq/Wazuh-MCP-Server)) |
+| **Ubuntu 22.04/24.04** | Or compatible Linux distribution |
+| **Node.js 18+** | For runtime service |
+| **Wazuh Manager** | Installed and running |
+| **Wazuh MCP Server** | [gensecaihq/Wazuh-MCP-Server](https://github.com/gensecaihq/Wazuh-MCP-Server) deployed |
+| **OpenClaw** | [openclaw/openclaw](https://github.com/openclaw/openclaw) for agent orchestration |
 
 ### Installation
 
@@ -89,152 +110,233 @@
 git clone https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot.git
 cd Wazuh-Openclaw-Autopilot
 
-# Interactive installation (recommended)
+# Interactive installation
 sudo ./install/install.sh
 
-# Or specify a mode directly:
-sudo ./install/install.sh --mode all-in-one
+# Or choose a specific mode:
+sudo ./install/install.sh --mode all-in-one      # Everything on one server
+sudo ./install/install.sh --mode agent-pack      # Just agent configs
+sudo ./install/install.sh --mode docker          # Generate Docker Compose
 ```
 
 ### Configuration
 
+After installation, configure the environment:
+
 ```bash
-# Edit configuration
 sudo nano /etc/wazuh-autopilot/.env
-
-# Required settings:
-MCP_URL=https://your-mcp.tailnet.ts.net:8080
-AUTOPILOT_MCP_AUTH=your-token
-
-# Verify installation
-sudo ./install/install.sh --mode doctor
 ```
+
+**Required settings:**
+```bash
+# MCP Server connection
+MCP_URL=https://<your-mcp-server>:8080
+AUTOPILOT_MCP_AUTH=<your-mcp-token>
+
+# Slack integration (optional but recommended)
+SLACK_APP_TOKEN=xapp-1-<your-app-token>
+SLACK_BOT_TOKEN=xoxb-<your-bot-token>
+```
+
+**Configure Slack IDs in policy:**
+```bash
+sudo nano /etc/wazuh-autopilot/policies/policy.yaml
+```
+
+Replace all placeholder values:
+- `<SLACK_WORKSPACE_ID>` - Your Slack workspace ID
+- `<SLACK_CHANNEL_ALERTS>` - Channel ID for alerts
+- `<SLACK_CHANNEL_APPROVALS>` - Channel ID for approvals
+- `<SLACK_USER_*>` - Slack user IDs for approvers
 
 ### Start the Service
 
 ```bash
+# Start runtime service
 sudo systemctl start wazuh-autopilot
 sudo systemctl enable wazuh-autopilot
 
-# Check status
-sudo systemctl status wazuh-autopilot
+# Verify
+curl http://127.0.0.1:9090/health
 ```
+
+---
 
 ## Deployment Scenarios
 
-The installer supports 9 deployment scenarios for any infrastructure:
-
-| Scenario | Use Case | Command |
-|----------|----------|---------|
-| **All-in-One** | Dev/Test, small deployments | `--mode all-in-one` |
-| **OpenClaw + Runtime** | MCP on different server | `--mode openclaw-runtime` |
-| **Runtime Only** | OpenClaw also elsewhere | `--mode runtime-only` |
-| **Agent Pack (Local)** | Existing local OpenClaw | `--mode agent-pack` |
-| **Agent Pack (Remote)** | Existing remote OpenClaw | `--mode remote-openclaw` |
-| **Docker Compose** | Containerized deployment | `--mode docker` |
-| **Kubernetes** | Cloud-native deployment | `--mode kubernetes` |
+| Scenario | Description | Command |
+|----------|-------------|---------|
+| **All-in-One** | Single server deployment | `--mode all-in-one` |
+| **OpenClaw + Runtime** | MCP on remote server | `--mode openclaw-runtime` |
+| **Runtime Only** | OpenClaw elsewhere | `--mode runtime-only` |
+| **Agent Pack** | Add to existing OpenClaw | `--mode agent-pack` |
+| **Remote OpenClaw** | Copy to remote server via SSH | `--mode remote-openclaw` |
+| **Docker Compose** | Generate docker-compose.yml | `--mode docker` |
+| **Kubernetes** | Generate K8s manifests | `--mode kubernetes` |
 | **Doctor** | Run diagnostics | `--mode doctor` |
-| **Cutover** | Transition to production | `--mode cutover` |
+| **Cutover** | Switch to production mode | `--mode cutover` |
 
-### Architecture Examples
+See [SCENARIOS.md](docs/SCENARIOS.md) for detailed deployment diagrams.
 
-**All-in-One (Single Server):**
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      SINGLE SERVER                          │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │
-│  │ Wazuh   │─▶│   MCP   │─▶│OpenClaw │─▶│ Runtime │       │
-│  │ Manager │  │ :8080   │  │ :3000   │  │ :9090   │       │
-│  └─────────┘  └─────────┘  └─────────┘  └─────────┘       │
-└─────────────────────────────────────────────────────────────┘
-```
+---
 
-**Distributed (MCP Remote):**
-```
-┌─────────────────────────┐      ┌─────────────────────────┐
-│      SERVER A           │      │      SERVER B           │
-│   (Security Data)       │      │   (AI Processing)       │
-│  ┌─────────┐            │      │            ┌─────────┐ │
-│  │ Wazuh   │            │      │            │OpenClaw │ │
-│  │ Manager │            │ HTTP │            └────┬────┘ │
-│  ├─────────┤            │      │            ┌────┴────┐ │
-│  │   MCP   │◀───────────│──────│────────────┤ Runtime │ │
-│  │ :8080   │            │      │            │ :9090   │ │
-│  └─────────┘            │      │            └─────────┘ │
-└─────────────────────────┘      └─────────────────────────┘
-```
+## Runtime Service
 
-See [SCENARIOS.md](docs/SCENARIOS.md) for detailed architecture diagrams.
+The runtime service provides:
 
-## Architecture
+### REST API
 
-### Agents
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check with version and uptime |
+| `/ready` | GET | Readiness probe |
+| `/metrics` | GET | Prometheus metrics |
+| `/api/cases` | GET | List all cases |
+| `/api/cases` | POST | Create new case |
+| `/api/cases/:id` | GET | Get case by ID |
+| `/api/cases/:id` | PUT | Update case |
+| `/api/alerts` | POST | Ingest alert and auto-create case |
 
-Wazuh OpenClaw Autopilot ships with 7 pre-configured [OpenClaw](https://github.com/openclaw/openclaw) agents:
+### Alert Ingestion
 
-| Agent | Role | Autonomy Level |
-|-------|------|----------------|
-| **Triage** | Alert analysis, entity extraction, case creation | Read-only (Full auto) |
-| **Correlation** | Clusters related alerts, builds timelines | Read-only (Full auto) |
-| **Investigation** | Deep-dive queries, process trees, enrichment | Read-only (Full auto) |
-| **Response Planner** | Generates response plans with risk assessment | Approval-gated |
-| **Policy Guard** | Constitutional enforcement of all actions | Approval-gated |
-| **Responder** | Executes approved actions with verification | Approval-gated (Disabled) |
-| **Reporting** | Daily digest, KPIs, executive summaries | Read-only (Scheduled) |
+Send Wazuh alerts directly to create cases:
 
-### Deployment Modes
-
-| Mode | Description | Status |
-|------|-------------|--------|
-| **Bootstrap** | MCP accessible via any URL, Tailscale optional | `READY (Bootstrap)` |
-| **Production** | MCP must be on Tailnet, Tailscale required | `READY (Production)` |
-
-### Integration Stack
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                    Your Infrastructure                        │
-├──────────────────────────────────────────────────────────────┤
-│  Wazuh Manager ──▶ Wazuh MCP Server ──▶ Wazuh Autopilot     │
-│       ▲                   ▲                    │              │
-│       │                   │                    ▼              │
-│   Agents/Logs        Tailscale           Slack/Metrics       │
-└──────────────────────────────────────────────────────────────┘
+```bash
+curl -X POST http://127.0.0.1:9090/api/alerts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "alert_id": "1234567890",
+    "rule": {
+      "id": "5712",
+      "level": 10,
+      "description": "SSH brute force attack"
+    },
+    "agent": {
+      "id": "001",
+      "name": "server-01",
+      "ip": "10.0.1.50"
+    },
+    "data": {
+      "srcip": "192.168.1.100"
+    }
+  }'
 ```
 
-**Related Projects:**
-- [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) - MCP interface for Wazuh
-- [OpenClaw](https://github.com/openclaw/openclaw) - Agent orchestration framework
+### Prometheus Metrics
+
+```prometheus
+autopilot_cases_created_total
+autopilot_cases_updated_total
+autopilot_alerts_ingested_total
+autopilot_mcp_tool_calls_total{tool,status}
+autopilot_approvals_requested_total
+autopilot_approvals_granted_total
+```
+
+---
+
+## Agent Configurations
+
+### Included Agents
+
+| Agent | File | Autonomy | Purpose |
+|-------|------|----------|---------|
+| **Triage** | `triage.agent.yaml` | Auto | Alert analysis, entity extraction, case creation |
+| **Correlation** | `correlation.agent.yaml` | Auto | Link related alerts, build timelines |
+| **Investigation** | `investigation.agent.yaml` | Auto | Deep analysis, process trees, enrichment |
+| **Response Planner** | `response-planner.agent.yaml` | Approval | Generate response plans with risk assessment |
+| **Policy Guard** | `policy-guard.agent.yaml` | Approval | Enforce policies, validate approvals |
+| **Responder** | `responder.agent.yaml` | Approval | Execute approved actions (disabled by default) |
+| **Reporting** | `reporting.agent.yaml` | Auto | Generate reports and KPIs |
+
+### Using with OpenClaw
+
+These YAML configurations are designed for the [OpenClaw](https://github.com/openclaw/openclaw) agent framework. To use them:
+
+1. Install OpenClaw following their documentation
+2. Copy agent configs to OpenClaw's agents directory:
+   ```bash
+   cp /etc/wazuh-autopilot/agents/*.yaml /opt/openclaw/agents/
+   ```
+3. Configure OpenClaw to connect to your MCP server
+4. Restart OpenClaw to load the agents
+
+See [AGENT_CONFIGURATION.md](docs/AGENT_CONFIGURATION.md) for customization options.
+
+---
+
+## Policy Configuration
+
+### Security Policies
+
+The `policy.yaml` file controls:
+
+- **Autonomy levels** - Which operations run automatically vs require approval
+- **Slack integration** - Workspace and channel allowlists
+- **Approver groups** - Who can approve which actions
+- **Action allowlists** - Enabled actions with risk levels
+- **Asset criticality** - Rules for production vs development systems
+- **Rate limits** - Per-action and global limits
+- **Idempotency** - Prevent duplicate actions
+
+### Required Configuration
+
+Before production use, you must configure:
+
+```yaml
+# Slack workspace (get from api.slack.com/methods/auth.test)
+workspace_allowlist:
+  - id: "<SLACK_WORKSPACE_ID>"
+
+# Slack channels (get channel ID from Slack)
+channels:
+  alerts:
+    allowlist:
+      - id: "<SLACK_CHANNEL_ALERTS>"
+  approvals:
+    allowlist:
+      - id: "<SLACK_CHANNEL_APPROVALS>"
+
+# Approver Slack user IDs
+approvers:
+  groups:
+    standard:
+      members:
+        - slack_id: "<SLACK_USER_ANALYST_1>"
+        - slack_id: "<SLACK_USER_ANALYST_2>"
+    elevated:
+      members:
+        - slack_id: "<SLACK_USER_SENIOR>"
+    admin:
+      members:
+        - slack_id: "<SLACK_USER_ADMIN>"
+```
+
+See [POLICY_AND_APPROVALS.md](docs/POLICY_AND_APPROVALS.md) for complete documentation.
+
+---
 
 ## Documentation
 
 ### Getting Started
-
-| Document | Description |
-|----------|-------------|
-| [QUICKSTART.md](docs/QUICKSTART.md) | Get running in 15 minutes |
-| [SCENARIOS.md](docs/SCENARIOS.md) | All deployment scenarios with diagrams |
-| [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) | Complete command-line reference |
+- [QUICKSTART.md](docs/QUICKSTART.md) - Get running in 15 minutes
+- [SCENARIOS.md](docs/SCENARIOS.md) - Deployment scenarios with diagrams
+- [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) - Command-line reference
 
 ### Configuration
-
-| Document | Description |
-|----------|-------------|
-| [AGENT_CONFIGURATION.md](docs/AGENT_CONFIGURATION.md) | Agent customization guide |
-| [POLICY_AND_APPROVALS.md](docs/POLICY_AND_APPROVALS.md) | Policy configuration guide |
-| [MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md) | MCP server setup and integration |
-| [SLACK_SOCKET_MODE.md](docs/SLACK_SOCKET_MODE.md) | Slack integration setup |
-| [TAILSCALE_MANDATORY.md](docs/TAILSCALE_MANDATORY.md) | Why and how to use Tailscale |
+- [AGENT_CONFIGURATION.md](docs/AGENT_CONFIGURATION.md) - Customize agent behavior
+- [POLICY_AND_APPROVALS.md](docs/POLICY_AND_APPROVALS.md) - Policy framework
+- [MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md) - MCP server setup
+- [SLACK_SOCKET_MODE.md](docs/SLACK_SOCKET_MODE.md) - Slack integration
+- [TAILSCALE_MANDATORY.md](docs/TAILSCALE_MANDATORY.md) - Zero-trust networking
 
 ### Reference
+- [RUNTIME_API.md](docs/RUNTIME_API.md) - REST API documentation
+- [EVIDENCE_PACK_SCHEMA.md](docs/EVIDENCE_PACK_SCHEMA.md) - Evidence pack structure
+- [OBSERVABILITY_EXPORT.md](docs/OBSERVABILITY_EXPORT.md) - Metrics and logging
+- [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) - Common issues
 
-| Document | Description |
-|----------|-------------|
-| [RUNTIME_API.md](docs/RUNTIME_API.md) | Runtime service REST API reference |
-| [EVIDENCE_PACK_SCHEMA.md](docs/EVIDENCE_PACK_SCHEMA.md) | Evidence pack data structure |
-| [OBSERVABILITY_EXPORT.md](docs/OBSERVABILITY_EXPORT.md) | Metrics and logging |
-| [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Common issues and solutions |
-| [SECURITY.md](SECURITY.md) | Security policy and vulnerability reporting |
+---
 
 ## Repository Structure
 
@@ -248,168 +350,65 @@ Wazuh-Openclaw-Autopilot/
 │   ├── policy-guard.agent.yaml
 │   ├── responder.agent.yaml
 │   └── reporting.agent.yaml
-├── policies/                  # Policy definitions
-│   ├── policy.yaml           # Security policies (source of truth)
-│   └── toolmap.yaml          # MCP tool name mapping
-├── playbooks/                 # Response playbooks (7 included)
-│   ├── bruteforce.md
-│   ├── ransomware.md
-│   ├── suspicious-powershell.md
-│   ├── data-exfil.md
-│   ├── vuln-spike.md
-│   ├── privilege-escalation.md
-│   └── lateral-movement.md
-├── install/                   # Installation scripts
-│   └── install.sh            # Universal installer (9 scenarios)
-├── runtime/                   # Runtime service
-│   └── autopilot-service/
-│       ├── index.js          # Main service
-│       └── index.test.js     # Test suite
+├── policies/
+│   ├── policy.yaml           # Security policies
+│   └── toolmap.yaml          # MCP tool mappings
+├── playbooks/                 # Response playbooks
+├── runtime/
+│   └── autopilot-service/    # Node.js runtime service
+├── install/
+│   └── install.sh            # Multi-scenario installer
 ├── docs/                      # Documentation
 └── README.md
 ```
 
-## Evidence Packs
-
-Every case produces a structured, audit-ready evidence pack:
-
-```json
-{
-  "schema_version": "1.0",
-  "case_id": "CASE-2024-001",
-  "title": "Brute Force Attack on SSH",
-  "severity": "high",
-  "confidence": 0.85,
-  "entities": [
-    {"type": "ip", "value": "192.168.1.100", "role": "attacker"},
-    {"type": "user", "value": "admin", "role": "target"},
-    {"type": "host", "value": "web-server-01", "role": "victim"}
-  ],
-  "timeline": [],
-  "mitre": [{"tactic": "Credential Access", "technique": "T1110"}],
-  "mcp_calls": [],
-  "plans": [],
-  "approvals": [],
-  "actions": []
-}
-```
-
-## Observability
-
-### Prometheus Metrics
-
-```prometheus
-# Cases
-autopilot_cases_created_total
-autopilot_cases_updated_total
-
-# Performance
-autopilot_triage_latency_seconds_bucket
-autopilot_mcp_tool_calls_total{tool,status}
-autopilot_mcp_tool_call_latency_seconds_bucket{tool}
-
-# Approvals
-autopilot_approvals_requested_total
-autopilot_approvals_granted_total
-autopilot_policy_denies_total{reason}
-
-# Errors
-autopilot_errors_total{component}
-```
-
-### Structured Logs
-
-All logs are JSON-formatted with correlation IDs:
-
-```json
-{
-  "ts": "2024-01-15T10:30:00.000Z",
-  "level": "info",
-  "component": "triage",
-  "msg": "Case created",
-  "correlation_id": "abc123",
-  "case_id": "CASE-2024-001",
-  "severity": "high"
-}
-```
+---
 
 ## Security Model
 
 | Control | Description |
 |---------|-------------|
-| **Read-only by default** | Agents cannot execute actions without explicit enablement |
-| **Approval-gated actions** | Response actions require human approval via Slack |
+| **Read-only by default** | Action agents disabled until explicitly enabled |
+| **Approval-gated** | Response actions require human approval |
 | **Policy enforcement** | All actions checked against declarative policies |
-| **Tailscale-first** | Production requires Tailnet connectivity |
-| **Input validation** | All user inputs validated to prevent injection |
-| **Authorization required** | Write API endpoints require authentication |
-| **No secrets in logs** | Structured logs automatically redact sensitive data |
-| **Localhost metrics** | Metrics endpoint bound to 127.0.0.1 by default |
-| **Memory protection** | Bounded data structures prevent resource exhaustion |
+| **Input validation** | All inputs validated to prevent injection |
+| **Authorization** | Write endpoints require authentication |
+| **Rate limiting** | Configurable per-action and global limits |
+| **Audit logging** | Structured JSON logs with correlation IDs |
+
+---
+
+## External Dependencies
+
+This framework requires:
+
+| Dependency | Purpose | Link |
+|------------|---------|------|
+| **Wazuh MCP Server** | Provides MCP interface to Wazuh | [gensecaihq/Wazuh-MCP-Server](https://github.com/gensecaihq/Wazuh-MCP-Server) |
+| **OpenClaw** | Agent orchestration framework | [openclaw/openclaw](https://github.com/openclaw/openclaw) |
+| **Tailscale** | Zero-trust networking (recommended) | [tailscale.com](https://tailscale.com) |
+
+---
 
 ## Contributing
 
-Contributions are welcome! Whether it's bug reports, feature requests, or pull requests.
-
-### Development Setup
+Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ```bash
-# Clone the repository
-git clone https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot.git
-cd Wazuh-Openclaw-Autopilot
-
 # Run tests
 cd runtime/autopilot-service
 npm test
-
-# Run diagnostics
-sudo ./install/install.sh --mode doctor
 ```
 
-### Submitting Changes
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## Roadmap
-
-- [x] Core agent pack (7 agents with full configurations)
-- [x] Evidence pack schema v1.0
-- [x] Slack Socket Mode integration
-- [x] Prometheus metrics export
-- [x] Bootstrap/Production deployment modes
-- [x] 9 deployment scenarios with interactive installer
-- [x] Comprehensive documentation suite
-- [x] Security hardening (input validation, auth, memory limits)
-- [ ] Teams/Discord integrations
-- [ ] S3/R2 evidence pack storage
-- [ ] OTEL tracing support
-- [ ] Web dashboard
+---
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- [Wazuh](https://wazuh.com/) - Open source security platform
-- [OpenClaw](https://github.com/openclaw/openclaw) - Agent orchestration framework
-- [Tailscale](https://tailscale.com/) - Zero-trust networking
-- [GenSecAI](https://github.com/gensecaihq) - Project maintainers
+MIT License - see [LICENSE](LICENSE) file.
 
 ---
 
 <p align="center">
-  <strong>Built with security in mind by <a href="https://github.com/gensecaihq">GenSecAI</a></strong>
-</p>
-
-<p align="center">
-  <a href="https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/issues">Report Bug</a>
-  ·
+  <a href="https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/issues">Report Bug</a> •
   <a href="https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/issues">Request Feature</a>
-  ·
-  <a href="https://github.com/gensecaihq/Wazuh-MCP-Server">Wazuh MCP Server</a>
 </p>

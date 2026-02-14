@@ -4,107 +4,96 @@ Get Wazuh OpenClaw Autopilot running in under 15 minutes.
 
 ## Prerequisites
 
-- **Ubuntu 22.04 or 24.04** (other Linux distros may work but are untested)
-- **Wazuh** installed and running (Autopilot does not install Wazuh)
-- **Wazuh MCP Server** deployed and accessible - [gensecaihq/Wazuh-MCP-Server](https://github.com/gensecaihq/Wazuh-MCP-Server)
+- **Ubuntu 22.04 or 24.04** (other Linux distros may work)
+- **Node.js 18+** for runtime service
+- **Wazuh Manager** installed and running
+- **Wazuh MCP Server** deployed - [gensecaihq/Wazuh-MCP-Server](https://github.com/gensecaihq/Wazuh-MCP-Server)
+- **OpenClaw** for agent orchestration - [openclaw/openclaw](https://github.com/openclaw/openclaw)
 - **Root access** for installation
 
-## Choose Your Scenario
-
-### Scenario 1: I have OpenClaw already installed
-
-You just need to install the Autopilot agent pack.
+## Step 1: Clone the Repository
 
 ```bash
-# Clone the repository
 git clone https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot.git
 cd Wazuh-Openclaw-Autopilot
+```
 
-# Install agent pack only
+## Step 2: Choose Your Installation Mode
+
+### Option A: All-in-One (Recommended for Testing)
+
+Everything on a single server including OpenClaw bootstrap:
+
+```bash
+sudo ./install/install.sh --mode all-in-one
+```
+
+### Option B: Agent Pack Only
+
+If you already have OpenClaw installed:
+
+```bash
 sudo ./install/install.sh --mode agent-pack
 ```
 
-### Scenario 2: I have MCP but no OpenClaw
+### Option C: Interactive Menu
 
-Autopilot will bootstrap [OpenClaw](https://github.com/openclaw/openclaw) for you.
+For guided installation:
 
 ```bash
-# Clone the repository
-git clone https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot.git
-cd Wazuh-Openclaw-Autopilot
-
-# Bootstrap OpenClaw and install agents
-sudo ./install/install.sh --mode bootstrap-openclaw
+sudo ./install/install.sh
 ```
 
-### Scenario 3: Fresh start (Wazuh only)
+## Step 3: Configure the Service
 
-Complete setup from scratch.
-
-```bash
-# Clone the repository
-git clone https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot.git
-cd Wazuh-Openclaw-Autopilot
-
-# Full installation
-sudo ./install/install.sh --mode fresh
-```
-
-## Configuration
-
-After installation, configure Autopilot:
+Edit the configuration file:
 
 ```bash
-# Edit configuration
 sudo nano /etc/wazuh-autopilot/.env
 ```
 
 **Required settings:**
 
 ```bash
-# MCP URL (use Tailnet URL for production)
-MCP_URL=https://your-mcp-server.tail12345.ts.net:8080
+# MCP Server Connection
+# Replace with your actual MCP server URL
+MCP_URL=https://your-mcp-server:8080
 
-# MCP Authentication
-AUTOPILOT_MCP_AUTH=your-mcp-token
+# MCP Authentication Token
+# Get this from your MCP server configuration
+AUTOPILOT_MCP_AUTH=your-mcp-auth-token
 ```
 
-**Optional Slack configuration:**
+**Optional Slack integration:**
 
 ```bash
-# Slack tokens (for notifications and approvals)
-SLACK_APP_TOKEN=xapp-1-...
-SLACK_BOT_TOKEN=xoxb-...
+# Slack tokens for notifications and approvals
+# Get these from your Slack app configuration
+# See: docs/SLACK_SOCKET_MODE.md
+SLACK_APP_TOKEN=xapp-1-your-app-token
+SLACK_BOT_TOKEN=xoxb-your-bot-token
 ```
 
-## Verify Installation
+## Step 4: Configure Slack Approvers (If Using Slack)
 
-Run the doctor to check everything is working:
+Edit the policy file to add your team's Slack IDs:
 
 ```bash
-./install/doctor.sh
+sudo nano /etc/wazuh-autopilot/policies/policy.yaml
 ```
 
-You should see:
+Replace the placeholder values:
+- `<SLACK_WORKSPACE_ID>` - Your Slack workspace ID
+- `<SLACK_CHANNEL_ALERTS>` - Channel ID for security alerts
+- `<SLACK_CHANNEL_APPROVALS>` - Channel ID for approval requests
+- `<SLACK_USER_*>` - Slack user IDs for your security team
 
-```
-  ╔═══════════════════════════════════════╗
-  ║     ✅ READY (Production)             ║
-  ╚═══════════════════════════════════════╝
-```
+See the comments in the file for instructions on finding these IDs.
 
-Or for bootstrap mode:
-
-```
-  ╔═══════════════════════════════════════╗
-  ║     ⚠️  READY (Bootstrap only)         ║
-  ╚═══════════════════════════════════════╝
-```
-
-## Start the Service
+## Step 5: Start the Service
 
 ```bash
-# Start Autopilot service
+# Start the runtime service
 sudo systemctl start wazuh-autopilot
 
 # Enable on boot
@@ -114,62 +103,95 @@ sudo systemctl enable wazuh-autopilot
 sudo systemctl status wazuh-autopilot
 ```
 
-## Test It Out
+## Step 6: Verify Installation
 
-### Test triage (if Slack is configured)
-
-In your Slack workspace:
-
-```
-/wazuh triage <alert_id>
-```
-
-### Check metrics
+### Check health endpoint:
 
 ```bash
-curl http://localhost:9090/metrics
+curl http://127.0.0.1:9090/health
 ```
 
-### View cases
+Expected response:
+```json
+{
+  "status": "healthy",
+  "version": "2.0.0",
+  "mode": "bootstrap"
+}
+```
+
+### Run diagnostics:
 
 ```bash
-ls /var/lib/wazuh-autopilot/cases/
+sudo ./install/install.sh --mode doctor
 ```
 
-## Next Steps
+## Step 7: Test Alert Ingestion
 
-1. **Configure policies** - Review and customize `policies/policy.yaml`
-2. **Set up Slack** - See [SLACK_SOCKET_MODE.md](SLACK_SOCKET_MODE.md)
-3. **Production mode** - See [TAILSCALE_MANDATORY.md](TAILSCALE_MANDATORY.md)
-4. **Review playbooks** - Understand the response workflows in `playbooks/`
+Send a test alert to verify triage works:
+
+```bash
+curl -X POST http://127.0.0.1:9090/api/alerts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "alert_id": "test-001",
+    "rule": {
+      "id": "5712",
+      "level": 10,
+      "description": "Test alert - SSH brute force"
+    },
+    "agent": {
+      "id": "001",
+      "name": "test-server",
+      "ip": "10.0.1.50"
+    },
+    "data": {
+      "srcip": "192.168.1.100"
+    }
+  }'
+```
+
+Expected response:
+```json
+{
+  "case_id": "CASE-20240115-test-001",
+  "status": "created",
+  "severity": "high",
+  "entities_extracted": 2
+}
+```
+
+### View the created case:
+
+```bash
+curl http://127.0.0.1:9090/api/cases
+```
+
+## What's Next?
+
+1. **Configure OpenClaw** - Load the agent configurations into your OpenClaw instance
+2. **Set up Slack** - See [SLACK_SOCKET_MODE.md](SLACK_SOCKET_MODE.md) for full integration
+3. **Production mode** - See [TAILSCALE_MANDATORY.md](TAILSCALE_MANDATORY.md) for zero-trust networking
+4. **Customize policies** - Review `policies/policy.yaml` for your environment
+5. **Review playbooks** - Understand response workflows in `playbooks/`
 
 ## Troubleshooting
-
-### Doctor shows "NOT READY"
-
-Run doctor and follow the remediation steps:
-
-```bash
-./install/doctor.sh
-```
 
 ### Service won't start
 
 Check logs:
-
 ```bash
 sudo journalctl -u wazuh-autopilot -f
 ```
 
 ### MCP connection fails
 
-1. Verify MCP URL is correct
-2. Check authentication token
-3. Ensure network connectivity (Tailscale if production mode)
+1. Verify MCP_URL is correct and reachable
+2. Check AUTOPILOT_MCP_AUTH token is valid
+3. Test connectivity: `curl -v https://your-mcp-server:8080/health`
+
+### Placeholder validation error
+
+If you see "Policy contains placeholder values", edit `/etc/wazuh-autopilot/policies/policy.yaml` and replace all `<PLACEHOLDER>` values with real configuration.
 
 See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more help.
-
-## Related Projects
-
-- [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) - MCP interface for Wazuh
-- [OpenClaw](https://github.com/openclaw/openclaw) - Agent orchestration framework

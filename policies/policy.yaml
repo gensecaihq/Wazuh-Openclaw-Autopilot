@@ -40,12 +40,18 @@ autonomy:
 # =============================================================================
 # SLACK WORKSPACE & CHANNEL ALLOWLISTS
 # =============================================================================
+# CONFIGURATION REQUIRED: Replace all <PLACEHOLDER> values before use
+#
+# How to find your Slack IDs:
+# - Workspace ID: Call https://api.slack.com/methods/auth.test or check your Slack URL
+# - Channel ID: Right-click channel > Copy link > ID is the last part (e.g., C01ABCD2EFG)
+# - User ID: Click user profile > More > Copy member ID
+# =============================================================================
 slack:
   # Allowed Slack workspaces (by workspace ID)
-  # Get your workspace ID from: https://api.slack.com/methods/auth.test
   workspace_allowlist:
-    - id: "YOUR_WORKSPACE_ID"
-      name: "Primary Security Team"
+    - id: "<SLACK_WORKSPACE_ID>"  # e.g., "T01ABCDEF"
+      name: "Security Team Workspace"
       enabled: true
 
   # Channel allowlists by purpose
@@ -53,35 +59,43 @@ slack:
     # Channels where alerts/case cards can be posted
     alerts:
       allowlist:
-        - id: "ALERTS_CHANNEL_ID"
+        - id: "<SLACK_CHANNEL_ALERTS>"  # e.g., "C01ABCD2EFG"
           name: "#security-alerts"
       deny_action: log_and_skip
 
     # Channels where approval requests can be posted
     approvals:
       allowlist:
-        - id: "APPROVALS_CHANNEL_ID"
+        - id: "<SLACK_CHANNEL_APPROVALS>"  # e.g., "C02BCDE3FGH"
           name: "#security-approvals"
       deny_action: log_and_skip
 
     # Channels where reports can be posted
     reports:
       allowlist:
-        - id: "REPORTS_CHANNEL_ID"
+        - id: "<SLACK_CHANNEL_REPORTS>"  # e.g., "C03CDEF4GHI"
           name: "#security-reports"
       deny_action: log_and_skip
 
     # Channels where commands can be issued
     commands:
       allowlist:
-        - id: "ALERTS_CHANNEL_ID"
+        - id: "<SLACK_CHANNEL_ALERTS>"  # Same as alerts channel
           name: "#security-alerts"
-        - id: "APPROVALS_CHANNEL_ID"
+        - id: "<SLACK_CHANNEL_APPROVALS>"  # Same as approvals channel
           name: "#security-approvals"
       deny_action: reject_with_message
 
 # =============================================================================
 # APPROVER AUTHORIZATION
+# =============================================================================
+# CONFIGURATION REQUIRED: Add your team members' Slack user IDs
+#
+# How to find Slack User IDs:
+# 1. Click on the user's profile in Slack
+# 2. Click "More" (three dots)
+# 3. Click "Copy member ID"
+# The ID looks like: U01ABCDEFGH
 # =============================================================================
 approvers:
   # Approver groups
@@ -89,9 +103,9 @@ approvers:
     # Standard approvers - can approve low/medium risk actions
     standard:
       members:
-        - slack_id: "USER_ID_1"
+        - slack_id: "<SLACK_USER_ANALYST_1>"  # e.g., "U01ABCDEFGH"
           name: "Security Analyst 1"
-        - slack_id: "USER_ID_2"
+        - slack_id: "<SLACK_USER_ANALYST_2>"  # e.g., "U02BCDEFGHI"
           name: "Security Analyst 2"
       can_approve:
         - block_ip
@@ -101,9 +115,9 @@ approvers:
     # Elevated approvers - can approve high risk actions
     elevated:
       members:
-        - slack_id: "SENIOR_USER_ID_1"
+        - slack_id: "<SLACK_USER_SENIOR>"  # e.g., "U03CDEFGHIJ"
           name: "Senior Security Engineer"
-        - slack_id: "MANAGER_USER_ID"
+        - slack_id: "<SLACK_USER_MANAGER>"  # e.g., "U04DEFGHIJK"
           name: "Security Manager"
       can_approve:
         - block_ip
@@ -117,7 +131,7 @@ approvers:
     # Admin approvers - can approve critical actions
     admin:
       members:
-        - slack_id: "ADMIN_USER_ID"
+        - slack_id: "<SLACK_USER_ADMIN>"  # e.g., "U05EFGHIJKL"
           name: "Security Director"
       can_approve:
         - block_ip
