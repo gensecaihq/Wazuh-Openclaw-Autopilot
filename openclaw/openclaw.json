@@ -4,6 +4,20 @@
   // =============================================================================
   // This file configures all 7 SOC automation agents for use with OpenClaw.
   // Copy to ~/.openclaw/openclaw.json after customizing.
+  //
+  // Supported LLM Providers (configure API keys in env section):
+  // - Anthropic (Claude): claude-sonnet-4-5, claude-opus-4-5, claude-haiku-4-5
+  // - OpenAI: gpt-4o, gpt-4.5-preview, o3-mini
+  // - Google: gemini-2.0-flash, gemini-2.0-pro
+  // - Groq: llama-3.3-70b, mixtral-8x7b-32768 (fast inference)
+  // - Mistral: mistral-large-latest, codestral-latest
+  // - xAI: grok-2, grok-3
+  // - Ollama: local models (llama3.3, mistral, etc.)
+  // - OpenRouter: 300+ models via single API
+  // - Together AI: open-source model hosting
+  // - Cerebras: ultra-fast inference
+  //
+  // Model format: "provider/model-name" (e.g., "anthropic/claude-sonnet-4-5")
   // =============================================================================
 
   "gateway": {
@@ -18,6 +32,119 @@
   },
 
   // =============================================================================
+  // MODEL PROVIDERS - Configure available LLM providers
+  // =============================================================================
+  // Built-in providers: anthropic, openai, google, groq, mistral, xai, ollama
+  // Set API keys in the env section below or via environment variables
+  // =============================================================================
+  "models": {
+    // Default model for all agents (can be overridden per-agent)
+    "default": "anthropic/claude-sonnet-4-5",
+
+    // Model allowlist - agents can only use models from this list
+    "allowlist": [
+      // Anthropic Claude (recommended for SOC tasks)
+      "anthropic/claude-opus-4-5",
+      "anthropic/claude-sonnet-4-5",
+      "anthropic/claude-haiku-4-5",
+
+      // OpenAI GPT
+      "openai/gpt-4o",
+      "openai/gpt-4.5-preview",
+      "openai/o3-mini",
+
+      // Google Gemini
+      "google/gemini-2.0-flash",
+      "google/gemini-2.0-pro",
+
+      // Groq (ultra-fast inference)
+      "groq/llama-3.3-70b-versatile",
+      "groq/mixtral-8x7b-32768",
+      "groq/llama-guard-3-8b",
+
+      // Mistral
+      "mistral/mistral-large-latest",
+      "mistral/codestral-latest",
+      "mistral/mistral-small-latest",
+
+      // xAI Grok
+      "xai/grok-2",
+      "xai/grok-3",
+
+      // Local models via Ollama
+      "ollama/llama3.3",
+      "ollama/mistral",
+      "ollama/codellama",
+
+      // OpenRouter (access 300+ models)
+      "openrouter/anthropic/claude-3.5-sonnet",
+      "openrouter/meta-llama/llama-3.3-70b-instruct"
+    ],
+
+    // Fallback chain - if primary fails, try next in order
+    "fallbackChain": [
+      "anthropic/claude-sonnet-4-5",
+      "openai/gpt-4o",
+      "groq/llama-3.3-70b-versatile",
+      "ollama/llama3.3"
+    ],
+
+    // Provider-specific settings
+    "providers": {
+      "anthropic": {
+        "enabled": true,
+        "apiKey": "${ANTHROPIC_API_KEY}",
+        "timeout": 120000
+      },
+      "openai": {
+        "enabled": true,
+        "apiKey": "${OPENAI_API_KEY}",
+        "timeout": 120000
+      },
+      "google": {
+        "enabled": false,
+        "apiKey": "${GOOGLE_API_KEY}",
+        "timeout": 120000
+      },
+      "groq": {
+        "enabled": false,
+        "apiKey": "${GROQ_API_KEY}",
+        "timeout": 30000
+      },
+      "mistral": {
+        "enabled": false,
+        "apiKey": "${MISTRAL_API_KEY}",
+        "timeout": 120000
+      },
+      "xai": {
+        "enabled": false,
+        "apiKey": "${XAI_API_KEY}",
+        "timeout": 120000
+      },
+      "ollama": {
+        "enabled": false,
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "timeout": 300000
+      },
+      "openrouter": {
+        "enabled": false,
+        "apiKey": "${OPENROUTER_API_KEY}",
+        "timeout": 120000
+      },
+      "together": {
+        "enabled": false,
+        "apiKey": "${TOGETHER_API_KEY}",
+        "timeout": 120000
+      },
+      "cerebras": {
+        "enabled": false,
+        "apiKey": "${CEREBRAS_API_KEY}",
+        "timeout": 30000
+      }
+    }
+  },
+
+  // =============================================================================
   // AGENT CONFIGURATION
   // =============================================================================
   "agents": {
@@ -26,8 +153,12 @@
       "agentDir": "~/.openclaw/wazuh-autopilot/agents",
 
       "model": {
+        // Primary model for complex reasoning tasks
         "primary": "anthropic/claude-sonnet-4-5",
-        "fallback": "anthropic/claude-haiku-4-5"
+        // Fallback for high availability
+        "fallback": "openai/gpt-4o",
+        // Fast model for simple tasks (heartbeats, quick checks)
+        "fast": "groq/llama-3.3-70b-versatile"
       },
 
       "sandbox": {
@@ -49,7 +180,9 @@
       "heartbeat": {
         "every": "30m",
         "target": "last",
+        // Use fast/cheap model for heartbeats
         "model": "anthropic/claude-haiku-4-5"
+        // Alternatives: "groq/llama-3.3-70b-versatile" (faster), "ollama/llama3.3" (free)
       },
 
       "memory": {
@@ -466,16 +599,51 @@
   // =============================================================================
   // ENVIRONMENT VARIABLES
   // =============================================================================
+  // Configure API keys for your preferred providers
+  // Only configure keys for providers you intend to use
+  // =============================================================================
   "env": {
+    // OpenClaw Gateway
     "OPENCLAW_TOKEN": "${OPENCLAW_TOKEN}",
-    "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
-    "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+
+    // Wazuh MCP Server
     "WAZUH_MCP_URL": "${MCP_URL}",
-    "WAZUH_MCP_TOKEN": "${AUTOPILOT_MCP_AUTH}"
+    "WAZUH_MCP_TOKEN": "${AUTOPILOT_MCP_AUTH}",
+
+    // ==========================================================================
+    // LLM Provider API Keys
+    // ==========================================================================
+
+    // Anthropic (Claude) - https://console.anthropic.com/
+    "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+
+    // OpenAI - https://platform.openai.com/api-keys
+    "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+
+    // Google AI (Gemini) - https://aistudio.google.com/app/apikey
+    "GOOGLE_API_KEY": "${GOOGLE_API_KEY}",
+
+    // Groq (fast inference) - https://console.groq.com/keys
+    "GROQ_API_KEY": "${GROQ_API_KEY}",
+
+    // Mistral - https://console.mistral.ai/api-keys
+    "MISTRAL_API_KEY": "${MISTRAL_API_KEY}",
+
+    // xAI (Grok) - https://console.x.ai/
+    "XAI_API_KEY": "${XAI_API_KEY}",
+
+    // OpenRouter (300+ models) - https://openrouter.ai/keys
+    "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
+
+    // Together AI - https://api.together.xyz/settings/api-keys
+    "TOGETHER_API_KEY": "${TOGETHER_API_KEY}",
+
+    // Cerebras - https://cloud.cerebras.ai/
+    "CEREBRAS_API_KEY": "${CEREBRAS_API_KEY}"
   },
 
   // =============================================================================
-  // PROVIDER CONFIGURATION
+  // DEFAULT PROVIDER (used when no specific provider configured)
   // =============================================================================
   "provider": {
     "type": "anthropic",

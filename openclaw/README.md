@@ -53,7 +53,51 @@ export ANTHROPIC_API_KEY="your-anthropic-key"
 export OPENAI_API_KEY="your-openai-key"  # For embeddings
 export MCP_URL="https://your-mcp-server:8080"
 export AUTOPILOT_MCP_AUTH="your-mcp-token"
+
+# Optional: Additional LLM providers
+export GROQ_API_KEY="your-groq-key"       # Fast inference
+export MISTRAL_API_KEY="your-mistral-key"
+export XAI_API_KEY="your-xai-key"         # Grok
+export GOOGLE_API_KEY="your-google-key"   # Gemini
 ```
+
+## Supported LLM Providers
+
+OpenClaw supports multiple LLM providers. Configure in `openclaw.json`:
+
+| Provider | Models | Use Case | API Key |
+|----------|--------|----------|---------|
+| [Anthropic](https://console.anthropic.com/) | `claude-opus-4-5`, `claude-sonnet-4-5`, `claude-haiku-4-5` | **Recommended** for SOC tasks | `ANTHROPIC_API_KEY` |
+| [OpenAI](https://platform.openai.com/) | `gpt-4o`, `gpt-4.5-preview`, `o3-mini` | General purpose, embeddings | `OPENAI_API_KEY` |
+| [Groq](https://console.groq.com/) | `llama-3.3-70b-versatile`, `mixtral-8x7b-32768` | **Ultra-fast** inference | `GROQ_API_KEY` |
+| [Google](https://aistudio.google.com/) | `gemini-2.0-flash`, `gemini-2.0-pro` | Multimodal | `GOOGLE_API_KEY` |
+| [Mistral](https://console.mistral.ai/) | `mistral-large-latest`, `codestral-latest` | European provider | `MISTRAL_API_KEY` |
+| [xAI](https://console.x.ai/) | `grok-2`, `grok-3` | Real-time knowledge | `XAI_API_KEY` |
+| [OpenRouter](https://openrouter.ai/) | 300+ models | Multi-provider access | `OPENROUTER_API_KEY` |
+| [Ollama](https://ollama.ai/) | `llama3.3`, `mistral`, `codellama` | **Local/free** inference | N/A |
+| [Together](https://together.xyz/) | Various open-source | Open-source hosting | `TOGETHER_API_KEY` |
+| [Cerebras](https://cerebras.ai/) | Cerebras models | Ultra-fast inference | `CEREBRAS_API_KEY` |
+
+### Model Configuration
+
+```json
+// In openclaw.json - model format: "provider/model-name"
+"model": {
+  "primary": "anthropic/claude-sonnet-4-5",
+  "fallback": "openai/gpt-4o",
+  "fast": "groq/llama-3.3-70b-versatile"
+}
+```
+
+### Cost Optimization
+
+| Task Type | Recommended Model | Reason |
+|-----------|-------------------|--------|
+| Complex investigation | `anthropic/claude-sonnet-4-5` | Best reasoning |
+| Simple triage | `groq/llama-3.3-70b-versatile` | Fast & cheap |
+| Heartbeats/checks | `anthropic/claude-haiku-4-5` | Low cost |
+| Local/air-gapped | `ollama/llama3.3` | No API calls |
+| Fallback | `openai/gpt-4o` | High availability |
 
 ### 3. Copy Configuration
 
