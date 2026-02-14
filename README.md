@@ -43,7 +43,7 @@
 | **7 SOC Agents** | Triage, Correlation, Investigation, Response Planning, Policy Guard, Responder, Reporting |
 | **Human-in-the-Loop** | Two-tier approval: human must Approve AND Execute every response action |
 | **No Autonomous Execution** | AI agents propose actions; humans always make the final decision |
-| **Slack Integration** | Interactive buttons for approvals in Slack |
+| **Slack Socket Mode** | Outbound-only connection to Slack (no inbound ports needed) |
 | **Zero-Trust Networking** | Tailscale mandatory for all inter-component communication |
 | **Credential Isolation** | Secrets stored in isolated directory with 600 permissions |
 
@@ -222,11 +222,13 @@ This separation prevents accidental execution - a human must consciously make tw
 │                   │ Tailscale VPN (encrypted)                      │
 │                   ▼                                                │
 │  ┌─────────────────────────────────────────────────────────────┐  │
-│  │                      SLACK                                   │  │
-│  │  #security-alerts    #security-approvals                     │  │
+│  │                      SLACK (Socket Mode)                     │  │
 │  │                                                              │  │
-│  │  Human reviews and clicks:                                   │  │
-│  │  [Approve]  then  [Execute]  or  [Reject]                    │  │
+│  │  Connection: OUTBOUND only (no inbound ports needed)         │  │
+│  │  Runtime ──outbound──▶ Slack WebSocket ◀──messages──         │  │
+│  │                                                              │  │
+│  │  #security-alerts    #security-approvals                     │  │
+│  │  Human clicks: [Approve] then [Execute] or [Reject]          │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -505,6 +507,13 @@ The installer configures UFW/firewalld to:
 - Block gateway port (18789) from public interfaces
 - Block MCP port (8080) from public interfaces
 - Allow Tailscale traffic
+
+### How does Slack work if nothing is exposed?
+Slack uses **Socket Mode** - an outbound-only WebSocket connection:
+1. Runtime Service connects **OUT** to Slack's servers
+2. Slack sends messages back through that same connection
+3. No inbound ports needed, no webhooks, no public URLs
+4. Works behind firewalls and NAT
 
 ---
 

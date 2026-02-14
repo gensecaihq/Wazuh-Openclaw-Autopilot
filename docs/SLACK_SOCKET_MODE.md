@@ -2,12 +2,37 @@
 
 Wazuh Autopilot uses Slack's Socket Mode for secure, bidirectional communication without requiring public endpoints.
 
+## How Socket Mode Works
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                                                                 │
+│   YOUR SERVER                          SLACK SERVERS            │
+│   (localhost)                                                   │
+│                                                                 │
+│   ┌─────────────────┐                  ┌─────────────────┐     │
+│   │ Runtime Service │ ══ OUTBOUND ════▶│ Slack WebSocket │     │
+│   │ localhost:9090  │     connection   │ wss://wss-...   │     │
+│   └─────────────────┘ ◀═══ messages ═══┘                 │     │
+│                           (same socket)                        │
+│                                                                 │
+│   ✓ NO inbound ports open                                      │
+│   ✓ NO public webhook URLs                                     │
+│   ✓ Works behind NAT/firewall                                  │
+│   ✓ Gateway stays on localhost                                 │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key Point:** Your server initiates an OUTBOUND WebSocket connection to Slack. All messages flow through this connection. No inbound access to your server is ever needed.
+
 ## Why Socket Mode?
 
 - **No public URLs required** - Outbound connections only
 - **Real-time interaction** - Instant message delivery
 - **Secure by design** - No inbound firewall rules needed
 - **Approval workflows** - Interactive buttons for approve/deny
+- **Works with localhost binding** - Gateway never needs to be exposed
 
 ## Setup Overview
 
