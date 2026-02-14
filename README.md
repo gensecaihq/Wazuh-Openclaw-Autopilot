@@ -139,6 +139,45 @@ Alert Ingestion ──▶ Triage ──▶ Correlation ──▶ Investigation
 
 ---
 
+## Supported LLM Providers
+
+OpenClaw is model-agnostic and supports 10+ LLM providers. Configure your preferred provider in `openclaw/openclaw.json`:
+
+| Provider | Models | Best For | API Key Env |
+|----------|--------|----------|-------------|
+| [Anthropic](https://console.anthropic.com/) | `claude-opus-4-5`, `claude-sonnet-4-5`, `claude-haiku-4-5` | **Recommended** for SOC reasoning | `ANTHROPIC_API_KEY` |
+| [OpenAI](https://platform.openai.com/) | `gpt-4o`, `gpt-4.5-preview`, `o3-mini` | General purpose, embeddings | `OPENAI_API_KEY` |
+| [Groq](https://console.groq.com/) | `llama-3.3-70b-versatile`, `mixtral-8x7b-32768` | **Ultra-fast** inference | `GROQ_API_KEY` |
+| [Google](https://aistudio.google.com/) | `gemini-2.0-flash`, `gemini-2.0-pro` | Multimodal capabilities | `GOOGLE_API_KEY` |
+| [Mistral](https://console.mistral.ai/) | `mistral-large-latest`, `codestral-latest` | European provider | `MISTRAL_API_KEY` |
+| [xAI](https://console.x.ai/) | `grok-2`, `grok-3` | Real-time knowledge | `XAI_API_KEY` |
+| [OpenRouter](https://openrouter.ai/) | 300+ models | Multi-provider gateway | `OPENROUTER_API_KEY` |
+| [Ollama](https://ollama.ai/) | `llama3.3`, `mistral`, `codellama` | **Local/free** inference | N/A |
+| [Together](https://together.xyz/) | Various open-source | Open-source hosting | `TOGETHER_API_KEY` |
+| [Cerebras](https://cerebras.ai/) | Cerebras models | Ultra-fast inference | `CEREBRAS_API_KEY` |
+
+### Model Configuration
+
+```json
+// Model format: "provider/model-name"
+"model": {
+  "primary": "anthropic/claude-sonnet-4-5",
+  "fallback": "openai/gpt-4o",
+  "fast": "groq/llama-3.3-70b-versatile"
+}
+```
+
+### Cost Optimization
+
+| Task Type | Recommended Model | Reason |
+|-----------|-------------------|--------|
+| Complex investigation | `anthropic/claude-sonnet-4-5` | Best reasoning |
+| High-volume triage | `groq/llama-3.3-70b-versatile` | Fast & cost-effective |
+| Heartbeats/checks | `anthropic/claude-haiku-4-5` | Low cost |
+| Air-gapped deployment | `ollama/llama3.3` | No external API calls |
+
+---
+
 ## Human-in-the-Loop Approval
 
 Every response action requires explicit human authorization through a two-tier workflow:
@@ -170,7 +209,7 @@ Every response action requires explicit human authorization through a two-tier w
 | [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) | MCP bridge for Wazuh API access |
 | [OpenClaw](https://github.com/openclaw/openclaw) | AI agent framework ([docs](https://openclaw.ai)) |
 | Node.js 18+ | Runtime for autopilot service |
-| Anthropic API Key | For Claude-powered agents |
+| LLM API Key | Claude, GPT, Groq, Mistral, or other supported provider |
 
 ### Installation
 
@@ -193,15 +232,36 @@ The installer will guide you through:
 # Edit configuration
 sudo nano /etc/wazuh-autopilot/.env
 
-# Required
-ANTHROPIC_API_KEY=sk-ant-...
+# Required: Wazuh connection
 WAZUH_API_URL=https://localhost:55000
 WAZUH_API_USER=wazuh-wui
 WAZUH_API_PASSWORD=...
 
-# Optional: Slack
+# Required: At least one LLM provider
+ANTHROPIC_API_KEY=sk-ant-...           # Claude (recommended)
+OPENAI_API_KEY=sk-...                  # GPT-4o (also used for embeddings)
+
+# Optional: Additional providers for fallback/cost optimization
+GROQ_API_KEY=gsk-...                   # Fast inference
+MISTRAL_API_KEY=...                    # European provider
+XAI_API_KEY=...                        # Grok
+GOOGLE_API_KEY=...                     # Gemini
+
+# Optional: Slack integration
 SLACK_APP_TOKEN=xapp-...
 SLACK_BOT_TOKEN=xoxb-...
+```
+
+### Docker Deployment
+
+```bash
+# Using Docker Compose
+docker-compose up -d
+
+# Or build manually
+cd runtime/autopilot-service
+docker build -t wazuh-autopilot .
+docker run -d -p 9090:9090 --env-file .env wazuh-autopilot
 ```
 
 ### Verify Installation
@@ -340,20 +400,36 @@ Features:
 ## Project Structure
 
 ```
+├── .github/workflows/          # CI/CD pipeline
+├── docker-compose.yml          # Container orchestration
 ├── install/
-│   └── install.sh              # Security-hardened installer
+│   ├── install.sh              # Security-hardened installer
+│   └── env.template            # Environment template
 ├── openclaw/
-│   ├── openclaw.json           # Gateway configuration
-│   └── agents/                 # Agent system prompts
-├── runtime/
-│   └── autopilot-service/      # Node.js runtime
-│       ├── index.js            # Main service
-│       └── slack.js            # Slack integration
+│   ├── openclaw.json           # Gateway & model configuration
+│   └── agents/                 # Agent system prompts (7 agents)
+├── runtime/autopilot-service/
+│   ├── Dockerfile              # Production container
+│   ├── index.js                # Main service (2000+ LOC)
+│   ├── slack.js                # Slack Socket Mode integration
+│   └── index.test.js           # Unit tests (28 tests)
 ├── policies/
-│   ├── policy.yaml             # Security policies
+│   ├── policy.yaml             # Security policies & approvers
 │   └── toolmap.yaml            # MCP tool mappings
+├── playbooks/                  # Incident response playbooks
 └── docs/                       # Documentation
 ```
+
+---
+
+## Deployment Options
+
+| Method | Use Case | Command |
+|--------|----------|---------|
+| **Docker Compose** | Production | `docker-compose up -d` |
+| **Docker** | Single container | `docker run -d wazuh-autopilot` |
+| **Systemd** | Native Linux | `sudo ./install/install.sh` |
+| **Manual** | Development | `cd runtime/autopilot-service && npm start` |
 
 ---
 
@@ -366,6 +442,7 @@ Features:
 | [RUNTIME_API.md](docs/RUNTIME_API.md) | API reference |
 | [POLICY_AND_APPROVALS.md](docs/POLICY_AND_APPROVALS.md) | Policy configuration |
 | [EVIDENCE_PACK_SCHEMA.md](docs/EVIDENCE_PACK_SCHEMA.md) | Evidence pack format |
+| [CHANGELOG.md](CHANGELOG.md) | Version history |
 
 ---
 
