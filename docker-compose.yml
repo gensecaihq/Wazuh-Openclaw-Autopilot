@@ -1,0 +1,104 @@
+# =============================================================================
+# Wazuh OpenClaw Autopilot - Docker Compose Configuration
+# =============================================================================
+# Development and production deployment configuration
+# =============================================================================
+
+version: "3.8"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Autopilot Runtime Service
+  # ---------------------------------------------------------------------------
+  autopilot:
+    build:
+      context: ./runtime/autopilot-service
+      dockerfile: Dockerfile
+    container_name: wazuh-autopilot
+    restart: unless-stopped
+
+    # Security: Read-only root filesystem
+    read_only: true
+
+    # Security: Drop all capabilities
+    cap_drop:
+      - ALL
+
+    # Security: No privilege escalation
+    security_opt:
+      - no-new-privileges:true
+
+    ports:
+      - "127.0.0.1:9090:9090"
+
+    environment:
+      # Core Configuration
+      - AUTOPILOT_MODE=${AUTOPILOT_MODE:-production}
+      - AUTOPILOT_RESPONDER_ENABLED=${AUTOPILOT_RESPONDER_ENABLED:-false}
+
+      # MCP Configuration
+      - MCP_URL=${MCP_URL}
+      - AUTOPILOT_MCP_AUTH=${AUTOPILOT_MCP_AUTH}
+
+      # Metrics
+      - METRICS_ENABLED=true
+      - METRICS_PORT=9090
+      - METRICS_HOST=0.0.0.0
+
+      # Logging
+      - LOG_FORMAT=json
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+
+      # Slack (Optional)
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - SLACK_ALERTS_CHANNEL=${SLACK_ALERTS_CHANNEL:-}
+      - SLACK_APPROVALS_CHANNEL=${SLACK_APPROVALS_CHANNEL:-}
+      - SLACK_REPORTS_CHANNEL=${SLACK_REPORTS_CHANNEL:-}
+
+      # Security
+      - AUTOPILOT_REQUIRE_TAILSCALE=${AUTOPILOT_REQUIRE_TAILSCALE:-false}
+
+    volumes:
+      # Persistent data
+      - autopilot-data:/var/lib/wazuh-autopilot
+
+      # Configuration (read-only)
+      - ./policies:/etc/wazuh-autopilot/policies:ro
+
+      # Temp filesystem for runtime
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 100M
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks:
+      - autopilot-net
+
+# -----------------------------------------------------------------------------
+# Networks
+# -----------------------------------------------------------------------------
+networks:
+  autopilot-net:
+    driver: bridge
+    internal: false
+
+# -----------------------------------------------------------------------------
+# Volumes
+# -----------------------------------------------------------------------------
+volumes:
+  autopilot-data:
+    driver: local

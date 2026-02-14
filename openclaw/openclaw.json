@@ -139,7 +139,7 @@
         "agentDir": "~/.openclaw/wazuh-autopilot/agents/investigation/state",
 
         "model": {
-          "primary": "anthropic/claude-opus-4-6"
+          "primary": "anthropic/claude-sonnet-4-5"
         },
 
         "tools": {

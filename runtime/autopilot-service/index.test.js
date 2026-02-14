@@ -23,6 +23,13 @@ const {
   consumeApprovalToken,
   incrementMetric,
   recordLatency,
+  createResponsePlan,
+  getPlan,
+  listPlans,
+  approvePlan,
+  rejectPlan,
+  getResponderStatus,
+  PLAN_STATES,
 } = require("./index.js");
 
 describe("Evidence Pack Management", () => {
@@ -214,6 +221,166 @@ describe("Edge Cases", () => {
     });
 
     assert.strictEqual(updated.entities.length, 2);
+  });
+});
+
+describe("Response Plans - Two-Tier Approval", () => {
+  it("should create a response plan in proposed state", () => {
+    const plan = createResponsePlan({
+      case_id: "CASE-TEST-PLAN-001",
+      title: "Block malicious IP",
+      description: "Block IP performing brute force attack",
+      risk_level: "low",
+      actions: [
+        { type: "block_ip", target: "192.168.1.100", params: { duration: "24h" } },
+      ],
+    });
+
+    assert.ok(plan.plan_id);
+    assert.strictEqual(plan.state, PLAN_STATES.PROPOSED);
+    assert.strictEqual(plan.case_id, "CASE-TEST-PLAN-001");
+    assert.strictEqual(plan.risk_level, "low");
+    assert.strictEqual(plan.actions.length, 1);
+    assert.ok(plan.expires_at);
+  });
+
+  it("should get a plan by ID", () => {
+    const created = createResponsePlan({
+      case_id: "CASE-TEST-PLAN-002",
+      title: "Test Plan",
+      actions: [{ type: "block_ip", target: "10.0.0.1" }],
+    });
+
+    const retrieved = getPlan(created.plan_id);
+
+    assert.strictEqual(retrieved.plan_id, created.plan_id);
+    assert.strictEqual(retrieved.title, "Test Plan");
+  });
+
+  it("should throw error for non-existent plan", () => {
+    assert.throws(
+      () => getPlan("PLAN-NONEXISTENT"),
+      /Plan not found/
+    );
+  });
+
+  it("should list plans with filters", () => {
+    createResponsePlan({
+      case_id: "CASE-LIST-001",
+      title: "Plan A",
+      actions: [{ type: "block_ip", target: "1.1.1.1" }],
+    });
+    createResponsePlan({
+      case_id: "CASE-LIST-001",
+      title: "Plan B",
+      actions: [{ type: "block_ip", target: "2.2.2.2" }],
+    });
+
+    const allPlans = listPlans({});
+    assert.ok(allPlans.length >= 2);
+
+    const caseFiltered = listPlans({ case_id: "CASE-LIST-001" });
+    assert.ok(caseFiltered.length >= 2);
+
+    const proposedPlans = listPlans({ state: "proposed" });
+    assert.ok(proposedPlans.length >= 2);
+  });
+
+  it("should approve a plan (Tier 1)", () => {
+    const plan = createResponsePlan({
+      case_id: "CASE-APPROVE-001",
+      title: "Approve Test",
+      actions: [{ type: "block_ip", target: "3.3.3.3" }],
+    });
+
+    const approved = approvePlan(plan.plan_id, "USER-APPROVER-001", "Looks correct");
+
+    assert.strictEqual(approved.state, PLAN_STATES.APPROVED);
+    assert.strictEqual(approved.approver_id, "USER-APPROVER-001");
+    assert.strictEqual(approved.approval_reason, "Looks correct");
+    assert.ok(approved.approved_at);
+  });
+
+  it("should reject a plan", () => {
+    const plan = createResponsePlan({
+      case_id: "CASE-REJECT-001",
+      title: "Reject Test",
+      actions: [{ type: "block_ip", target: "4.4.4.4" }],
+    });
+
+    const rejected = rejectPlan(plan.plan_id, "USER-REJECTOR-001", "Insufficient evidence");
+
+    assert.strictEqual(rejected.state, PLAN_STATES.REJECTED);
+    assert.strictEqual(rejected.rejector_id, "USER-REJECTOR-001");
+    assert.strictEqual(rejected.rejection_reason, "Insufficient evidence");
+    assert.ok(rejected.rejected_at);
+  });
+
+  it("should not approve an already approved plan", () => {
+    const plan = createResponsePlan({
+      case_id: "CASE-DOUBLE-APPROVE",
+      title: "Double Approve Test",
+      actions: [{ type: "block_ip", target: "5.5.5.5" }],
+    });
+
+    approvePlan(plan.plan_id, "USER-001");
+
+    assert.throws(
+      () => approvePlan(plan.plan_id, "USER-002"),
+      /Cannot approve plan in state/
+    );
+  });
+
+  it("should not approve a rejected plan", () => {
+    const plan = createResponsePlan({
+      case_id: "CASE-REJECTED-APPROVE",
+      title: "Rejected Approve Test",
+      actions: [{ type: "block_ip", target: "6.6.6.6" }],
+    });
+
+    rejectPlan(plan.plan_id, "USER-001", "No");
+
+    assert.throws(
+      () => approvePlan(plan.plan_id, "USER-002"),
+      /Cannot approve plan in state/
+    );
+  });
+
+  it("should reject an approved plan", () => {
+    const plan = createResponsePlan({
+      case_id: "CASE-APPROVED-REJECT",
+      title: "Approved Reject Test",
+      actions: [{ type: "block_ip", target: "7.7.7.7" }],
+    });
+
+    approvePlan(plan.plan_id, "USER-001");
+    const rejected = rejectPlan(plan.plan_id, "USER-002", "Changed mind");
+
+    assert.strictEqual(rejected.state, PLAN_STATES.REJECTED);
+  });
+});
+
+describe("Responder Status", () => {
+  it("should return responder status", () => {
+    const status = getResponderStatus();
+
+    assert.ok(typeof status.enabled === "boolean");
+    assert.ok(status.message);
+    assert.strictEqual(status.human_approval_required, true);
+    assert.strictEqual(status.autonomous_execution, false);
+    assert.strictEqual(status.environment_variable, "AUTOPILOT_RESPONDER_ENABLED");
+  });
+});
+
+describe("Plan State Constants", () => {
+  it("should have all required states", () => {
+    assert.strictEqual(PLAN_STATES.PROPOSED, "proposed");
+    assert.strictEqual(PLAN_STATES.APPROVED, "approved");
+    assert.strictEqual(PLAN_STATES.EXECUTING, "executing");
+    assert.strictEqual(PLAN_STATES.COMPLETED, "completed");
+    assert.strictEqual(PLAN_STATES.FAILED, "failed");
+    assert.strictEqual(PLAN_STATES.REJECTED, "rejected");
+    assert.strictEqual(PLAN_STATES.EXPIRED, "expired");
   });
 });
 

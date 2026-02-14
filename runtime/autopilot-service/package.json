@@ -8,7 +8,9 @@
   },
   "scripts": {
     "start": "node index.js",
-    "test": "node --test index.test.js"
+    "test": "node --test index.test.js",
+    "lint": "eslint *.js",
+    "lint:fix": "eslint *.js --fix"
   },
   "keywords": [
     "wazuh",
@@ -34,5 +36,8 @@
   "dependencies": {
     "@slack/bolt": "^3.17.0",
     "@slack/web-api": "^7.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
   }
 }
