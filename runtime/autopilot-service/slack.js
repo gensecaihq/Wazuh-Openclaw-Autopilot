@@ -108,7 +108,7 @@ async function initSlack(runtimeService) {
     await Promise.race([
       slackApp.start(),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Slack Socket Mode connection timed out")), SLACK_INIT_TIMEOUT_MS)
+        setTimeout(() => reject(new Error("Slack Socket Mode connection timed out")), SLACK_INIT_TIMEOUT_MS),
       ),
     ]);
     isInitialized = true;
