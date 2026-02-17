@@ -31,6 +31,8 @@ const {
   executePlan,
   getResponderStatus,
   PLAN_STATES,
+  validateAuthorization,
+  isValidCaseId,
 } = require("./index.js");
 
 describe("Evidence Pack Management", () => {
@@ -433,6 +435,72 @@ describe("Plan State Constants", () => {
     assert.strictEqual(PLAN_STATES.FAILED, "failed");
     assert.strictEqual(PLAN_STATES.REJECTED, "rejected");
     assert.strictEqual(PLAN_STATES.EXPIRED, "expired");
+  });
+});
+
+describe("Authorization Validation", () => {
+  it("should allow localhost requests without auth header", () => {
+    const req = {
+      headers: {},
+      socket: { remoteAddress: "127.0.0.1" },
+    };
+    const result = validateAuthorization(req, "read");
+    assert.strictEqual(result.valid, true);
+    assert.strictEqual(result.source, "localhost");
+  });
+
+  it("should allow IPv6 localhost requests without auth header", () => {
+    const req = {
+      headers: {},
+      socket: { remoteAddress: "::1" },
+    };
+    const result = validateAuthorization(req, "read");
+    assert.strictEqual(result.valid, true);
+    assert.strictEqual(result.source, "localhost");
+  });
+
+  it("should reject non-localhost requests without auth header", () => {
+    const req = {
+      headers: {},
+      socket: { remoteAddress: "192.168.1.100" },
+    };
+    const result = validateAuthorization(req, "read");
+    assert.strictEqual(result.valid, false);
+    assert.ok(result.reason.includes("Missing Authorization"));
+  });
+
+  it("should reject invalid authorization format", () => {
+    const req = {
+      headers: { authorization: "Basic abc123" },
+      socket: { remoteAddress: "192.168.1.100" },
+    };
+    const result = validateAuthorization(req, "read");
+    assert.strictEqual(result.valid, false);
+    assert.ok(result.reason.includes("Invalid Authorization"));
+  });
+
+  it("should reject invalid bearer token", () => {
+    const req = {
+      headers: { authorization: "Bearer wrong-token" },
+      socket: { remoteAddress: "192.168.1.100" },
+    };
+    const result = validateAuthorization(req, "read");
+    assert.strictEqual(result.valid, false);
+  });
+});
+
+describe("Case ID Validation", () => {
+  it("should accept valid case IDs", () => {
+    assert.strictEqual(isValidCaseId("CASE-20260217-abc12345"), true);
+    assert.strictEqual(isValidCaseId("case-abc-123-XYZ"), true);
+    assert.strictEqual(isValidCaseId("SIMPLE"), true);
+  });
+
+  it("should reject invalid case IDs", () => {
+    assert.strictEqual(isValidCaseId(""), false);
+    assert.strictEqual(isValidCaseId("../etc/passwd"), false);
+    assert.strictEqual(isValidCaseId("case with spaces"), false);
+    assert.strictEqual(isValidCaseId("a".repeat(65)), false);
   });
 });
 

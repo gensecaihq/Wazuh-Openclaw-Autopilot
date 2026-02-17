@@ -40,7 +40,8 @@ services:
       - MCP_URL=${MCP_URL}
       - AUTOPILOT_MCP_AUTH=${AUTOPILOT_MCP_AUTH}
 
-      # Metrics
+      # Metrics (0.0.0.0 required inside container for Docker port forwarding;
+      # host access restricted to localhost via ports mapping above)
       - METRICS_ENABLED=true
       - METRICS_PORT=${RUNTIME_PORT:-9090}
       - METRICS_HOST=0.0.0.0

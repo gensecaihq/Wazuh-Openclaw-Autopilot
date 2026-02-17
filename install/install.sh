@@ -389,7 +389,11 @@ install_tailscale() {
         tailscale up
 
         sleep 2
-        TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "127.0.0.1")
+        TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
+        if [[ -z "$TAILSCALE_IP" ]]; then
+            log_error "Could not obtain Tailscale IP"
+            return 1
+        fi
         log_success "Tailscale IP: $TAILSCALE_IP"
         log_security "MCP Server will bind to Tailscale network only"
     else
@@ -958,6 +962,11 @@ configure_system() {
     read -rsp "  Wazuh API Password: " WAZUH_API_PASSWORD
     echo ""
 
+    if [[ -z "$WAZUH_API_PASSWORD" ]]; then
+        log_error "Wazuh API password cannot be empty"
+        exit 1
+    fi
+
     echo ""
     echo -e "${CYAN}${BOLD}API Keys Configuration${NC}"
     echo ""
@@ -1164,7 +1173,8 @@ SCRIPT
     <alert_format>json</alert_format>
   </integration>
 "
-        sed -i "s|</ossec_config>|$INTEGRATOR_CONFIG</ossec_config>|" "$OSSEC_CONF"
+        # Use awk for safe multi-line insertion (avoids sed injection with special chars)
+        awk -v config="$INTEGRATOR_CONFIG" '/<\/ossec_config>/{print config}1' "$OSSEC_CONF" > "${OSSEC_CONF}.tmp" && mv "${OSSEC_CONF}.tmp" "$OSSEC_CONF"
 
         log_success "Alert forwarding configured (level 10+)"
         log_security "Alerts sent to localhost only"

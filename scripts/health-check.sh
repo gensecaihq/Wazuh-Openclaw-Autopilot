@@ -210,7 +210,7 @@ check_mcp_server() {
     # Parse host and port from URL
     local mcp_host mcp_port_parsed
     mcp_host=$(echo "$mcp_url" | sed -E 's|https?://||;s|:.*||;s|/.*||')
-    mcp_port_parsed=$(echo "$mcp_url" | grep -oP ':\K[0-9]+' | head -1)
+    mcp_port_parsed=$(echo "$mcp_url" | sed -n 's|.*:\([0-9][0-9]*\).*|\1|p' | head -1)
     mcp_port_parsed="${mcp_port_parsed:-$MCP_PORT}"
 
     # TCP connectivity
@@ -259,7 +259,7 @@ check_wazuh_api() {
     # TCP connectivity
     local wazuh_host wazuh_port
     wazuh_host=$(echo "$wazuh_url" | sed -E 's|https?://||;s|:.*||;s|/.*||')
-    wazuh_port=$(echo "$wazuh_url" | grep -oP ':\K[0-9]+' | head -1)
+    wazuh_port=$(echo "$wazuh_url" | sed -n 's|.*:\([0-9][0-9]*\).*|\1|p' | head -1)
     wazuh_port="${wazuh_port:-55000}"
 
     if timeout 5 bash -c "echo >/dev/tcp/$wazuh_host/$wazuh_port" 2>/dev/null; then

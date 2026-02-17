@@ -11,7 +11,7 @@ Current version: `1.0`
 ```json
 {
   "schema_version": "1.0",
-  "case_id": "CASE-2026-001",
+  "case_id": "CASE-20260217-abc12345",
   "created_at": "2026-02-17T10:30:00.000Z",
   "updated_at": "2026-02-17T10:35:00.000Z",
   "title": "Brute Force Attack on SSH",
@@ -164,7 +164,7 @@ Response plans proposed by the Response Planner agent.
 {
   "plans": [
     {
-      "plan_id": "PLAN-001",
+      "plan_id": "PLAN-20260217-abc12345",
       "created_at": "2026-02-17T10:32:00.000Z",
       "proposed_by": "response-planner",
       "risk_level": "medium",
@@ -194,7 +194,7 @@ Human approval decisions.
 {
   "approvals": [
     {
-      "plan_id": "PLAN-001",
+      "plan_id": "PLAN-20260217-abc12345",
       "token": "abc123...",
       "approver_id": "USER-001",
       "approver_name": "Security Analyst",
@@ -214,7 +214,7 @@ Executed response actions.
 {
   "actions": [
     {
-      "plan_id": "PLAN-001",
+      "plan_id": "PLAN-20260217-abc12345",
       "sequence": 1,
       "action": "block_ip",
       "target": "192.168.1.100",
@@ -241,7 +241,7 @@ Evidence packs are stored as JSON files:
 ```
 /var/lib/wazuh-autopilot/
 └── cases/
-    └── CASE-2026-001/
+    └── CASE-20260217-abc12345/
         ├── evidence-pack.json    # Full evidence pack
         └── case.json             # Lightweight summary
 ```

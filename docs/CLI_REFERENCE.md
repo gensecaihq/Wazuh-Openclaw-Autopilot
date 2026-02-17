@@ -172,15 +172,15 @@ curl http://127.0.0.1:9090/metrics
 curl http://127.0.0.1:9090/api/cases
 
 # Get specific case
-curl http://127.0.0.1:9090/api/cases/CASE-2026-001
+curl http://127.0.0.1:9090/api/cases/CASE-20260217-abc12345
 
 # Create new case (requires auth for non-localhost)
 curl -X POST http://127.0.0.1:9090/api/cases \
   -H "Content-Type: application/json" \
-  -d '{"case_id": "CASE-2026-001", "title": "Test Case", "severity": "high"}'
+  -d '{"case_id": "CASE-20260217-abc12345", "title": "Test Case", "severity": "high"}'
 
 # Update case
-curl -X PUT http://127.0.0.1:9090/api/cases/CASE-2026-001 \
+curl -X PUT http://127.0.0.1:9090/api/cases/CASE-20260217-abc12345 \
   -H "Content-Type: application/json" \
   -d '{"status": "closed"}'
 ```

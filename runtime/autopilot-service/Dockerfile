@@ -60,6 +60,8 @@ ENV NODE_ENV=production \
     AUTOPILOT_DATA_DIR=/var/lib/wazuh-autopilot \
     AUTOPILOT_CONFIG_DIR=/etc/wazuh-autopilot \
     METRICS_PORT=${RUNTIME_PORT} \
+    # 0.0.0.0 required inside container for Docker port forwarding;
+    # host access restricted to localhost via docker-compose ports mapping
     METRICS_HOST=0.0.0.0 \
     LOG_FORMAT=json \
     LOG_LEVEL=info

@@ -214,7 +214,7 @@ Approval requests include interactive buttons:
 ┌─────────────────────────────────────────┐
 │ 🚨 Approval Request                      │
 │                                         │
-│ Case: CASE-2026-001                     │
+│ Case: CASE-20260217-abc12345                     │
 │ Severity: High                          │
 │ Proposed Action: Block IP 192.168.1.100 │
 │                                         │
@@ -228,7 +228,7 @@ When alerts are triaged, a case card is posted:
 
 ```
 ┌─────────────────────────────────────────┐
-│ 📋 Case Created: CASE-2026-001          │
+│ 📋 Case Created: CASE-20260217-abc12345          │
 │                                         │
 │ Severity: High | Confidence: 85%        │
 │ Title: Brute force attack detected      │
@@ -248,10 +248,10 @@ If interactive buttons don't work in your Slack configuration, commands work as 
 
 ```
 # Instead of clicking Approve button:
-/wazuh approve PLAN-2026-001
+/wazuh approve PLAN-20260217-abc12345
 
 # Instead of clicking Deny button:
-/wazuh deny PLAN-2026-001 "Needs more investigation"
+/wazuh deny PLAN-20260217-abc12345 "Needs more investigation"
 ```
 
 ## Troubleshooting

@@ -176,7 +176,7 @@ Every log entry includes:
   "component": "triage",
   "msg": "Case created",
   "correlation_id": "abc123",
-  "case_id": "CASE-2026-001",
+  "case_id": "CASE-20260217-abc12345",
   "alert_id": "12345"
 }
 ```
@@ -285,7 +285,7 @@ StandardOutput=append:/var/log/wazuh-autopilot/autopilot.log
 
 **Case activity:**
 ```
-{job="wazuh-autopilot"} | json | case_id="CASE-2026-001"
+{job="wazuh-autopilot"} | json | case_id="CASE-20260217-abc12345"
 ```
 
 **MCP failures:**

@@ -10,6 +10,7 @@
  */
 
 const { App } = require("@slack/bolt");
+const crypto = require("crypto");
 
 // =============================================================================
 // CONFIGURATION
@@ -18,7 +19,9 @@ const { App } = require("@slack/bolt");
 const config = {
   appToken: process.env.SLACK_APP_TOKEN,
   botToken: process.env.SLACK_BOT_TOKEN,
-  signingSecret: process.env.SLACK_SIGNING_SECRET || "dummy-for-socket-mode",
+  // Socket Mode doesn't use signing secret for verification, but Bolt requires it.
+  // Generate a random value per process if not configured to avoid a static default.
+  signingSecret: process.env.SLACK_SIGNING_SECRET || crypto.randomBytes(32).toString("hex"),
   alertsChannel: process.env.SLACK_ALERTS_CHANNEL,
   approvalsChannel: process.env.SLACK_APPROVALS_CHANNEL,
   reportsChannel: process.env.SLACK_REPORTS_CHANNEL,

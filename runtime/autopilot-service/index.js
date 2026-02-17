@@ -38,7 +38,7 @@ const config = {
   dataDir: process.env.AUTOPILOT_DATA_DIR || "/var/lib/wazuh-autopilot",
   configDir: process.env.AUTOPILOT_CONFIG_DIR || "/etc/wazuh-autopilot",
   metricsEnabled: process.env.METRICS_ENABLED !== "false",
-  metricsPort: parseInt(process.env.METRICS_PORT || "9090", 10),
+  metricsPort: parseInt(process.env.RUNTIME_PORT || process.env.METRICS_PORT || "9090", 10),
   metricsHost: process.env.METRICS_HOST || "127.0.0.1",
   logFormat: process.env.LOG_FORMAT || "json",
   logLevel: process.env.LOG_LEVEL || "info",
@@ -1404,19 +1404,6 @@ function parseJsonBody(req) {
   });
 }
 
-// Helper to extract plan ID from URL path (Issue #14 fix - avoid duplication)
-// Prefixed with underscore as these are available for future use
-function _extractPlanIdFromPath(pathname) {
-  const parts = pathname.split("/");
-  return parts[3] || null;
-}
-
-// Helper to extract case ID from URL path
-function _extractCaseIdFromPath(pathname) {
-  const parts = pathname.split("/");
-  return parts[3] || null;
-}
-
 function createServer() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -1516,6 +1503,13 @@ function createServer() {
 
       // Cases API - GET all
       if (url.pathname === "/api/cases" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "read");
+        if (!authResult.valid) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: authResult.reason }));
+          return;
+        }
+
         const cases = await listCases({ limit: 100 });
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(cases));
@@ -1548,6 +1542,13 @@ function createServer() {
 
       // Cases API - GET single
       if (url.pathname.startsWith("/api/cases/") && req.method === "GET") {
+        const authResult = validateAuthorization(req, "read");
+        if (!authResult.valid) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: authResult.reason }));
+          return;
+        }
+
         const caseId = url.pathname.split("/")[3];
 
         // Input validation
@@ -1785,6 +1786,13 @@ function createServer() {
       // RESPONDER STATUS ENDPOINT
       // =================================================================
       if (url.pathname === "/api/responder/status" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "read");
+        if (!authResult.valid) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: authResult.reason }));
+          return;
+        }
+
         const status = getResponderStatus();
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(status));
@@ -1797,6 +1805,13 @@ function createServer() {
 
       // List plans
       if (url.pathname === "/api/plans" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "read");
+        if (!authResult.valid) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: authResult.reason }));
+          return;
+        }
+
         const state = url.searchParams.get("state");
         const case_id = url.searchParams.get("case_id");
         const plans = listPlans({ state, case_id });
@@ -1866,6 +1881,13 @@ function createServer() {
 
       // Get single plan
       if (url.pathname.match(/^\/api\/plans\/[^/]+$/) && req.method === "GET") {
+        const authResult = validateAuthorization(req, "read");
+        if (!authResult.valid) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: authResult.reason }));
+          return;
+        }
+
         const planId = url.pathname.split("/")[3];
         try {
           const plan = getPlan(planId);
@@ -2165,6 +2187,9 @@ module.exports = {
   // Metrics
   incrementMetric,
   recordLatency,
+  // Auth (exported for testing)
+  validateAuthorization,
+  isValidCaseId,
 };
 
 function setupCleanupIntervals() {

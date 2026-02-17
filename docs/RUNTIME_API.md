@@ -8,7 +8,7 @@ By default, the service listens on `http://127.0.0.1:9090`. The port is configur
 
 ## Authentication
 
-The API currently does not require authentication as it binds to localhost only. For production deployments, ensure proper network isolation.
+All API endpoints require a `Bearer` token via the `Authorization` header. Requests from localhost (`127.0.0.1` / `::1`) bypass authentication to allow internal agent communication. Set the token via the `AUTOPILOT_SERVICE_TOKEN` environment variable.
 
 ## Endpoints
 
@@ -82,7 +82,7 @@ List all cases (most recent first).
 ```json
 [
   {
-    "case_id": "CASE-2026-001",
+    "case_id": "CASE-20260217-abc12345",
     "created_at": "2026-02-17T10:30:00.000Z",
     "updated_at": "2026-02-17T10:35:00.000Z",
     "title": "Brute Force Attack on SSH",
@@ -99,7 +99,7 @@ Create a new case with evidence pack.
 **Request Body:**
 ```json
 {
-  "case_id": "CASE-2026-001",
+  "case_id": "CASE-20260217-abc12345",
   "title": "Brute Force Attack on SSH",
   "summary": "Multiple failed login attempts detected",
   "severity": "high",
@@ -116,7 +116,7 @@ Create a new case with evidence pack.
 ```json
 {
   "schema_version": "1.0",
-  "case_id": "CASE-2026-001",
+  "case_id": "CASE-20260217-abc12345",
   "created_at": "2026-02-17T10:30:00.000Z",
   "title": "Brute Force Attack on SSH",
   ...
@@ -131,7 +131,7 @@ Get a specific case by ID.
 ```json
 {
   "schema_version": "1.0",
-  "case_id": "CASE-2026-001",
+  "case_id": "CASE-20260217-abc12345",
   "created_at": "2026-02-17T10:30:00.000Z",
   "updated_at": "2026-02-17T10:35:00.000Z",
   "title": "Brute Force Attack on SSH",
@@ -222,7 +222,7 @@ All responses include security headers:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `METRICS_PORT` | 9090 | Port to listen on |
+| `RUNTIME_PORT` | 9090 | Port to listen on |
 | `METRICS_HOST` | 127.0.0.1 | Host to bind to |
 | `RATE_LIMIT_WINDOW_MS` | 60000 | Rate limit window in ms |
 | `RATE_LIMIT_MAX_REQUESTS` | 100 | Max requests per window |
