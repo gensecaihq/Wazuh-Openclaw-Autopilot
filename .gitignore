@@ -41,3 +41,7 @@ coverage/
 tmp/
 temp/
 *.tmp
+
+# Issue analysis (local working notes)
+issue*.md
+reply-issue*.md

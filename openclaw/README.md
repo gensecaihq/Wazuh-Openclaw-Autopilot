@@ -19,22 +19,61 @@ AI agents cannot execute response actions autonomously.
 openclaw/
 ├── openclaw.json                    # Main OpenClaw configuration
 ├── agents/
+│   ├── _shared/                     # Shared files (copied into each agent at install)
+│   │   ├── SOUL.md                  # SOC operating principles
+│   │   └── USER.md                  # Organizational context (customize per deployment)
 │   ├── triage/
-│   │   └── SYSTEM_PROMPT.md        # Triage agent instructions
+│   │   ├── AGENTS.md                # Operating instructions
+│   │   ├── IDENTITY.md              # Role, pipeline position, consumers
+│   │   ├── TOOLS.md                 # Wazuh query patterns, field paths
+│   │   ├── HEARTBEAT.md             # 10-min untriaged sweep checklist
+│   │   └── MEMORY.md                # Accumulated learnings (grows during operation)
 │   ├── correlation/
-│   │   └── SYSTEM_PROMPT.md        # Correlation agent instructions
+│   │   ├── AGENTS.md                # Operating instructions
+│   │   ├── IDENTITY.md              # Role, pipeline position, consumers
+│   │   ├── TOOLS.md                 # Correlation queries, entity matching
+│   │   ├── HEARTBEAT.md             # 5-min recorrelation checklist
+│   │   └── MEMORY.md                # Accumulated learnings
 │   ├── investigation/
-│   │   └── SYSTEM_PROMPT.md        # Investigation agent instructions
+│   │   ├── AGENTS.md                # Operating instructions
+│   │   ├── IDENTITY.md              # Role, pipeline position, consumers
+│   │   ├── TOOLS.md                 # Pivot queries, enrichment patterns
+│   │   └── MEMORY.md                # Accumulated learnings
 │   ├── response-planner/
-│   │   └── SYSTEM_PROMPT.md        # Response planner instructions
+│   │   ├── AGENTS.md                # Operating instructions
+│   │   ├── IDENTITY.md              # Role, pipeline position, consumers
+│   │   ├── TOOLS.md                 # Plan API, risk scoring
+│   │   └── MEMORY.md                # Accumulated learnings
 │   ├── policy-guard/
-│   │   └── SYSTEM_PROMPT.md        # Policy guard instructions
+│   │   ├── AGENTS.md                # Operating instructions
+│   │   ├── IDENTITY.md              # Role, pipeline position, consumers
+│   │   ├── TOOLS.md                 # Token validation, approval checks
+│   │   └── MEMORY.md                # Accumulated learnings
 │   ├── responder/
-│   │   └── SYSTEM_PROMPT.md        # Responder agent instructions
+│   │   ├── AGENTS.md                # Operating instructions
+│   │   ├── IDENTITY.md              # Role, pipeline position, consumers
+│   │   ├── TOOLS.md                 # Execution API, verification queries
+│   │   └── MEMORY.md                # Accumulated learnings
 │   └── reporting/
-│       └── SYSTEM_PROMPT.md        # Reporting agent instructions
+│       ├── AGENTS.md                # Operating instructions
+│       ├── IDENTITY.md              # Role, pipeline position, consumers
+│       ├── TOOLS.md                 # Prometheus, MCP aggregation, Slack blocks
+│       ├── HEARTBEAT.md             # Report schedule checklist
+│       └── MEMORY.md                # Accumulated learnings
 └── README.md                        # This file
 ```
+
+### OpenClaw Standard File Roles
+
+| File | Purpose | Loaded |
+|------|---------|--------|
+| `AGENTS.md` | Main operating instructions, domain knowledge, output formats | Always |
+| `SOUL.md` | Shared SOC principles (evidence over assumptions, minimize blast radius, etc.) | Always |
+| `USER.md` | Organizational context (industry, compliance, critical assets, noise sources) | Always |
+| `IDENTITY.md` | Agent role, pipeline position, what it does/doesn't do, downstream consumers | Always |
+| `TOOLS.md` | Practical tool usage guidance (query patterns, field paths, API endpoints) | Always |
+| `HEARTBEAT.md` | Cron-triggered run checklists (triage sweep, correlation recycle, report schedule) | Heartbeat runs |
+| `MEMORY.md` | Accumulated learnings (FP patterns, attack signatures, tuning notes) | Private sessions |
 
 ## Quick Start
 
@@ -253,21 +292,48 @@ All agents use strict tool allowlists:
 
 ## Customization
 
-### Modifying Agent Behavior
+### Organizational Context
 
-Edit the `SYSTEM_PROMPT.md` files in each agent's directory to customize:
-- Entity extraction rules
-- Severity mappings
-- Correlation patterns
-- Investigation playbooks
-- Risk assessment factors
+Edit `agents/_shared/USER.md` to configure your deployment:
+- Industry and compliance frameworks
+- Critical asset hostname patterns and IP ranges
+- Known noise sources (scanners, service accounts, scheduled jobs)
+- SOC team shifts and escalation paths
+- VPN ranges and change freeze windows
+
+### SOC Operating Principles
+
+Edit `agents/_shared/SOUL.md` to adjust shared agent behavior:
+- Evidence thresholds and confidence calibration
+- Blast radius minimization preferences
+- Speed vs completeness tradeoffs
+- False positive handling philosophy
+
+### Agent-Specific Behavior
+
+Edit `AGENTS.md` in each agent's directory to customize:
+- Entity extraction rules and field paths
+- Severity mappings and Wazuh rule ID handling
+- Correlation patterns and thresholds
+- Investigation playbooks and pivot strategies
+- Risk assessment factors and scoring
+- KPIs and report formats
+
+### Accumulated Learnings
+
+`MEMORY.md` in each agent's directory grows during operation. Agents record:
+- False positive patterns discovered during triage
+- Confirmed attack signatures
+- Threshold tuning notes
+- Operational efficiency improvements
 
 ### Adding Custom Agents
 
 1. Add agent definition to `openclaw.json` agents.list
-2. Create `SYSTEM_PROMPT.md` with instructions
-3. Add webhook or cron trigger
-4. Restart OpenClaw gateway
+2. Create `AGENTS.md` (operating instructions), `IDENTITY.md` (role), `TOOLS.md` (tool usage), `MEMORY.md` (seed template)
+3. Copy `_shared/SOUL.md` and `_shared/USER.md` into the agent directory
+4. Add webhook or cron trigger
+5. Restart OpenClaw gateway
 
 ## Troubleshooting
 

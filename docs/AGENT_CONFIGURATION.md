@@ -20,18 +20,48 @@ Wazuh Autopilot includes 7 specialized agents, each handling a specific aspect o
 
 ## Agent File Structure
 
-Each agent is defined in a YAML file:
+Each agent has a workspace directory containing OpenClaw standard files:
 
 ```
 /etc/wazuh-autopilot/agents/
-├── triage.agent.yaml
-├── correlation.agent.yaml
-├── investigation.agent.yaml
-├── response-planner.agent.yaml
-├── policy-guard.agent.yaml
-├── responder.agent.yaml
-└── reporting.agent.yaml
+├── triage/
+│   ├── AGENTS.md       # Operating instructions (domain knowledge, output formats)
+│   ├── SOUL.md         # Shared SOC operating principles
+│   ├── USER.md         # Organizational context (customize per deployment)
+│   ├── IDENTITY.md     # Role, pipeline position, downstream consumers
+│   ├── TOOLS.md        # Query patterns, field paths, API usage
+│   ├── HEARTBEAT.md    # 10-min sweep checklist (cron-triggered agents)
+│   └── MEMORY.md       # Accumulated learnings (grows during operation)
+├── correlation/        # Same structure (+ HEARTBEAT.md)
+├── investigation/      # Same structure (no HEARTBEAT.md)
+├── response-planner/   # Same structure (no HEARTBEAT.md)
+├── policy-guard/       # Same structure (no HEARTBEAT.md)
+├── responder/          # Same structure (no HEARTBEAT.md)
+└── reporting/          # Same structure (+ HEARTBEAT.md)
 ```
+
+### File Roles
+
+| File | Loaded | Purpose |
+|------|--------|---------|
+| `AGENTS.md` | Always | Main operating instructions — Wazuh rule IDs, entity extraction, severity maps, algorithms, output JSON formats |
+| `SOUL.md` | Always | Shared SOC principles — evidence standards, blast radius minimization, false positive handling, auditability |
+| `USER.md` | Always | Organizational context — industry, compliance, critical assets, noise sources, SOC shifts, escalation paths |
+| `IDENTITY.md` | Always | Agent identity — role, what it does/doesn't do, pipeline position, what downstream consumers need |
+| `TOOLS.md` | Always | Tool usage guidance — query patterns, field path differences (Linux/Windows/AWS), API endpoints, pitfalls |
+| `HEARTBEAT.md` | Cron runs | Step-by-step checklist for scheduled executions (triage sweeps, correlation recycles, report generation) |
+| `MEMORY.md` | Private | Persistent learnings — false positive patterns, confirmed attacks, tuning notes, efficiency optimizations |
+
+### Customization
+
+- **`USER.md`**: Edit `_shared/USER.md` before install (or per-agent after install) to set your organization's industry, compliance frameworks, critical asset patterns, known noise sources, and SOC team structure
+- **`SOUL.md`**: Edit `_shared/SOUL.md` to adjust operating principles (evidence thresholds, blast radius preferences, speed vs completeness tradeoffs)
+- **`AGENTS.md`**: Edit per-agent to modify domain-specific behavior (severity mappings, correlation thresholds, investigation playbooks, KPI targets)
+- **`MEMORY.md`**: Seed with known false positive patterns or tuning notes; agents will add to this during operation
+
+### Legacy Note
+
+Previous versions used a single `SYSTEM_PROMPT.md` per agent. This has been replaced by the multi-file structure above, which follows OpenClaw's standard file conventions for improved agent efficiency and maintainability.
 
 ---
 

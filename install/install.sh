@@ -842,7 +842,19 @@ EOF
     # Copy agent instruction files
     if [[ -d "$AGENTS_SRC/agents" ]]; then
         log_info "Deploying agent instruction files..."
-        cp -r "$AGENTS_SRC/agents"/* "$OC_DIR/wazuh-autopilot/agents/"
+        # Copy per-agent directories (triage, correlation, etc.)
+        for agent_dir in "$AGENTS_SRC/agents"/*/; do
+            agent_name=$(basename "$agent_dir")
+            [[ "$agent_name" == "_shared" ]] && continue
+            mkdir -p "$OC_DIR/wazuh-autopilot/agents/$agent_name"
+            cp "$agent_dir"*.md "$OC_DIR/wazuh-autopilot/agents/$agent_name/" 2>/dev/null || true
+        done
+        # Copy shared files (SOUL.md, USER.md) into each agent workspace
+        if [[ -d "$AGENTS_SRC/agents/_shared" ]]; then
+            for agent_dir in "$OC_DIR/wazuh-autopilot/agents"/*/; do
+                cp "$AGENTS_SRC/agents/_shared"/*.md "$agent_dir" 2>/dev/null || true
+            done
+        fi
         chmod -R 700 "$OC_DIR/wazuh-autopilot/agents"
     fi
 

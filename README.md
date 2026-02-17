@@ -484,6 +484,19 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ---
 
+## Community
+
+| Channel | Purpose |
+|---------|---------|
+| [GitHub Discussions](https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/discussions) | Questions, ideas, deployment help, community chat |
+| [GitHub Issues](https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/issues) | Bug reports and feature requests |
+
+- **Q&A**: [Deployment Help & Troubleshooting](https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/discussions/3)
+- **Ideas**: [Feature Requests & Integration Ideas](https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/discussions/4)
+- **Show & Tell**: [Share Your Deployment](https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/discussions/5)
+
+---
+
 ## Related Projects
 
 | Project | Description |
