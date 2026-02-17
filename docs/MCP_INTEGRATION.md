@@ -150,12 +150,12 @@ MCP_URL=http://127.0.0.1:8080
 #### `get_alert`
 Retrieve a specific alert by ID.
 
-```yaml
-# Agent usage in YAML
-allowed_tools:
-  - name: get_alert
-    purpose: "Fetch complete alert details"
-    required: true
+```json
+// Tool allowlist in openclaw.json (per-agent)
+"tools": {
+  "allow": ["read", "sessions_create", "sessions_send"],
+  "deny": ["write", "exec", "delete", "browser"]
+}
 ```
 
 **Parameters:**

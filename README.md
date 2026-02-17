@@ -423,7 +423,7 @@ Features:
 │   └── health-check.sh         # Full-stack health check
 ├── openclaw/
 │   ├── openclaw.json           # Gateway & model configuration
-│   └── agents/                 # Agent system prompts (7 agents)
+│   └── agents/                 # 7 SOC agents (AGENTS.md, IDENTITY.md, TOOLS.md, MEMORY.md)
 ├── runtime/autopilot-service/
 │   ├── Dockerfile              # Production container
 │   ├── index.js                # Main service (2300+ LOC)
@@ -458,7 +458,7 @@ Features:
 | [POLICY_AND_APPROVALS.md](docs/POLICY_AND_APPROVALS.md) | Policy engine and approval workflow |
 | [SLACK_SOCKET_MODE.md](docs/SLACK_SOCKET_MODE.md) | Slack Socket Mode setup |
 | [EVIDENCE_PACK_SCHEMA.md](docs/EVIDENCE_PACK_SCHEMA.md) | Evidence pack JSON format |
-| [AGENT_CONFIGURATION.md](docs/AGENT_CONFIGURATION.md) | Agent YAML configuration |
+| [AGENT_CONFIGURATION.md](docs/AGENT_CONFIGURATION.md) | Agent file structure and customization |
 | [MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md) | MCP server integration |
 | [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) | Installer and CLI commands |
 | [OBSERVABILITY_EXPORT.md](docs/OBSERVABILITY_EXPORT.md) | Prometheus metrics and logging |

@@ -264,11 +264,12 @@ ls /etc/wazuh-autopilot/agents/
 sudo ./install/install.sh --mode agent-pack
 ```
 
-### Agent YAML validation errors
+### Agent file validation errors
 
-**Check YAML syntax:**
+**Check agent files exist:**
 ```bash
-python3 -c "import yaml; yaml.safe_load(open('/etc/wazuh-autopilot/agents/triage.agent.yaml'))"
+ls /etc/wazuh-autopilot/agents/triage/
+# Expected: AGENTS.md IDENTITY.md TOOLS.md MEMORY.md HEARTBEAT.md SOUL.md USER.md
 ```
 
 ### Agents not loading in OpenClaw

@@ -189,7 +189,7 @@ sudo ./install/install.sh --mode agent-pack
 ### What Happens
 
 1. Detects existing OpenClaw installation
-2. Copies agent YAML files to `/etc/wazuh-autopilot/agents/`
+2. Copies agent workspace files to `/etc/wazuh-autopilot/agents/`
 3. Creates symlinks in OpenClaw's agents directory
 4. Copies policies and playbooks
 
@@ -213,7 +213,7 @@ docker restart openclaw
 │    THIS MACHINE     │───────▶│   REMOTE SERVER     │
 │  (run installer)    │        │   (OpenClaw)        │
 │                     │        │                     │
-│  agents/*.yaml ─────│────────│─▶ /opt/openclaw/    │
+│  agents/*/ ─────────│────────│─▶ /opt/openclaw/    │
 │  policies/*.yaml ───│────────│─▶    agents/        │
 └─────────────────────┘        └─────────────────────┘
 ```
@@ -235,7 +235,7 @@ docker restart openclaw
 
 1. Connects to remote server via SSH
 2. Creates agents directory if needed
-3. Copies all agent YAML files
+3. Copies all agent workspace files (AGENTS.md, IDENTITY.md, TOOLS.md, MEMORY.md, etc.)
 4. Copies policy configurations
 
 ---
@@ -309,7 +309,7 @@ docker-compose logs -f
 deploy/k8s/
 ├── namespace.yaml
 ├── configmap.yaml
-├── configmap-agents.yaml
+├── configmap-agents.yaml        # Agent workspace files
 ├── secret.yaml
 └── deployment.yaml
 ```

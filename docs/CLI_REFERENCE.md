@@ -282,8 +282,9 @@ curl -H "Authorization: Bearer $AUTOPILOT_MCP_AUTH" \
 
 **Agent not loading:**
 ```bash
-# Check agent YAML syntax
-yamllint /etc/wazuh-autopilot/agents/*.yaml
+# Check agent workspace files exist
+ls /etc/wazuh-autopilot/agents/triage/
+# Expected: AGENTS.md IDENTITY.md TOOLS.md MEMORY.md HEARTBEAT.md SOUL.md USER.md
 
 # Restart OpenClaw
 docker restart openclaw
@@ -299,7 +300,7 @@ docker logs openclaw
 | Path | Description |
 |------|-------------|
 | `/etc/wazuh-autopilot/.env` | Environment configuration |
-| `/etc/wazuh-autopilot/agents/` | Agent YAML configurations |
+| `/etc/wazuh-autopilot/agents/` | Agent workspace directories (AGENTS.md, IDENTITY.md, TOOLS.md, etc.) |
 | `/etc/wazuh-autopilot/policies/` | Policy definitions |
 | `/etc/wazuh-autopilot/playbooks/` | Response playbooks |
 | `/etc/wazuh-autopilot/runtime/` | Runtime service code |

@@ -72,7 +72,7 @@ Example:
 ```
 feat: Add Teams integration support
 
-- Add teams.agent.yaml configuration
+- Add teams agent workspace (AGENTS.md, IDENTITY.md, TOOLS.md, MEMORY.md)
 - Update policy.yaml with Teams channel allowlists
 - Add documentation for Teams setup
 ```
@@ -115,7 +115,7 @@ node index.js
 Wazuh-Openclaw-Autopilot/
 ├── openclaw/
 │   ├── openclaw.json           # Gateway & model configuration
-│   └── agents/                 # Agent system prompts (7 agents)
+│   └── agents/                 # 7 SOC agents (AGENTS.md, IDENTITY.md, TOOLS.md, MEMORY.md)
 ├── policies/                   # Security policies and tool mappings
 ├── playbooks/                  # Incident response playbooks (7 playbooks)
 ├── install/                    # Installation scripts and env template

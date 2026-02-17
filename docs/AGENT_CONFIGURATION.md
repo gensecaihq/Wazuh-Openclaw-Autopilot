@@ -65,500 +65,229 @@ Previous versions used a single `SYSTEM_PROMPT.md` per agent. This has been repl
 
 ---
 
-## Common Configuration Sections
+## Runtime Configuration (openclaw.json)
 
-### Identity Section
+Agent runtime settings (model, tools, triggers, channels) are configured in `openclaw.json`. Each agent has an entry in the `agents.list` array:
 
-```yaml
-name: wazuh-triage-agent
-version: "2.1.0"
-description: |
-  Brief description of what this agent does.
-  Can be multi-line.
-
-role: triage              # Agent's role identifier
-autonomy_level: read-only # read-only | approval | limited-auto
-autonomous_execution: true # Can run without human prompts
+```json
+{
+  "id": "wazuh-triage",
+  "name": "Wazuh Triage Agent",
+  "model": "anthropic/claude-sonnet-4-5",
+  "tools": {
+    "allow": ["read", "sessions_create", "sessions_send"],
+    "deny": ["write", "exec", "delete", "browser"]
+  }
+}
 ```
 
 ### Tool Permissions
 
-```yaml
-allowed_tools:
-  - name: get_alert
-    purpose: "Fetch complete alert details"
-    required: true
+Tool permissions are enforced by the OpenClaw gateway via `tools.allow` and `tools.deny` arrays in `openclaw.json`:
 
-  - name: search_alerts
-    purpose: "Find related alerts"
-    required: true
-
-denied_tools:
-  - block_ip
-  - isolate_host
-  - kill_process
-  - "*_write"      # Wildcard patterns
-  - "*_execute"
-  - "*_modify"
-```
+| Agent | Allowed | Denied |
+|-------|---------|--------|
+| Triage, Correlation, Investigation | `read`, `sessions_*` | `write`, `exec`, `delete`, `browser` |
+| Response Planner | `read`, `write`, `sessions_*` | `exec`, `delete`, `browser` |
+| Responder | `read`, `write`, `exec` (elevated) | `delete`, `browser` |
 
 ### Triggers
 
-```yaml
-triggers:
-  # Event-based triggers
-  events:
-    - type: wazuh_alert
-      conditions:
-        severity:
-          - high
-          - critical
-        rule_level_min: 10
-      auto_execute: true
-      priority: immediate
+Agents are triggered via webhooks or cron schedules, configured in the `automations` section of `openclaw.json`:
 
-  # Command-based triggers (Slack commands)
-  commands:
-    - name: triage
-      pattern: "/wazuh triage <alert_id>"
-      description: "Manually triage a specific alert"
-
-  # Scheduled triggers
-  scheduled:
-    - name: sweep_untriaged
-      cron: "*/10 * * * *"
-      description: "Sweep for untriaged alerts"
-      query: "rule.level >= 10 AND NOT _exists_:case_id"
-```
-
-### Outputs
-
-```yaml
-outputs:
-  case:
-    create: true
-    update: true
-    fields:
-      - case_id
-      - title
-      - summary
-      - severity
-
-  evidence_pack:
-    update: true
-    sections:
-      - alert_raw
-      - entities
-      - timeline
-
-  slack:
-    enabled: true
-    channel_type: alerts
-    post_case_card: true
-```
-
-### Resilience
-
-```yaml
-resilience:
-  retry_policy:
-    max_attempts: 3
-    backoff_type: exponential
-    initial_delay_ms: 1000
-    max_delay_ms: 30000
-
-  fallback_behavior:
-    mcp_unavailable: queue_for_retry
-    slack_unavailable: log_and_continue
-
-  circuit_breaker:
-    enabled: true
-    failure_threshold: 5
-    reset_timeout_seconds: 60
-```
-
-### Rate Limits
-
-```yaml
-rate_limits:
-  max_concurrent: 10
-  max_per_minute: 100
-  max_per_hour: 2000
-  burst_allowance: 20
-  cooldown_on_error_ms: 5000
-```
-
-### Logging & Metrics
-
-```yaml
-logging:
-  level: info
-  structured: true
-  fields:
-    - correlation_id
-    - case_id
-    - alert_id
-  redact:
-    - password
-    - token
-    - secret
-
-metrics:
-  - name: autopilot_triage_total
-    type: counter
-    labels: [severity, rule_group]
-```
+| Schedule | Agent | Task |
+|----------|-------|------|
+| Every 10 min | wazuh-triage | Sweep untriaged alerts |
+| Every 5 min | wazuh-correlation | Recorrelate active cases |
+| Hourly | wazuh-reporting | Operational snapshot |
+| 8 AM daily | wazuh-reporting | Daily digest |
+| Shift changes | wazuh-reporting | Shift handoff report |
+| Monday 9 AM | wazuh-reporting | Weekly summary |
 
 ---
 
-## Agent-Specific Configuration
+## Agent-Specific Behavior
 
-### Triage Agent
+Each agent's domain knowledge is defined in its `AGENTS.md` file. Here's what each agent's configuration covers:
 
-The triage agent handles first-line alert analysis.
+### Triage Agent (`openclaw/agents/triage/AGENTS.md`)
 
-**Key Configuration:**
+- Wazuh rule categories and severity mapping (level 0-15 → informational through critical)
+- Critical rule IDs (5710, 5712, 5720, 5763, 100002, 87105, 87106, 92000, 92100)
+- Entity extraction fields for 7 entity types across Linux, Windows, AWS, and Syscheck
+- MITRE ATT&CK inference patterns and confidence scoring
+- Case creation output format
 
-```yaml
-# Entity extraction settings
-entity_extraction:
-  enabled: true
-  autonomous: true
-  extractors:
-    ip:
-      fields:
-        - data.srcip
-        - data.dstip
-      validation: ipv4_or_ipv6
-      enrich:
-        - geolocation
-        - reputation_hint
-        - is_internal
+### Correlation Agent (`openclaw/agents/correlation/AGENTS.md`)
 
-    user:
-      fields:
-        - data.srcuser
-        - data.dstuser
-      normalize: lowercase
-      enrich:
-        - is_service_account
-        - is_privileged
-```
+- 6 attack patterns (brute force, lateral movement, privilege escalation, data exfiltration, persistence, defense evasion) with indicators, thresholds, and MITRE mappings
+- Entity relationship weights and clustering strategies (entity overlap 35%, temporal 25%, rule similarity 20%, attack chain 20%)
+- Time windows (5m, 1h, 24h) and correlation score thresholds (0.5, 0.8, 0.95)
+- Blast radius calculation across 5 dimensions with asset criticality multipliers
 
-**Customization Examples:**
+### Investigation Agent (`openclaw/agents/investigation/AGENTS.md`)
 
-```yaml
-# Add custom entity extraction field
-entity_extraction:
-  extractors:
-    ip:
-      fields:
-        - data.srcip
-        - data.custom_field.ip_address  # Add your custom field
-```
+- 4 investigation playbooks (brute force, lateral movement, malware, data exfiltration)
+- 6 pivot types with Wazuh queries, lookback windows, and aggregation patterns
+- Enrichment sources (historical incidents with 0.95/day decay, baseline comparison, related cases)
+- Findings classification (confirmed compromise, likely compromise, suspicious activity, reconnaissance)
 
-### Correlation Agent
+### Response Planner Agent (`openclaw/agents/response-planner/AGENTS.md`)
 
-Links related alerts into unified cases.
+- Two-tier approval workflow (Propose → Approve → Execute)
+- Action catalog: block IP, isolate host, kill process, disable user, quarantine file
+- Risk scoring with 5 weighted factors and risk-level thresholds
+- Response playbooks for 5 attack types
 
-**Key Configuration:**
+### Policy Guard Agent (`openclaw/agents/policy-guard/AGENTS.md`)
 
-```yaml
-correlation:
-  time_windows:
-    short: 5m
-    medium: 1h
-    long: 24h
+- 13-step policy evaluation chain (first DENY wins)
+- Asset criticality patterns and privileged user patterns
+- Confidence thresholds by risk level (Low: 0.5, Medium: 0.7, High: 0.85, Critical: 0.95)
+- 16 deny reason codes and dual approval requirements
+- Token validation (HMAC-SHA256) and fail-secure defaults
 
-  matching_rules:
-    - name: same_source_ip
-      fields: [data.srcip]
-      window: short
-      weight: 0.8
+### Responder Agent (`openclaw/agents/responder/AGENTS.md`)
 
-    - name: same_target_host
-      fields: [agent.name]
-      window: medium
-      weight: 0.6
-```
+- 5 action playbooks with Wazuh commands, pre-checks, verification queries, and rollback
+- Protected entities (processes: wazuh-agent, init, systemd, lsass; networks: RFC 1918, loopback)
+- Safeguards: action limits (10/plan, 50/hour, 200/day), circuit breaker (3 failures, 15-min reset)
+- Responder capability toggle: `AUTOPILOT_RESPONDER_ENABLED` (default: `false`)
 
-### Investigation Agent
+### Reporting Agent (`openclaw/agents/reporting/AGENTS.md`)
 
-Deep-dives into suspicious activity.
-
-**Key Configuration:**
-
-```yaml
-investigation:
-  techniques:
-    - process_tree_analysis
-    - network_connection_mapping
-    - file_timeline_construction
-    - user_activity_profiling
-
-  depth_levels:
-    quick: 1
-    standard: 3
-    deep: 5
-```
-
-### Response Planner Agent
-
-Generates response plans requiring approval.
-
-**Key Configuration:**
-
-```yaml
-planning:
-  strategies:
-    containment_first:
-      priority: 1
-      actions: [isolate, block]
-
-    evidence_first:
-      priority: 2
-      actions: [snapshot, preserve]
-
-  risk_assessment:
-    factors:
-      - asset_criticality
-      - user_sensitivity
-      - business_impact
-```
-
-### Policy Guard Agent
-
-Enforces security policies on all actions.
-
-**Key Configuration:**
-
-```yaml
-# Loads policy from separate file
-policy_source: /etc/wazuh-autopilot/policies/policy.yaml
-
-constitutional_principles:
-  - "Never approve actions on critical infrastructure without admin approval"
-  - "Always verify evidence before allowing containment"
-  - "Deny actions that could cause data loss"
-
-decision_logging:
-  enabled: true
-  include_reasoning: true
-```
-
-### Responder Agent
-
-Executes approved actions.
-
-**Key Configuration:**
-
-```yaml
-# CRITICAL: Disabled by default for safety
-enabled: false
-
-enable_requirements:
-  - config_flag: AUTOPILOT_ENABLE_RESPONDER=true
-  - mcp_tools_available: true
-  - policy_guard_active: true
-  - approval_workflow_configured: true
-
-# Kill switch for emergency halt
-kill_switch:
-  enabled: true
-  triggers:
-    - type: manual
-      command: "/wazuh halt"
-    - type: automatic
-      condition: "consecutive_failures >= 3"
-```
-
-### Reporting Agent
-
-Generates summaries and metrics.
-
-**Key Configuration:**
-
-```yaml
-reports:
-  types:
-    - daily_summary
-    - weekly_trends
-    - incident_closeout
-
-  delivery:
-    slack:
-      enabled: true
-      channel_type: reports
-    email:
-      enabled: false
-    webhook:
-      enabled: false
-```
+- 6 KPI time metrics (MTTD, MTTT, MTTI, MTTP, MTTR, MTTC) with target/warning/critical thresholds
+- 6 report types: hourly snapshot, daily digest, shift handoff, weekly summary, monthly executive, rule effectiveness
+- Trend analysis: moving average (7d), linear regression (30d), seasonal decomposition (90d), anomaly detection (Z-score 2.5)
+- Recommendation categories: rule tuning, coverage improvement, efficiency, resource optimization
 
 ---
 
 ## Enabling/Disabling Agents
 
-### Disable an Agent
+To disable an agent, set `"enabled": false` in its `openclaw.json` entry:
 
-Add `enabled: false` at the top level:
-
-```yaml
-name: wazuh-triage-agent
-enabled: false  # Agent will not run
+```json
+{
+  "id": "wazuh-responder",
+  "enabled": false
+}
 ```
 
-### Conditional Enablement
-
-```yaml
-enabled: true
-enable_conditions:
-  - environment: production
-  - feature_flag: ENABLE_TRIAGE
+The responder is disabled by default. Enable it with:
+```bash
+export AUTOPILOT_RESPONDER_ENABLED=true
 ```
+
+This does NOT enable autonomous execution — it only allows execution after two-tier human approval.
 
 ---
 
 ## Custom Agents
 
-Create custom agents for specialized workflows.
+### 1. Create Agent Workspace
 
-### Template
-
-```yaml
-name: custom-agent
-version: "1.0.0"
-description: "My custom agent"
-
-role: custom
-autonomy_level: read-only
-autonomous_execution: false
-
-allowed_tools:
-  - name: search_alerts
-    purpose: "Search alerts"
-    required: true
-
-denied_tools:
-  - "*_write"
-  - "*_execute"
-
-triggers:
-  commands:
-    - name: custom-action
-      pattern: "/wazuh custom <parameter>"
-      description: "Run custom action"
-
-outputs:
-  slack:
-    enabled: true
-    channel_type: alerts
-
-resilience:
-  retry_policy:
-    max_attempts: 3
-    backoff_type: exponential
-    initial_delay_ms: 1000
-
-rate_limits:
-  max_concurrent: 5
-  max_per_minute: 30
-
-logging:
-  level: info
-  structured: true
+```bash
+mkdir -p /etc/wazuh-autopilot/agents/custom-agent/
 ```
 
-### Register Custom Agent
+### 2. Create Required Files
 
-1. Save to `/etc/wazuh-autopilot/agents/custom.agent.yaml`
-2. Restart OpenClaw: `docker restart openclaw`
-3. Verify: Check OpenClaw logs for agent registration
+| File | Purpose |
+|------|---------|
+| `AGENTS.md` | Operating instructions and domain knowledge |
+| `IDENTITY.md` | Role, pipeline position, what it does/doesn't do |
+| `TOOLS.md` | Tool usage guidance, query patterns, API endpoints |
+| `MEMORY.md` | Seed template for accumulated learnings |
 
----
+### 3. Copy Shared Files
 
-## Wazuh Expertise Configuration
+```bash
+cp /etc/wazuh-autopilot/agents/triage/SOUL.md /etc/wazuh-autopilot/agents/custom-agent/
+cp /etc/wazuh-autopilot/agents/triage/USER.md /etc/wazuh-autopilot/agents/custom-agent/
+```
 
-Agents include Wazuh-specific knowledge:
+### 4. Register in openclaw.json
 
-```yaml
-wazuh_expertise:
-  rule_categories:
-    - syscheck
-    - rootcheck
-    - windows
-    - authentication
+Add the agent to the `agents.list` array in `openclaw.json`.
 
-  severity_mapping:
-    0-3: informational
-    4-6: low
-    7-9: medium
-    10-12: high
-    13-15: critical
+### 5. Add Trigger
 
-  critical_rule_ids:
-    - 5712   # SSH brute force
-    - 87105  # Windows multiple failures
-    - 100002 # Suricata high severity
+Add a webhook path or cron schedule in the `automations` section.
+
+### 6. Restart OpenClaw
+
+```bash
+docker restart openclaw
 ```
 
 ---
 
-## Environment-Specific Configuration
+## Wazuh Expertise
 
-### Development
+Agents embed Wazuh-specific knowledge directly in their `AGENTS.md` files:
 
-```yaml
-# dev.overrides.yaml
-logging:
-  level: debug
+- **Rule categories**: syscheck, rootcheck, windows, authentication, sysmon, firewall, ids
+- **Severity mapping**: levels 0-3 (informational), 4-6 (low), 7-9 (medium), 10-12 (high), 13-15 (critical)
+- **Critical rule IDs**: 5712 (SSH brute force), 87105 (Windows multiple failures), 100002 (Suricata high severity), and more
+- **Field paths**: Platform-specific (Linux `data.srcip`, Windows `data.win.eventdata.ipAddress`, AWS `data.aws.sourceIPAddress`)
 
-rate_limits:
-  max_per_minute: 1000  # Higher for testing
+To customize, edit the relevant `AGENTS.md` or `TOOLS.md` file directly.
 
-slack:
-  enabled: false  # Disable during dev
-```
+---
 
-### Production
+## Environment Configuration
 
-```yaml
-# prod.overrides.yaml
-logging:
-  level: info
+Environment-specific settings are managed via `.env`:
 
-rate_limits:
-  max_per_minute: 100
+```bash
+# /etc/wazuh-autopilot/.env
 
-resilience:
-  circuit_breaker:
-    failure_threshold: 3  # Stricter
+# Required: Wazuh connection
+WAZUH_API_URL=https://localhost:55000
+WAZUH_API_USER=wazuh-wui
+
+# Required: At least one LLM provider
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Runtime settings
+RUNTIME_PORT=9090
+AUTOPILOT_RESPONDER_ENABLED=false
+
+# Optional: Slack integration
+SLACK_APP_TOKEN=xapp-...
+SLACK_BOT_TOKEN=xoxb-...
 ```
 
 ---
 
 ## Validation
 
-### Syntax Check
+### Check Agent Files
 
 ```bash
-# Validate YAML syntax
-yamllint /etc/wazuh-autopilot/agents/*.yaml
+# Verify all agent directories have required files
+for agent in triage correlation investigation response-planner policy-guard responder reporting; do
+  echo "--- $agent ---"
+  ls /etc/wazuh-autopilot/agents/$agent/
+done
 ```
 
-### Schema Validation
-
-The runtime validates agent configuration on startup. Check logs for validation errors:
+### Verify Runtime
 
 ```bash
-journalctl -u wazuh-autopilot | grep -i "agent.*validation"
+# Health check
+curl http://localhost:9090/health
+
+# Prometheus metrics
+curl http://localhost:9090/metrics
 ```
 
-### Testing
+### Run Tests
 
 ```bash
-# Test agent in dry-run mode (if supported)
-./test-agent.sh triage --dry-run --alert-id 12345
+cd runtime/autopilot-service
+npm test
 ```
 
 ---
@@ -567,31 +296,32 @@ journalctl -u wazuh-autopilot | grep -i "agent.*validation"
 
 ### Agent Not Responding
 
-1. Check agent is enabled: `enabled: true`
-2. Verify triggers are configured correctly
+1. Verify agent workspace files exist: `ls /etc/wazuh-autopilot/agents/<agent>/`
+2. Check that `AGENTS.md`, `IDENTITY.md`, `TOOLS.md`, and `MEMORY.md` are present
 3. Check OpenClaw logs: `docker logs openclaw`
 4. Verify MCP connectivity
 
 ### Tool Permission Errors
 
-1. Verify tool is in `allowed_tools`
-2. Check tool is not in `denied_tools`
-3. Verify MCP server has the tool available
+1. Check the agent's `tools.allow` and `tools.deny` arrays in `openclaw.json`
+2. Verify the MCP server has the requested tool available
 
-### Rate Limiting Issues
+### Missing Shared Files
 
-1. Check current rate limits in config
-2. Monitor metrics: `curl localhost:9090/metrics | grep rate`
-3. Increase limits if needed
+If `SOUL.md` or `USER.md` are missing from an agent workspace:
+```bash
+cp /path/to/openclaw/agents/_shared/SOUL.md /etc/wazuh-autopilot/agents/<agent>/
+cp /path/to/openclaw/agents/_shared/USER.md /etc/wazuh-autopilot/agents/<agent>/
+```
 
 ---
 
 ## Best Practices
 
-1. **Start with read-only agents** - Enable responder only after testing
-2. **Use explicit tool denials** - Deny dangerous tools by default
-3. **Configure rate limits** - Prevent runaway automation
-4. **Enable circuit breakers** - Protect against cascading failures
-5. **Log everything** - Enable structured logging with correlation IDs
-6. **Test in isolation** - Test agents individually before full deployment
-7. **Review policies** - Ensure policy.yaml aligns with agent capabilities
+1. **Customize USER.md first** — Set your organization's industry, compliance, critical assets, and noise sources before deployment
+2. **Start with read-only agents** — Enable the responder only after testing the full pipeline
+3. **Seed MEMORY.md** — Add known false positive patterns and tuning notes to reduce noise from day one
+4. **Keep AGENTS.md focused** — Domain knowledge only; use TOOLS.md for tool usage guidance and IDENTITY.md for role boundaries
+5. **Review SOUL.md** — Adjust operating principles to match your organization's risk tolerance
+6. **Monitor metrics** — Use `/metrics` endpoint and reporting agent KPIs to track agent effectiveness
+7. **Test in isolation** — Test agents individually before full deployment
