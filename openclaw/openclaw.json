@@ -2,8 +2,9 @@
   // =============================================================================
   // WAZUH OPENCLAW AUTOPILOT - OPENCLAW GATEWAY CONFIGURATION
   // =============================================================================
-  // This file configures all 7 SOC automation agents for use with OpenClaw.
-  // Copy to ~/.openclaw/openclaw.json after customizing.
+  // This file is a REFERENCE TEMPLATE. The installer (install.sh) generates the
+  // production config at ~/.openclaw/openclaw.json using configured port values.
+  // To change ports, update install/env.template and re-run the installer.
   //
   // Supported LLM Providers (configure API keys in env section):
   // - Anthropic (Claude): claude-sonnet-4-5, claude-opus-4-5, claude-haiku-4-5

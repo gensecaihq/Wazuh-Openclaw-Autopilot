@@ -74,9 +74,11 @@ SLACK_APP_TOKEN=xapp-1-your-app-token
 SLACK_BOT_TOKEN=xoxb-your-bot-token
 ```
 
-## Step 4: Configure Slack Approvers (If Using Slack)
+## Step 4: Configure Slack Approvers (Optional)
 
-Edit the policy file to add your team's Slack IDs:
+Slack is optional. Without it, approvals work via the REST API (`POST /api/plans/:id/approve`).
+
+If you want Slack notifications and interactive approval buttons, edit the policy file:
 
 ```bash
 sudo nano /etc/wazuh-autopilot/policies/policy.yaml
@@ -105,7 +107,13 @@ sudo systemctl status wazuh-autopilot
 
 ## Step 6: Verify Installation
 
-### Check health endpoint:
+### Run health check:
+
+```bash
+./scripts/health-check.sh
+```
+
+### Check health endpoint (default port 9090, configurable via RUNTIME_PORT):
 
 ```bash
 curl http://127.0.0.1:9090/health
@@ -123,7 +131,7 @@ Expected response:
 ### Run diagnostics:
 
 ```bash
-sudo ./install/install.sh --mode doctor
+./scripts/health-check.sh --quick
 ```
 
 ## Step 7: Test Alert Ingestion
@@ -154,7 +162,7 @@ curl -X POST http://127.0.0.1:9090/api/alerts \
 Expected response:
 ```json
 {
-  "case_id": "CASE-20240115-test-001",
+  "case_id": "CASE-20260217-test-001",
   "status": "created",
   "severity": "high",
   "entities_extracted": 2

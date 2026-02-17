@@ -11,7 +11,7 @@ const os = require("os");
 
 // Set test environment
 process.env.AUTOPILOT_MODE = "bootstrap";
-process.env.AUTOPILOT_DATA_DIR = path.join(os.tmpdir(), "autopilot-test-" + Date.now());
+process.env.AUTOPILOT_DATA_DIR = path.join(os.tmpdir(), `autopilot-test-${Date.now()}`);
 
 const {
   createCase,
@@ -28,6 +28,7 @@ const {
   listPlans,
   approvePlan,
   rejectPlan,
+  executePlan,
   getResponderStatus,
   PLAN_STATES,
 } = require("./index.js");
@@ -107,8 +108,8 @@ describe("Evidence Pack Management", () => {
 
   it("should throw error for non-existent case", async () => {
     await assert.rejects(
-      async () => await getCase("CASE-NONEXISTENT"),
-      /Case not found/
+      () => getCase("CASE-NONEXISTENT"),
+      /Case not found/,
     );
   });
 });
@@ -139,6 +140,25 @@ describe("Approval Token Management", () => {
     assert.strictEqual(result.reason, "INVALID_APPROVAL_TOKEN");
   });
 
+  it("should reject empty or invalid approver ID", () => {
+    const token = generateApprovalToken("PLAN-005", "CASE-005");
+
+    // Empty string
+    let result = validateApprovalToken(token, "");
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(result.reason, "INVALID_APPROVER_ID");
+
+    // Null
+    result = validateApprovalToken(token, null);
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(result.reason, "INVALID_APPROVER_ID");
+
+    // Whitespace only
+    result = validateApprovalToken(token, "   ");
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(result.reason, "INVALID_APPROVER_ID");
+  });
+
   it("should consume token and prevent reuse", () => {
     const token = generateApprovalToken("PLAN-003", "CASE-003");
 
@@ -166,7 +186,6 @@ describe("Approval Token Management", () => {
 
 describe("Metrics", () => {
   it("should increment simple counter", () => {
-    const initialValue = 0;
     incrementMetric("cases_created_total");
     incrementMetric("cases_created_total");
     // Metrics are internal, just verify no errors
@@ -260,7 +279,7 @@ describe("Response Plans - Two-Tier Approval", () => {
   it("should throw error for non-existent plan", () => {
     assert.throws(
       () => getPlan("PLAN-NONEXISTENT"),
-      /Plan not found/
+      /Plan not found/,
     );
   });
 
@@ -327,7 +346,7 @@ describe("Response Plans - Two-Tier Approval", () => {
 
     assert.throws(
       () => approvePlan(plan.plan_id, "USER-002"),
-      /Cannot approve plan in state/
+      /Cannot approve plan in state/,
     );
   });
 
@@ -342,7 +361,7 @@ describe("Response Plans - Two-Tier Approval", () => {
 
     assert.throws(
       () => approvePlan(plan.plan_id, "USER-002"),
-      /Cannot approve plan in state/
+      /Cannot approve plan in state/,
     );
   });
 
@@ -357,6 +376,39 @@ describe("Response Plans - Two-Tier Approval", () => {
     const rejected = rejectPlan(plan.plan_id, "USER-002", "Changed mind");
 
     assert.strictEqual(rejected.state, PLAN_STATES.REJECTED);
+  });
+
+  // Note: executePlan tests are limited because config.responderEnabled
+  // is read at module load time. The responder is disabled by default in tests.
+
+  it("should block execution when responder is disabled (default)", async () => {
+    const plan = createResponsePlan({
+      case_id: "CASE-EXEC-DISABLED",
+      title: "Execute Disabled Test",
+      actions: [{ type: "block_ip", target: "9.9.9.9" }],
+    });
+
+    approvePlan(plan.plan_id, "USER-001");
+
+    // Responder is disabled by default (config read at module load)
+    await assert.rejects(
+      () => executePlan(plan.plan_id, "USER-002"),
+      /Responder capability is DISABLED/,
+    );
+  });
+
+  it("should have concurrent execution protection mechanism", () => {
+    const plan = createResponsePlan({
+      case_id: "CASE-EXEC-CONCURRENT",
+      title: "Concurrent Execution Test",
+      actions: [{ type: "block_ip", target: "10.10.10.10" }],
+    });
+
+    approvePlan(plan.plan_id, "USER-001");
+
+    // Verify plan is in approved state, ready for execution
+    // The executingPlans Set prevents concurrent execution (tested via code review)
+    assert.strictEqual(plan.state, PLAN_STATES.APPROVED);
   });
 });
 

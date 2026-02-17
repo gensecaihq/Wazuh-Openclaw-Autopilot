@@ -4,6 +4,7 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 2.1.x   | :white_check_mark: |
 | 2.0.x   | :white_check_mark: |
 | < 2.0   | :x:                |
 
@@ -88,7 +89,10 @@ Include the following information:
 # Verify Tailscale is running
 tailscale status
 
-# Verify metrics are localhost-only
+# Run full health check
+./scripts/health-check.sh
+
+# Verify metrics are localhost-only (default port 9090, configurable via RUNTIME_PORT)
 curl http://127.0.0.1:9090/metrics  # Should work
 curl http://YOUR_IP:9090/metrics    # Should fail
 ```

@@ -1129,19 +1129,19 @@ configure_wazuh_integrator() {
 
     if confirm "  Configure automatic alert forwarding?" "y"; then
         # Create integrator script
-        cat > /var/ossec/integrations/wazuh-autopilot << 'SCRIPT'
+        cat > /var/ossec/integrations/wazuh-autopilot << SCRIPT
 #!/bin/bash
 # Wazuh OpenClaw Autopilot Integration
 # Forwards alerts to localhost runtime service
 
-ALERT_FILE="$1"
-WEBHOOK="http://127.0.0.1:9090/api/alerts"
+ALERT_FILE="\$1"
+WEBHOOK="http://$GATEWAY_BIND:$RUNTIME_PORT/api/alerts"
 
-if [[ -f "$ALERT_FILE" ]]; then
-    curl -s -X POST "$WEBHOOK" \
-        -H "Content-Type: application/json" \
-        -d @"$ALERT_FILE" \
-        --connect-timeout 5 \
+if [[ -f "\$ALERT_FILE" ]]; then
+    curl -s -X POST "\$WEBHOOK" \\
+        -H "Content-Type: application/json" \\
+        -d @"\$ALERT_FILE" \\
+        --connect-timeout 5 \\
         >/dev/null 2>&1 || true
 fi
 
@@ -1155,19 +1155,147 @@ SCRIPT
         cp "$OSSEC_CONF" "$OSSEC_CONF.backup.$(date +%Y%m%d%H%M%S)"
 
         # Add integration config
-        local INTEGRATOR_CONFIG='
+        local INTEGRATOR_CONFIG="
   <!-- Wazuh OpenClaw Autopilot - Localhost Only -->
   <integration>
     <name>wazuh-autopilot</name>
-    <hook_url>http://127.0.0.1:9090/api/alerts</hook_url>
+    <hook_url>http://$GATEWAY_BIND:$RUNTIME_PORT/api/alerts</hook_url>
     <level>10</level>
     <alert_format>json</alert_format>
   </integration>
-'
+"
         sed -i "s|</ossec_config>|$INTEGRATOR_CONFIG</ossec_config>|" "$OSSEC_CONF"
 
         log_success "Alert forwarding configured (level 10+)"
         log_security "Alerts sent to localhost only"
+    fi
+}
+
+# =============================================================================
+# PRE-FLIGHT CONFIGURATION VALIDATOR
+# =============================================================================
+
+validate_configuration() {
+    log_step "Pre-flight Configuration Validation"
+
+    local issues=0
+    local warnings=0
+
+    echo ""
+    echo "  Validating configuration before starting services..."
+    echo ""
+
+    # --- Required checks ---
+
+    # Check Wazuh API config
+    if grep -q "^WAZUH_API_URL=.\+" "$CONFIG_DIR/.env" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} Wazuh API URL configured"
+    else
+        echo -e "  ${RED}✗${NC} Wazuh API URL not configured"
+        ((issues++))
+    fi
+
+    if grep -q "^WAZUH_API_PASSWORD=.\+" "$CONFIG_DIR/.env" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} Wazuh API credentials set"
+    else
+        echo -e "  ${RED}✗${NC} Wazuh API password not set"
+        ((issues++))
+    fi
+
+    # Check MCP URL
+    if grep -q "^MCP_URL=.\+" "$CONFIG_DIR/.env" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} MCP Server URL configured"
+    else
+        echo -e "  ${RED}✗${NC} MCP Server URL not configured"
+        ((issues++))
+    fi
+
+    # Check at least one LLM API key
+    local has_llm_key=false
+    for key in ANTHROPIC_API_KEY OPENAI_API_KEY GROQ_API_KEY MISTRAL_API_KEY XAI_API_KEY GOOGLE_API_KEY; do
+        if grep -q "^${key}=.\+" "$CONFIG_DIR/.env" 2>/dev/null; then
+            has_llm_key=true
+            break
+        fi
+    done
+    if $has_llm_key; then
+        echo -e "  ${GREEN}✓${NC} LLM API key configured"
+    else
+        echo -e "  ${RED}✗${NC} No LLM API key found (need at least one provider)"
+        ((issues++))
+    fi
+
+    # Check policy file exists
+    if [[ -f "$CONFIG_DIR/policies/policy.yaml" ]]; then
+        echo -e "  ${GREEN}✓${NC} Policy file present"
+    else
+        echo -e "  ${RED}✗${NC} Policy file missing"
+        ((issues++))
+    fi
+
+    # Check toolmap file exists
+    if [[ -f "$CONFIG_DIR/policies/toolmap.yaml" ]]; then
+        echo -e "  ${GREEN}✓${NC} Toolmap file present"
+    else
+        echo -e "  ${RED}✗${NC} Toolmap file missing"
+        ((issues++))
+    fi
+
+    # Check OpenClaw token
+    if [[ -f "$SECRETS_DIR/openclaw_token" ]] && [[ -s "$SECRETS_DIR/openclaw_token" ]]; then
+        echo -e "  ${GREEN}✓${NC} OpenClaw token generated"
+    else
+        echo -e "  ${RED}✗${NC} OpenClaw token not found"
+        ((issues++))
+    fi
+
+    # --- Optional checks (warnings only) ---
+
+    echo ""
+    echo "  Optional integrations:"
+    echo ""
+
+    # Slack (optional)
+    if grep -q "^SLACK_APP_TOKEN=xapp-" "$CONFIG_DIR/.env" 2>/dev/null && \
+       grep -q "^SLACK_BOT_TOKEN=xoxb-" "$CONFIG_DIR/.env" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} Slack integration configured"
+    else
+        echo -e "  ${YELLOW}○${NC} Slack not configured (optional - approvals work via REST API)"
+        ((warnings++))
+    fi
+
+    # Check if ports are available
+    echo ""
+    echo "  Port availability:"
+    echo ""
+
+    for port_pair in "GATEWAY:$GATEWAY_PORT" "MCP:$MCP_PORT" "RUNTIME:$RUNTIME_PORT"; do
+        local label="${port_pair%%:*}"
+        local port="${port_pair##*:}"
+        if ! ss -tlnp 2>/dev/null | grep -q ":${port} " && \
+           ! netstat -tlnp 2>/dev/null | grep -q ":${port} "; then
+            echo -e "  ${GREEN}✓${NC} Port $port ($label) available"
+        else
+            echo -e "  ${YELLOW}!${NC} Port $port ($label) already in use"
+            ((warnings++))
+        fi
+    done
+
+    # --- Summary ---
+    echo ""
+    if [[ $issues -gt 0 ]]; then
+        log_error "Validation found $issues critical issue(s)"
+        echo ""
+        if confirm "  Continue anyway? (services may not function correctly)" "n"; then
+            log_warn "Continuing with $issues unresolved issue(s)"
+        else
+            log_error "Fix the issues above and re-run the installer"
+            exit 1
+        fi
+    elif [[ $warnings -gt 0 ]]; then
+        log_success "Validation passed with $warnings optional warning(s)"
+    else
+        log_success "All configuration checks passed"
     fi
 }
 
@@ -1447,6 +1575,7 @@ main() {
     install_runtime_service
     configure_system
     configure_wazuh_integrator
+    validate_configuration
     prompt_responder_activation
     show_pairing_info
     start_services

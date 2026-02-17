@@ -44,11 +44,15 @@ const config = {
   logLevel: process.env.LOG_LEVEL || "info",
   approvalTtlMinutes: parseInt(
     process.env.APPROVAL_TOKEN_TTL_MINUTES || "60",
-    10
+    10,
   ),
   // Rate limiting
   rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || "60000", 10),
   rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || "100", 10),
+  // Auth failure rate limiting (Issue #3 fix)
+  authFailureWindowMs: parseInt(process.env.AUTH_FAILURE_WINDOW_MS || "900000", 10), // 15 minutes
+  authFailureMaxAttempts: parseInt(process.env.AUTH_FAILURE_MAX_ATTEMPTS || "5", 10),
+  authLockoutDurationMs: parseInt(process.env.AUTH_LOCKOUT_DURATION_MS || "1800000", 10), // 30 minutes
   // MCP timeout
   mcpTimeoutMs: parseInt(process.env.MCP_TIMEOUT_MS || "30000", 10),
   // Responder capability toggle - DISABLED by default
@@ -57,6 +61,11 @@ const config = {
   responderEnabled: process.env.AUTOPILOT_RESPONDER_ENABLED === "true",
   // Plan expiry
   planExpiryMinutes: parseInt(process.env.PLAN_EXPIRY_MINUTES || "60", 10),
+  // CORS configuration (Issue #7 fix)
+  corsOrigin: process.env.CORS_ORIGIN || "http://localhost:3000",
+  corsEnabled: process.env.CORS_ENABLED !== "false",
+  // Graceful shutdown timeout (Issue #12 fix)
+  shutdownTimeoutMs: parseInt(process.env.SHUTDOWN_TIMEOUT_MS || "30000", 10),
 };
 
 // =============================================================================
@@ -67,7 +76,9 @@ const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const currentLogLevel = LOG_LEVELS[config.logLevel] || 1;
 
 function log(level, component, msg, extra = {}) {
-  if (LOG_LEVELS[level] < currentLogLevel) return;
+  const levelValue = LOG_LEVELS[level];
+  // Skip if invalid level or below current threshold (Bug #12 fix)
+  if (levelValue === undefined || levelValue < currentLogLevel) return;
 
   const entry = {
     ts: new Date().toISOString(),
@@ -98,7 +109,7 @@ const metrics = {
   cases_created_total: 0,
   cases_updated_total: 0,
   alerts_ingested_total: 0,
-  triage_latency_seconds: [],
+  triage_latency_seconds: {}, // Object with keys mapping to arrays (Bug #8 fix)
   mcp_tool_calls_total: {},
   mcp_tool_call_latency_seconds: {},
   action_plans_proposed_total: 0,
@@ -237,22 +248,22 @@ async function createCase(caseId, data) {
 
   await fs.writeFile(
     path.join(caseDir, "evidence-pack.json"),
-    JSON.stringify(evidencePack, null, 2)
+    JSON.stringify(evidencePack, null, 2),
   );
 
-  // Also create a lightweight summary
+  // Also create a lightweight summary (Bug #10 fix: add defaults)
   const caseSummary = {
     case_id: caseId,
     created_at: now,
     updated_at: now,
-    title: data.title,
-    severity: data.severity,
+    title: data.title || "",
+    severity: data.severity || "medium",
     status: "open",
   };
 
   await fs.writeFile(
     path.join(caseDir, "case.json"),
-    JSON.stringify(caseSummary, null, 2)
+    JSON.stringify(caseSummary, null, 2),
   );
 
   incrementMetric("cases_created_total");
@@ -291,10 +302,13 @@ async function updateCase(caseId, updates) {
   const now = new Date().toISOString();
   evidencePack.updated_at = now;
 
-  if (updates.title) evidencePack.title = updates.title;
-  if (updates.summary) evidencePack.summary = updates.summary;
-  if (updates.severity) evidencePack.severity = updates.severity;
-  if (updates.confidence) evidencePack.confidence = updates.confidence;
+  // Bug #14 fix: Use hasOwnProperty to allow falsy values (0, "", etc.)
+  if (Object.prototype.hasOwnProperty.call(updates, "title")) evidencePack.title = updates.title;
+  if (Object.prototype.hasOwnProperty.call(updates, "summary")) evidencePack.summary = updates.summary;
+  if (Object.prototype.hasOwnProperty.call(updates, "severity")) evidencePack.severity = updates.severity;
+  if (Object.prototype.hasOwnProperty.call(updates, "confidence")) evidencePack.confidence = updates.confidence;
+  // Bug #11 fix: Sync status field to evidence pack
+  if (Object.prototype.hasOwnProperty.call(updates, "status")) evidencePack.status = updates.status;
 
   if (updates.entities) {
     evidencePack.entities = [...evidencePack.entities, ...updates.entities];
@@ -348,7 +362,7 @@ async function getCase(caseId) {
     config.dataDir,
     "cases",
     caseId,
-    "evidence-pack.json"
+    "evidence-pack.json",
   );
   try {
     const content = await fs.readFile(packPath, "utf8");
@@ -358,6 +372,7 @@ async function getCase(caseId) {
   }
 }
 
+// Issue #11 fix: Add offset pagination and default limit
 async function listCases(options = {}) {
   const casesDir = path.join(config.dataDir, "cases");
   await ensureDir(casesDir);
@@ -377,15 +392,14 @@ async function listCases(options = {}) {
     }
   }
 
-  // Sort by created_at descending
-  cases.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  // Issue #13 fix: More efficient date sorting
+  cases.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-  // Apply limit
-  if (options.limit) {
-    return cases.slice(0, options.limit);
-  }
+  // Issue #11 fix: Apply offset and limit with defaults
+  const offset = options.offset || 0;
+  const limit = options.limit || 100; // Default limit to prevent unbounded responses
 
-  return cases;
+  return cases.slice(offset, offset + limit);
 }
 
 // =============================================================================
@@ -436,6 +450,11 @@ function generateApprovalToken(planId, caseId) {
 }
 
 function validateApprovalToken(token, approverId) {
+  // Bug #3 fix: Validate approverId parameter
+  if (!approverId || typeof approverId !== "string" || approverId.trim() === "") {
+    return { valid: false, reason: "INVALID_APPROVER_ID" };
+  }
+
   const tokenData = approvalTokens.get(token);
 
   if (!tokenData) {
@@ -446,11 +465,15 @@ function validateApprovalToken(token, approverId) {
     return { valid: false, reason: "TOKEN_ALREADY_USED" };
   }
 
-  if (new Date(tokenData.expires_at) < new Date()) {
+  // Issue #13 fix: Use timestamp comparison
+  if (new Date(tokenData.expires_at).getTime() < Date.now()) {
     return { valid: false, reason: "EXPIRED_APPROVAL" };
   }
 
-  return { valid: true, tokenData };
+  // Note: Full approver authorization (group membership, etc.) should be
+  // validated by the Policy Guard agent before generating the token
+
+  return { valid: true, tokenData, approverId };
 }
 
 function consumeApprovalToken(token, approverId, decision, reason = "") {
@@ -489,6 +512,8 @@ function consumeApprovalToken(token, approverId, decision, reason = "") {
 
 const responsePlans = new Map();
 const MAX_PLANS = 10000;
+// Bug #7 fix: Track plans currently being executed to prevent race conditions
+const executingPlans = new Set();
 
 // Plan states
 const PLAN_STATES = {
@@ -501,16 +526,40 @@ const PLAN_STATES = {
   EXPIRED: "expired",
 };
 
+// Issue #6 fix: Validate action structure
+function validatePlanAction(action, index) {
+  const errors = [];
+  if (!action.type || typeof action.type !== "string") {
+    errors.push(`Action ${index}: missing or invalid 'type' field`);
+  }
+  if (!action.target || typeof action.target !== "string") {
+    errors.push(`Action ${index}: missing or invalid 'target' field`);
+  }
+  return errors;
+}
+
 function createResponsePlan(planData) {
+  // Issue #6 fix: Validate all actions at creation time
+  if (planData.actions && Array.isArray(planData.actions)) {
+    const validationErrors = [];
+    planData.actions.forEach((action, index) => {
+      validationErrors.push(...validatePlanAction(action, index));
+    });
+    if (validationErrors.length > 0) {
+      throw new Error(`Invalid actions: ${validationErrors.join("; ")}`);
+    }
+  }
+
   // Enforce plan limit
   if (responsePlans.size >= MAX_PLANS) {
     // Clean up old completed/failed/expired plans
     let removed = 0;
     const cutoff = Date.now() - 24 * 60 * 60 * 1000; // 24 hours
+    const cutoffTime = new Date(cutoff).getTime(); // Issue #13 fix
     for (const [planId, plan] of responsePlans.entries()) {
       if (
         ["completed", "failed", "rejected", "expired"].includes(plan.state) &&
-        new Date(plan.updated_at) < new Date(cutoff)
+        new Date(plan.updated_at).getTime() < cutoffTime
       ) {
         responsePlans.delete(planId);
         removed++;
@@ -573,17 +622,20 @@ function createResponsePlan(planData) {
   return plan;
 }
 
-function getPlan(planId) {
+// Bug #4 fix: Add updateExpiry flag to prevent double metric increment
+function getPlan(planId, { updateExpiry = true } = {}) {
   const plan = responsePlans.get(planId);
   if (!plan) {
     throw new Error(`Plan not found: ${planId}`);
   }
 
   // Check if plan has expired
-  if (plan.state === PLAN_STATES.PROPOSED || plan.state === PLAN_STATES.APPROVED) {
-    if (new Date(plan.expires_at) < new Date()) {
+  // Issue #13 fix: Use timestamp comparison
+  if (updateExpiry && (plan.state === PLAN_STATES.PROPOSED || plan.state === PLAN_STATES.APPROVED)) {
+    const now = Date.now();
+    if (new Date(plan.expires_at).getTime() < now) {
       plan.state = PLAN_STATES.EXPIRED;
-      plan.updated_at = new Date().toISOString();
+      plan.updated_at = new Date(now).toISOString();
       incrementMetric("plans_expired_total");
       log("info", "plans", "Plan expired", { plan_id: planId });
     }
@@ -592,9 +644,10 @@ function getPlan(planId) {
   return plan;
 }
 
+// Issue #11 fix: Add offset pagination
 function listPlans(options = {}) {
   const plans = [];
-  const { state, case_id, limit = 100 } = options;
+  const { state, case_id, limit = 100, offset = 0 } = options;
 
   for (const plan of responsePlans.values()) {
     // Filter by state
@@ -605,37 +658,41 @@ function listPlans(options = {}) {
     plans.push(plan);
   }
 
-  // Sort by created_at descending
-  plans.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  // Issue #13 fix: More efficient date sorting
+  plans.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-  return plans.slice(0, limit);
+  return plans.slice(offset, offset + limit);
 }
 
 // TIER 1: Approve a plan (human clicks "Approve")
 function approvePlan(planId, approverId, reason = "") {
-  const plan = getPlan(planId);
+  // Bug #4 fix: Don't auto-update expiry in getPlan to avoid double metric
+  const plan = getPlan(planId, { updateExpiry: false });
+
+  // Check if expired first
+  // Issue #13 fix: Use timestamp comparison
+  const now = Date.now();
+  if (new Date(plan.expires_at).getTime() < now) {
+    plan.state = PLAN_STATES.EXPIRED;
+    plan.updated_at = new Date(now).toISOString();
+    incrementMetric("plans_expired_total");
+    log("info", "plans", "Plan expired", { plan_id: planId });
+    throw new Error("Plan has expired");
+  }
 
   // Validate state
   if (plan.state !== PLAN_STATES.PROPOSED) {
     throw new Error(`Cannot approve plan in state: ${plan.state}`);
   }
 
-  // Check if expired
-  if (new Date(plan.expires_at) < new Date()) {
-    plan.state = PLAN_STATES.EXPIRED;
-    plan.updated_at = new Date().toISOString();
-    incrementMetric("plans_expired_total");
-    throw new Error("Plan has expired");
-  }
-
-  const now = new Date().toISOString();
+  const nowIso = new Date(now).toISOString();
   plan.state = PLAN_STATES.APPROVED;
   plan.approver_id = approverId;
-  plan.approved_at = now;
+  plan.approved_at = nowIso;
   plan.approval_reason = reason;
-  plan.updated_at = now;
+  plan.updated_at = nowIso;
   // Extend expiry after approval (give time for execution)
-  plan.expires_at = new Date(Date.now() + config.planExpiryMinutes * 60 * 1000).toISOString();
+  plan.expires_at = new Date(now + config.planExpiryMinutes * 60 * 1000).toISOString();
 
   incrementMetric("plans_approved_total");
   log("info", "plans", "Plan approved (Tier 1)", {
@@ -649,7 +706,8 @@ function approvePlan(planId, approverId, reason = "") {
 
 // Reject a plan
 function rejectPlan(planId, rejectorId, reason = "") {
-  const plan = getPlan(planId);
+  // Bug #4 fix: Don't auto-update expiry in getPlan
+  const plan = getPlan(planId, { updateExpiry: false });
 
   // Can reject from proposed or approved state
   if (!["proposed", "approved"].includes(plan.state)) {
@@ -686,11 +744,23 @@ async function executePlan(planId, executorId) {
     });
     throw new Error(
       "Responder capability is DISABLED. Set AUTOPILOT_RESPONDER_ENABLED=true to enable. " +
-      "Note: Human approval (Approve + Execute) will still be required for every action."
+      "Note: Human approval (Approve + Execute) will still be required for every action.",
     );
   }
 
-  const plan = getPlan(planId);
+  // Bug #4 fix: Don't auto-update expiry in getPlan
+  const plan = getPlan(planId, { updateExpiry: false });
+
+  // Check if expired first
+  // Issue #13 fix: Use timestamp comparison
+  const nowTs = Date.now();
+  if (new Date(plan.expires_at).getTime() < nowTs) {
+    plan.state = PLAN_STATES.EXPIRED;
+    plan.updated_at = new Date(nowTs).toISOString();
+    incrementMetric("plans_expired_total");
+    log("info", "plans", "Plan expired", { plan_id: planId });
+    throw new Error("Plan has expired - approval is no longer valid");
+  }
 
   // Validate state - must be approved first (Tier 1 complete)
   if (plan.state !== PLAN_STATES.APPROVED) {
@@ -700,15 +770,13 @@ async function executePlan(planId, executorId) {
     throw new Error(`Cannot execute plan in state: ${plan.state}`);
   }
 
-  // Check if expired
-  if (new Date(plan.expires_at) < new Date()) {
-    plan.state = PLAN_STATES.EXPIRED;
-    plan.updated_at = new Date().toISOString();
-    incrementMetric("plans_expired_total");
-    throw new Error("Plan has expired - approval is no longer valid");
+  // Bug #7 fix: Prevent concurrent execution of the same plan
+  if (executingPlans.has(planId)) {
+    throw new Error("Plan is already being executed");
   }
+  executingPlans.add(planId);
 
-  const now = new Date().toISOString();
+  const now = new Date(nowTs).toISOString();
   plan.state = PLAN_STATES.EXECUTING;
   plan.executor_id = executorId;
   plan.executed_at = now;
@@ -726,92 +794,97 @@ async function executePlan(planId, executorId) {
   const results = [];
   let allSuccess = true;
 
-  for (const action of plan.actions) {
-    try {
+  try {
+    for (const action of plan.actions) {
+      try {
       // Validate action has required fields
-      if (!action.type || !action.target) {
-        throw new Error("Action missing required fields: type, target");
-      }
+        if (!action.type || !action.target) {
+          throw new Error("Action missing required fields: type, target");
+        }
 
-      // Call MCP tool for the action
-      const correlationId = `${planId}-${action.type}-${Date.now()}`;
-      const mcpResult = await callMcpTool(action.type, action.params || {}, correlationId);
+        // Call MCP tool for the action
+        const correlationId = `${planId}-${action.type}-${Date.now()}`;
+        const mcpResult = await callMcpTool(action.type, action.params || {}, correlationId);
 
-      results.push({
-        action_type: action.type,
-        target: action.target,
-        status: mcpResult.success ? "success" : "failed",
-        mcp_response: mcpResult.data,
-        timestamp: new Date().toISOString(),
-      });
+        results.push({
+          action_type: action.type,
+          target: action.target,
+          status: mcpResult.success ? "success" : "failed",
+          mcp_response: mcpResult.data,
+          timestamp: new Date().toISOString(),
+        });
 
-      if (!mcpResult.success) {
+        if (!mcpResult.success) {
+          allSuccess = false;
+        }
+      } catch (err) {
         allSuccess = false;
+        results.push({
+          action_type: action.type,
+          target: action.target,
+          status: "error",
+          error: err.message,
+          timestamp: new Date().toISOString(),
+        });
+        log("error", "plans", "Action execution failed", {
+          plan_id: planId,
+          action_type: action.type,
+          target: action.target,
+          error: err.message,
+        });
       }
-    } catch (err) {
-      allSuccess = false;
-      results.push({
-        action_type: action.type,
-        target: action.target,
-        status: "error",
-        error: err.message,
-        timestamp: new Date().toISOString(),
+    }
+
+    // Update plan with results
+    plan.execution_result = {
+      success: allSuccess,
+      actions_total: plan.actions.length,
+      actions_success: results.filter((r) => r.status === "success").length,
+      actions_failed: results.filter((r) => r.status !== "success").length,
+      results,
+    };
+    plan.state = allSuccess ? PLAN_STATES.COMPLETED : PLAN_STATES.FAILED;
+    plan.updated_at = new Date().toISOString();
+
+    if (allSuccess) {
+      incrementMetric("executions_success_total");
+    } else {
+      incrementMetric("executions_failed_total");
+    }
+
+    log("info", "plans", "Plan execution completed", {
+      plan_id: planId,
+      case_id: plan.case_id,
+      state: plan.state,
+      actions_success: plan.execution_result.actions_success,
+      actions_failed: plan.execution_result.actions_failed,
+    });
+
+    // Update the associated case with execution results
+    try {
+      await updateCase(plan.case_id, {
+        actions: [
+          {
+            plan_id: planId,
+            executed_at: plan.executed_at,
+            executor_id: executorId,
+            result: plan.execution_result,
+          },
+        ],
       });
-      log("error", "plans", "Action execution failed", {
+    } catch (err) {
+      log("warn", "plans", "Failed to update case with execution results", {
         plan_id: planId,
-        action_type: action.type,
-        target: action.target,
+        case_id: plan.case_id,
         error: err.message,
       });
     }
+
+    return plan;
+  } finally {
+    // Bug #7 fix: Always remove from executing set
+    executingPlans.delete(planId);
   }
-
-  // Update plan with results
-  plan.execution_result = {
-    success: allSuccess,
-    actions_total: plan.actions.length,
-    actions_success: results.filter((r) => r.status === "success").length,
-    actions_failed: results.filter((r) => r.status !== "success").length,
-    results,
-  };
-  plan.state = allSuccess ? PLAN_STATES.COMPLETED : PLAN_STATES.FAILED;
-  plan.updated_at = new Date().toISOString();
-
-  if (allSuccess) {
-    incrementMetric("executions_success_total");
-  } else {
-    incrementMetric("executions_failed_total");
-  }
-
-  log("info", "plans", "Plan execution completed", {
-    plan_id: planId,
-    case_id: plan.case_id,
-    state: plan.state,
-    actions_success: plan.execution_result.actions_success,
-    actions_failed: plan.execution_result.actions_failed,
-  });
-
-  // Update the associated case with execution results
-  try {
-    await updateCase(plan.case_id, {
-      actions: [
-        {
-          plan_id: planId,
-          executed_at: plan.executed_at,
-          executor_id: executorId,
-          result: plan.execution_result,
-        },
-      ],
-    });
-  } catch (err) {
-    log("warn", "plans", "Failed to update case with execution results", {
-      plan_id: planId,
-      case_id: plan.case_id,
-      error: err.message,
-    });
-  }
-
-  return plan;
 }
 
 // Check responder status
@@ -834,14 +907,15 @@ function getResponderStatus() {
 // =============================================================================
 
 // Simple YAML parser for toolmap (handles basic key-value and nested structures)
+// Bug #5 and #6 fixes: Improved list and multi-colon handling
 function parseSimpleYaml(content) {
   const result = {};
-  const lines = content.split('\n');
-  const stack = [{ indent: -1, obj: result }];
+  const lines = content.split("\n");
+  const stack = [{ indent: -1, obj: result, pendingListKey: null }];
 
   for (const line of lines) {
     // Skip comments and empty lines
-    if (line.trim().startsWith('#') || line.trim() === '') continue;
+    if (line.trim().startsWith("#") || line.trim() === "") continue;
 
     const indent = line.search(/\S/);
     if (indent === -1) continue;
@@ -851,49 +925,60 @@ function parseSimpleYaml(content) {
       stack.pop();
     }
 
-    const parent = stack[stack.length - 1].obj;
+    const current = stack[stack.length - 1];
+    const parent = current.obj;
     const trimmed = line.trim();
 
     // Handle list items
-    if (trimmed.startsWith('- ')) {
+    if (trimmed.startsWith("- ")) {
       const value = trimmed.substring(2).trim();
-      const lastKey = Object.keys(parent).pop();
-      if (lastKey && !Array.isArray(parent[lastKey])) {
-        parent[lastKey] = [];
-      }
-      if (lastKey) {
-        if (value.includes(':')) {
+      // Bug #5 fix: Use pendingListKey to track which key should receive list items
+      const listKey = current.pendingListKey;
+      if (listKey) {
+        // Ensure array exists
+        if (!Array.isArray(parent[listKey])) {
+          parent[listKey] = [];
+        }
+        // Bug #6 fix: Use indexOf to split on first colon only
+        const colonIdx = value.indexOf(":");
+        if (colonIdx > 0) {
           const obj = {};
-          const [k, v] = value.split(':').map(s => s.trim());
-          obj[k] = v.replace(/^["']|["']$/g, '');
-          parent[lastKey].push(obj);
+          const k = value.substring(0, colonIdx).trim();
+          const v = value.substring(colonIdx + 1).trim().replace(/^["']|["']$/g, "");
+          obj[k] = v;
+          parent[listKey].push(obj);
         } else {
-          parent[lastKey].push(value.replace(/^["']|["']$/g, ''));
+          parent[listKey].push(value.replace(/^["']|["']$/g, ""));
         }
       }
       continue;
     }
 
     // Handle key: value pairs
-    const colonIndex = trimmed.indexOf(':');
+    const colonIndex = trimmed.indexOf(":");
     if (colonIndex > 0) {
       const key = trimmed.substring(0, colonIndex).trim();
+      // Bug #6 fix: Get everything after first colon
       let value = trimmed.substring(colonIndex + 1).trim();
 
-      if (value === '' || value === '|' || value === '>') {
-        // Nested object or multiline string
+      if (value === "" || value === "|" || value === ">") {
+        // Nested object or list - set as pending list key
         parent[key] = {};
-        stack.push({ indent, obj: parent[key] });
+        stack.push({ indent, obj: parent[key], pendingListKey: null });
+        // Mark current level as expecting list items for this key
+        current.pendingListKey = key;
       } else {
         // Parse value
-        if (value === 'true') value = true;
-        else if (value === 'false') value = false;
-        else if (value === 'null') value = null;
+        if (value === "true") value = true;
+        else if (value === "false") value = false;
+        else if (value === "null") value = null;
         else if (/^\d+$/.test(value)) value = parseInt(value, 10);
         else if (/^\d+\.\d+$/.test(value)) value = parseFloat(value);
-        else value = value.replace(/^["']|["']$/g, '');
+        else value = value.replace(/^["']|["']$/g, "");
 
         parent[key] = value;
+        // Reset pending list key since we got a value
+        current.pendingListKey = key;
       }
     }
   }
@@ -955,7 +1040,7 @@ function resolveMcpTool(logicalName) {
   // Check read operations
   if (toolmapConfig.read_operations && toolmapConfig.read_operations[logicalName]) {
     const tool = toolmapConfig.read_operations[logicalName];
-    if (typeof tool === 'object' && tool.mcp_tool) {
+    if (typeof tool === "object" && tool.mcp_tool) {
       return tool.mcp_tool;
     }
   }
@@ -963,7 +1048,7 @@ function resolveMcpTool(logicalName) {
   // Check action operations
   if (toolmapConfig.action_operations && toolmapConfig.action_operations[logicalName]) {
     const tool = toolmapConfig.action_operations[logicalName];
-    if (typeof tool === 'object' && tool.mcp_tool) {
+    if (typeof tool === "object" && tool.mcp_tool) {
       return tool.mcp_tool;
     }
   }
@@ -978,13 +1063,13 @@ function isToolEnabled(logicalName) {
   // Check read operations (default enabled)
   if (toolmapConfig.read_operations && toolmapConfig.read_operations[logicalName]) {
     const tool = toolmapConfig.read_operations[logicalName];
-    return typeof tool === 'object' ? tool.enabled !== false : true;
+    return typeof tool === "object" ? tool.enabled !== false : true;
   }
 
   // Check action operations (default disabled)
   if (toolmapConfig.action_operations && toolmapConfig.action_operations[logicalName]) {
     const tool = toolmapConfig.action_operations[logicalName];
-    return typeof tool === 'object' ? tool.enabled === true : false;
+    return typeof tool === "object" ? tool.enabled === true : false;
   }
 
   return true;
@@ -1114,10 +1199,103 @@ function checkRateLimit(clientIp) {
 // Note: Rate limit cleanup is now handled by setupCleanupIntervals() during startup
 
 // =============================================================================
+// AUTH FAILURE RATE LIMITING (Issue #3 fix)
+// =============================================================================
+
+const authFailureState = {
+  attempts: new Map(), // IP -> { count, firstAttempt, lockedUntil }
+};
+
+function recordAuthFailure(clientIp) {
+  const now = Date.now();
+  const data = authFailureState.attempts.get(clientIp);
+
+  if (!data || now > data.firstAttempt + config.authFailureWindowMs) {
+    // Start new window
+    authFailureState.attempts.set(clientIp, {
+      count: 1,
+      firstAttempt: now,
+      lockedUntil: null,
+    });
+    return { locked: false };
+  }
+
+  data.count++;
+
+  // Check if should lock
+  if (data.count >= config.authFailureMaxAttempts) {
+    data.lockedUntil = now + config.authLockoutDurationMs;
+    log("warn", "auth", "Auth lockout triggered", {
+      client_ip: clientIp,
+      attempts: data.count,
+      locked_until: new Date(data.lockedUntil).toISOString(),
+    });
+    return { locked: true, retryAfter: Math.ceil(config.authLockoutDurationMs / 1000) };
+  }
+
+  return { locked: false, attemptsRemaining: config.authFailureMaxAttempts - data.count };
+}
+
+function isAuthLocked(clientIp) {
+  const data = authFailureState.attempts.get(clientIp);
+  if (!data || !data.lockedUntil) return { locked: false };
+
+  const now = Date.now();
+  if (now >= data.lockedUntil) {
+    // Lockout expired, reset
+    authFailureState.attempts.delete(clientIp);
+    return { locked: false };
+  }
+
+  return {
+    locked: true,
+    retryAfter: Math.ceil((data.lockedUntil - now) / 1000),
+  };
+}
+
+function clearAuthFailures(clientIp) {
+  authFailureState.attempts.delete(clientIp);
+}
+
+// =============================================================================
+// SECURE HELPERS (Issue #1 fix - timing-safe comparison)
+// =============================================================================
+
+/**
+ * Timing-safe string comparison to prevent timing attacks
+ */
+function secureCompare(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") {
+    return false;
+  }
+
+  // Use crypto.timingSafeEqual for constant-time comparison
+  // Pad to same length to avoid length-based timing leaks
+  const aBuffer = Buffer.from(a);
+  const bBuffer = Buffer.from(b);
+
+  if (aBuffer.length !== bBuffer.length) {
+    // Compare against self to maintain constant time
+    crypto.timingSafeEqual(aBuffer, aBuffer);
+    return false;
+  }
+
+  return crypto.timingSafeEqual(aBuffer, bBuffer);
+}
+
+// =============================================================================
+// REQUEST ID GENERATION (Issue #15 fix)
+// =============================================================================
+
+function generateRequestId() {
+  return `req-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+}
+
+// =============================================================================
 // HTTP SERVER
 // =============================================================================
 
-const SERVICE_VERSION = "2.0.0";
+const SERVICE_VERSION = "2.1.0"; // Bumped for security fixes
 const startTime = Date.now();
 
 // Input validation
@@ -1127,71 +1305,125 @@ function isValidCaseId(caseId) {
 }
 
 // Authorization validation for sensitive endpoints
-function validateAuthorization(req, requiredScope = "write") {
+// Issue #1 fix: Uses timing-safe comparison
+// Issue #3 fix: Includes auth failure rate limiting
+function validateAuthorization(req, _requiredScope = "write") {
   const authHeader = req.headers.authorization;
 
-  // Allow requests from localhost without auth (for internal agents)
+  // Get client IP for auth failure tracking
   const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
                    req.socket.remoteAddress || "unknown";
   const isLocalhost = clientIp === "127.0.0.1" || clientIp === "::1" ||
                       clientIp === "::ffff:127.0.0.1";
 
+  // Check if client is locked out due to too many auth failures
+  const lockStatus = isAuthLocked(clientIp);
+  if (lockStatus.locked) {
+    return {
+      valid: false,
+      reason: "Too many authentication failures",
+      retryAfter: lockStatus.retryAfter,
+      locked: true,
+    };
+  }
+
+  // Allow requests from localhost without auth (for internal agents)
   if (isLocalhost && !authHeader) {
     return { valid: true, source: "localhost" };
   }
 
   // Require authorization for non-localhost requests
   if (!authHeader) {
+    recordAuthFailure(clientIp);
     return { valid: false, reason: "Missing Authorization header" };
   }
 
   // Validate Bearer token format
   if (!authHeader.startsWith("Bearer ")) {
+    recordAuthFailure(clientIp);
     return { valid: false, reason: "Invalid Authorization format" };
   }
 
   const token = authHeader.substring(7);
 
-  // Validate against configured MCP auth token
-  // In production, this should use proper token validation (JWT, etc.)
-  if (config.mcpAuth && token === config.mcpAuth) {
+  // Validate against configured MCP auth token using timing-safe comparison
+  if (config.mcpAuth && secureCompare(token, config.mcpAuth)) {
+    clearAuthFailures(clientIp); // Clear on success
     return { valid: true, source: "api_token" };
   }
 
   // Also check for internal service token (environment variable)
   const serviceToken = process.env.AUTOPILOT_SERVICE_TOKEN;
-  if (serviceToken && token === serviceToken) {
+  if (serviceToken && secureCompare(token, serviceToken)) {
+    clearAuthFailures(clientIp); // Clear on success
     return { valid: true, source: "service_token" };
   }
 
+  // Record auth failure for rate limiting
+  recordAuthFailure(clientIp);
   return { valid: false, reason: "Invalid or expired token" };
 }
 
 // Parse JSON body from request
-async function parseJsonBody(req) {
+// Issue #8 fix: Track cumulative size before appending to prevent memory issues
+const MAX_BODY_SIZE = 1024 * 1024; // 1MB
+
+function parseJsonBody(req) {
   return new Promise((resolve, reject) => {
-    let body = "";
+    const chunks = [];
+    let totalSize = 0;
+    let rejected = false;
+
     req.on("data", (chunk) => {
-      body += chunk;
-      // Limit body size to 1MB
-      if (body.length > 1024 * 1024) {
+      if (rejected) return;
+
+      // Check cumulative size BEFORE adding chunk
+      totalSize += chunk.length;
+      if (totalSize > MAX_BODY_SIZE) {
+        rejected = true;
+        req.destroy(); // Stop receiving data
         reject(new Error("Request body too large"));
+        return;
       }
+      chunks.push(chunk);
     });
+
     req.on("end", () => {
+      if (rejected) return;
       try {
+        const body = Buffer.concat(chunks).toString("utf8");
         resolve(body ? JSON.parse(body) : {});
       } catch (err) {
         reject(new Error("Invalid JSON"));
       }
     });
-    req.on("error", reject);
+
+    req.on("error", (err) => {
+      if (!rejected) reject(err);
+    });
   });
+}
+
+// Helper to extract plan ID from URL path (Issue #14 fix - avoid duplication)
+// Prefixed with underscore as these are available for future use
+function _extractPlanIdFromPath(pathname) {
+  const parts = pathname.split("/");
+  return parts[3] || null;
+}
+
+// Helper to extract case ID from URL path
+function _extractCaseIdFromPath(pathname) {
+  const parts = pathname.split("/");
+  return parts[3] || null;
 }
 
 function createServer() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
+
+    // Issue #15 fix: Generate unique request ID for tracing
+    const requestId = req.headers["x-request-id"] || generateRequestId();
+    res.setHeader("X-Request-ID", requestId);
 
     // Get client IP for rate limiting
     const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
@@ -1203,10 +1435,12 @@ function createServer() {
     res.setHeader("X-XSS-Protection", "1; mode=block");
     res.setHeader("Cache-Control", "no-store");
 
-    // CORS headers for local development
-    res.setHeader("Access-Control-Allow-Origin", "http://localhost:3000");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    // Issue #7 fix: Configurable CORS headers
+    if (config.corsEnabled) {
+      res.setHeader("Access-Control-Allow-Origin", config.corsOrigin);
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID");
+    }
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);
@@ -1225,6 +1459,7 @@ function createServer() {
         res.end(JSON.stringify({
           error: "Too Many Requests",
           retry_after: rateLimit.retryAfter,
+          request_id: requestId,
         }));
         return;
       }
@@ -1391,36 +1626,47 @@ function createServer() {
         }
 
         // Generate case ID from alert
+        // Bug #15 fix: Use hash of full alert ID to prevent collisions
         const alertId = alert.alert_id || alert._id || alert.id;
-        const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
-        const caseId = `CASE-${timestamp}-${alertId.toString().substring(0, 8)}`;
+        const timestamp = new Date().toISOString().split("T")[0].replace(/-/g, "");
+        const alertIdHash = crypto.createHash("sha256")
+          .update(alertId.toString())
+          .digest("hex")
+          .substring(0, 12);
+        const caseId = `CASE-${timestamp}-${alertIdHash}`;
 
         // Extract entities from alert (basic triage)
         const entities = [];
 
         // Extract IPs
-        const ipFields = ['srcip', 'dstip', 'src_ip', 'dst_ip'];
+        const ipFields = ["srcip", "dstip", "src_ip", "dst_ip"];
+        // Bug #9 fix: Proper IPv4 validation (each octet 0-255)
+        const isValidIPv4 = (ip) => {
+          if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) return false;
+          const octets = ip.split(".").map(Number);
+          return octets.every(o => o >= 0 && o <= 255);
+        };
         for (const field of ipFields) {
           const ip = alert.data?.[field] || alert[field];
-          if (ip && /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+          if (ip && isValidIPv4(ip)) {
             entities.push({
-              type: 'ip',
+              type: "ip",
               value: ip,
-              role: field.includes('src') ? 'source' : 'destination',
+              role: field.includes("src") ? "source" : "destination",
               extracted_from: `data.${field}`,
             });
           }
         }
 
         // Extract users
-        const userFields = ['srcuser', 'dstuser', 'user'];
+        const userFields = ["srcuser", "dstuser", "user"];
         for (const field of userFields) {
           const user = alert.data?.[field] || alert[field];
-          if (user && typeof user === 'string' && user.length > 0) {
+          if (user && typeof user === "string" && user.length > 0) {
             entities.push({
-              type: 'user',
+              type: "user",
               value: user,
-              role: field === 'srcuser' ? 'actor' : 'target',
+              role: field === "srcuser" ? "actor" : "target",
               extracted_from: `data.${field}`,
             });
           }
@@ -1429,29 +1675,29 @@ function createServer() {
         // Extract host/agent info
         if (alert.agent?.name) {
           entities.push({
-            type: 'host',
+            type: "host",
             value: alert.agent.name,
-            role: 'victim',
+            role: "victim",
             agent_id: alert.agent.id,
             agent_ip: alert.agent.ip,
           });
         }
 
         // Determine severity from rule level
-        let severity = 'medium';
+        let severity = "medium";
         const ruleLevel = alert.rule?.level || alert.level || 0;
-        if (ruleLevel >= 13) severity = 'critical';
-        else if (ruleLevel >= 10) severity = 'high';
-        else if (ruleLevel >= 7) severity = 'medium';
-        else if (ruleLevel >= 4) severity = 'low';
-        else severity = 'informational';
+        if (ruleLevel >= 13) severity = "critical";
+        else if (ruleLevel >= 10) severity = "high";
+        else if (ruleLevel >= 7) severity = "medium";
+        else if (ruleLevel >= 4) severity = "low";
+        else severity = "informational";
 
         // Build timeline entry
         const timeline = [{
           timestamp: alert.timestamp || new Date().toISOString(),
-          event_type: 'alert_received',
-          description: alert.rule?.description || 'Alert received',
-          source: 'wazuh',
+          event_type: "alert_received",
+          description: alert.rule?.description || "Alert received",
+          source: "wazuh",
           raw_data: {
             rule_id: alert.rule?.id,
             rule_level: ruleLevel,
@@ -1467,30 +1713,30 @@ function createServer() {
             for (let i = 0; i < mitreData.id.length; i++) {
               mitre.push({
                 technique_id: mitreData.id[i],
-                tactic: mitreData.tactic?.[i] || 'unknown',
-                technique: mitreData.technique?.[i] || 'unknown',
+                tactic: mitreData.tactic?.[i] || "unknown",
+                technique: mitreData.technique?.[i] || "unknown",
               });
             }
           } else if (mitreData.id) {
             mitre.push({
               technique_id: mitreData.id,
-              tactic: mitreData.tactic || 'unknown',
-              technique: mitreData.technique || 'unknown',
+              tactic: mitreData.tactic || "unknown",
+              technique: mitreData.technique || "unknown",
             });
           }
         }
 
         // Create the case with triage data
         const caseData = {
-          title: `[${severity.toUpperCase()}] ${alert.rule?.description || 'Security Alert'} on ${alert.agent?.name || 'Unknown Host'}`,
-          summary: `Automated triage of Wazuh alert. Rule: ${alert.rule?.id || 'N/A'}, Level: ${ruleLevel}, Agent: ${alert.agent?.name || 'N/A'}`,
+          title: `[${severity.toUpperCase()}] ${alert.rule?.description || "Security Alert"} on ${alert.agent?.name || "Unknown Host"}`,
+          summary: `Automated triage of Wazuh alert. Rule: ${alert.rule?.id || "N/A"}, Level: ${ruleLevel}, Agent: ${alert.agent?.name || "N/A"}`,
           severity,
           confidence: ruleLevel >= 10 ? 0.8 : ruleLevel >= 7 ? 0.6 : 0.4,
           entities,
           timeline,
           mitre,
           evidence_refs: [{
-            type: 'wazuh_alert',
+            type: "wazuh_alert",
             ref_id: alertId,
             timestamp: alert.timestamp || new Date().toISOString(),
           }],
@@ -1504,10 +1750,9 @@ function createServer() {
           // Case doesn't exist, which is expected
         }
 
-        let result;
         if (existingCase) {
           // Update existing case with new evidence
-          result = await updateCase(caseId, {
+          await updateCase(caseId, {
             entities: caseData.entities,
             timeline: caseData.timeline,
             evidence_refs: caseData.evidence_refs,
@@ -1515,7 +1760,7 @@ function createServer() {
           log("info", "triage", "Updated existing case with new alert", { case_id: caseId, alert_id: alertId });
         } else {
           // Create new case
-          result = await createCase(caseId, caseData);
+          await createCase(caseId, caseData);
           log("info", "triage", "Created new case from alert", { case_id: caseId, alert_id: alertId, severity });
         }
 
@@ -1527,7 +1772,7 @@ function createServer() {
         res.writeHead(existingCase ? 200 : 201, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           case_id: caseId,
-          status: existingCase ? 'updated' : 'created',
+          status: existingCase ? "updated" : "created",
           severity,
           entities_extracted: entities.length,
           mitre_mappings: mitre.length,
@@ -1610,7 +1855,7 @@ function createServer() {
           res.end(JSON.stringify({
             ...plan,
             message: "Plan created in PROPOSED state. Requires Tier 1 approval before execution.",
-            next_step: "POST /api/plans/" + plan.plan_id + "/approve",
+            next_step: `POST /api/plans/${plan.plan_id}/approve`,
           }));
         } catch (err) {
           res.writeHead(400, { "Content-Type": "application/json" });
@@ -1657,7 +1902,7 @@ function createServer() {
           res.end(JSON.stringify({
             ...plan,
             message: "Plan APPROVED (Tier 1 complete). Ready for execution.",
-            next_step: "POST /api/plans/" + planId + "/execute",
+            next_step: `POST /api/plans/${planId}/execute`,
             responder_status: getResponderStatus(),
           }));
         } catch (err) {
@@ -1721,7 +1966,8 @@ function createServer() {
 
         try {
           const plan = await executePlan(planId, body.executor_id);
-          const statusCode = plan.state === PLAN_STATES.COMPLETED ? 200 : 200;
+          // Bug #2 fix: Return 200 for success, 207 (Multi-Status) for partial failure
+          const statusCode = plan.state === PLAN_STATES.COMPLETED ? 200 : 207;
           res.writeHead(statusCode, { "Content-Type": "application/json" });
           res.end(JSON.stringify({
             ...plan,
@@ -1730,8 +1976,8 @@ function createServer() {
               : "Plan execution completed with some failures.",
           }));
         } catch (err) {
-          // Check if this is a responder disabled error
-          if (err.message.includes("Responder is DISABLED")) {
+          // Bug #1 fix: Match the actual error message from executePlan
+          if (err.message.includes("Responder capability is DISABLED")) {
             res.writeHead(403, { "Content-Type": "application/json" });
             res.end(JSON.stringify({
               error: err.message,
@@ -1765,40 +2011,9 @@ function createServer() {
 // STARTUP
 // =============================================================================
 
-// Validate that critical configuration doesn't contain placeholder values
-function validateNoPlaceholders(configObj, path = "") {
-  const PLACEHOLDER_PATTERNS = [
-    /^YOUR_/i,
-    /^PLACEHOLDER_/i,
-    /_ID$/i,
-    /^TODO:/i,
-    /^CHANGE_ME$/i,
-    /^EXAMPLE_/i,
-  ];
-
-  const warnings = [];
-
-  function check(obj, currentPath) {
-    if (typeof obj === "string") {
-      for (const pattern of PLACEHOLDER_PATTERNS) {
-        if (pattern.test(obj) && obj.includes("_ID")) {
-          warnings.push({ path: currentPath, value: obj });
-        }
-      }
-      // Also check for specific placeholder patterns
-      if (obj === "YOUR_WORKSPACE_ID" || obj.match(/^(USER_ID|ADMIN_USER_ID|MANAGER_USER_ID|SENIOR_USER_ID)/)) {
-        warnings.push({ path: currentPath, value: obj });
-      }
-    } else if (typeof obj === "object" && obj !== null) {
-      for (const [key, value] of Object.entries(obj)) {
-        check(value, currentPath ? `${currentPath}.${key}` : key);
-      }
-    }
-  }
-
-  check(configObj, path);
-  return warnings;
-}
+// Graceful shutdown handling - declared here for use in startup
+let server = null;
+const cleanupIntervals = [];
 
 async function validateStartup() {
   log("info", "startup", "Validating configuration...");
@@ -1822,10 +2037,21 @@ async function validateStartup() {
   await ensureDir(path.join(config.dataDir, "state"));
 
   // Load and validate policy configuration
+  // Issue #10 fix: Fail fast in production mode if policy is missing or invalid
   const policyPath = path.join(config.configDir, "policies", "policy.yaml");
   try {
     await fs.access(policyPath);
     const policyContent = await fs.readFile(policyPath, "utf8");
+
+    // Validate YAML syntax by attempting to parse
+    try {
+      parseSimpleYaml(policyContent);
+    } catch (parseErr) {
+      log("error", "startup", "Policy file contains invalid YAML", { path: policyPath, error: parseErr.message });
+      if (config.mode === "production") {
+        process.exit(1);
+      }
+    }
 
     // Simple placeholder check (in production, parse YAML properly)
     const placeholderMatches = policyContent.match(/(<SLACK_[A-Z_]+>|YOUR_|USER_ID_|ADMIN_USER_ID|_CHANNEL_ID)/g);
@@ -1842,6 +2068,11 @@ async function validateStartup() {
       }
     }
   } catch (err) {
+    // Issue #10 fix: In production, policy file must exist and be valid
+    if (config.mode === "production") {
+      log("error", "startup", "Production mode requires valid policy file", { path: policyPath, error: err.message });
+      process.exit(1);
+    }
     log("warn", "startup", "Could not validate policy file", { path: policyPath, error: err.message });
   }
 
@@ -1886,7 +2117,7 @@ async function main() {
   if (config.metricsEnabled) {
     server = createServer();
     server.listen(config.metricsPort, config.metricsHost, () => {
-      log("info", "startup", `Server listening`, {
+      log("info", "startup", "Server listening", {
         host: config.metricsHost,
         port: config.metricsPort,
       });
@@ -1936,17 +2167,14 @@ module.exports = {
   recordLatency,
 };
 
-// Graceful shutdown handling
-let server = null;
-const cleanupIntervals = [];
-
 function setupCleanupIntervals() {
   // Approval token cleanup
   const tokenCleanup = setInterval(() => {
     const now = Date.now();
     let removed = 0;
     for (const [token, data] of approvalTokens.entries()) {
-      if (new Date(data.expires_at) < new Date(now)) {
+      // Issue #13 fix: Direct timestamp comparison
+      if (new Date(data.expires_at).getTime() < now) {
         approvalTokens.delete(token);
         removed++;
       }
@@ -1956,6 +2184,25 @@ function setupCleanupIntervals() {
     }
   }, 60000);
   cleanupIntervals.push(tokenCleanup);
+
+  // Auth failure state cleanup
+  const authCleanup = setInterval(() => {
+    const now = Date.now();
+    let removed = 0;
+    for (const [ip, data] of authFailureState.attempts.entries()) {
+      // Clean up old entries (lockout expired or window passed)
+      const windowExpired = now > data.firstAttempt + config.authFailureWindowMs;
+      const lockoutExpired = data.lockedUntil && now >= data.lockedUntil;
+      if (windowExpired || lockoutExpired) {
+        authFailureState.attempts.delete(ip);
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      log("debug", "cleanup", "Expired auth failure entries removed", { count: removed });
+    }
+  }, 60000);
+  cleanupIntervals.push(authCleanup);
 
   // Rate limit state cleanup
   const rateLimitCleanup = setInterval(() => {
@@ -1975,15 +2222,16 @@ function setupCleanupIntervals() {
 
   // Response plans cleanup (expire old proposed/approved plans)
   const plansCleanup = setInterval(() => {
-    const now = new Date();
+    const nowTs = Date.now();
+    const nowIso = new Date(nowTs).toISOString();
     let expired = 0;
-    for (const [planId, plan] of responsePlans.entries()) {
+    for (const [, plan] of responsePlans.entries()) {
       if (
         (plan.state === PLAN_STATES.PROPOSED || plan.state === PLAN_STATES.APPROVED) &&
-        new Date(plan.expires_at) < now
+        new Date(plan.expires_at).getTime() < nowTs // Issue #13 fix
       ) {
         plan.state = PLAN_STATES.EXPIRED;
-        plan.updated_at = now.toISOString();
+        plan.updated_at = nowIso;
         expired++;
         incrementMetric("plans_expired_total");
       }
@@ -1993,12 +2241,12 @@ function setupCleanupIntervals() {
     }
 
     // Also clean up very old completed/failed plans (older than 7 days)
-    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const cutoff = nowTs - 7 * 24 * 60 * 60 * 1000;
     let removed = 0;
     for (const [planId, plan] of responsePlans.entries()) {
       if (
         ["completed", "failed", "rejected", "expired"].includes(plan.state) &&
-        new Date(plan.updated_at) < new Date(cutoff)
+        new Date(plan.updated_at).getTime() < cutoff // Issue #13 fix
       ) {
         responsePlans.delete(planId);
         removed++;
@@ -2011,8 +2259,24 @@ function setupCleanupIntervals() {
   cleanupIntervals.push(plansCleanup);
 }
 
+// Issue #12 fix: Add configurable shutdown timeout with force kill
+let isShuttingDown = false;
+
 function gracefulShutdown(signal) {
+  if (isShuttingDown) {
+    log("warn", "shutdown", "Shutdown already in progress, forcing exit");
+    process.exit(1);
+  }
+  isShuttingDown = true;
+
   log("info", "shutdown", `Received ${signal}, shutting down gracefully...`);
+
+  // Set force-kill timeout
+  const forceKillTimer = setTimeout(() => {
+    log("error", "shutdown", "Graceful shutdown timeout exceeded, forcing exit");
+    process.exit(1);
+  }, config.shutdownTimeoutMs);
+  forceKillTimer.unref(); // Don't keep process alive just for this timer
 
   // Stop accepting new requests
   if (server) {
@@ -2026,8 +2290,9 @@ function gracefulShutdown(signal) {
     clearInterval(interval);
   }
 
-  // Allow pending operations to complete
+  // Allow pending operations to complete (use shorter timeout than force-kill)
   setTimeout(() => {
+    clearTimeout(forceKillTimer);
     log("info", "shutdown", "Shutdown complete");
     process.exit(0);
   }, 1000);

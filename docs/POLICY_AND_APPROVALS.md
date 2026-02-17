@@ -237,8 +237,8 @@ When a case reaches high/critical severity, the Response Planner agent generates
 
 ```json
 {
-  "plan_id": "PLAN-2024-001",
-  "case_id": "CASE-2024-001",
+  "plan_id": "PLAN-2026-001",
+  "case_id": "CASE-2026-001",
   "actions": [
     {
       "action": "block_ip",
@@ -276,7 +276,7 @@ An approval request is posted to Slack:
 ```
 🚨 Approval Request
 
-Case: CASE-2024-001
+Case: CASE-2026-001
 Severity: High
 Confidence: 85%
 
@@ -304,9 +304,9 @@ A single-use, time-limited token is created:
 ```json
 {
   "token": "abc123...",
-  "plan_id": "PLAN-2024-001",
-  "case_id": "CASE-2024-001",
-  "expires_at": "2024-01-15T11:00:00Z",
+  "plan_id": "PLAN-2026-001",
+  "case_id": "CASE-2026-001",
+  "expires_at": "2026-02-17T11:00:00Z",
   "used": false
 }
 ```
@@ -316,7 +316,7 @@ A single-use, time-limited token is created:
 The approver clicks **Approve** or uses:
 
 ```
-/wazuh approve PLAN-2024-001
+/wazuh approve PLAN-2026-001
 ```
 
 ### 6. Token Validated and Consumed

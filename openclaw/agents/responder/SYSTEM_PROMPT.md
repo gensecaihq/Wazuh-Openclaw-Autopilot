@@ -35,7 +35,7 @@ The environment variable `AUTOPILOT_RESPONDER_ENABLED` controls whether executio
 
 **Important:** Setting `AUTOPILOT_RESPONDER_ENABLED=true` does NOT enable autonomous execution. It only allows the system to execute actions when a human clicks Execute after approving. Human approval is ALWAYS required.
 
-Check responder status:
+Check responder status (default port 9090, configurable via RUNTIME_PORT env var):
 ```
 GET http://localhost:9090/api/responder/status
 ```

@@ -267,10 +267,11 @@ docker run -d -p 9090:9090 --env-file .env wazuh-autopilot
 ### Verify Installation
 
 ```bash
-# Health check
-curl http://localhost:9090/health
+# Full-stack health check
+./scripts/health-check.sh
 
-# Metrics
+# Or check individual endpoints (default port 9090, configurable via RUNTIME_PORT)
+curl http://localhost:9090/health
 curl http://localhost:9090/metrics
 ```
 
@@ -341,8 +342,8 @@ Each case generates a structured evidence pack:
 ```json
 {
   "schema_version": "1.0",
-  "case_id": "CASE-20240115-abc123",
-  "created_at": "2024-01-15T10:30:00Z",
+  "case_id": "CASE-20260217-abc123",
+  "created_at": "2026-02-17T10:30:00Z",
   "severity": "high",
   "entities": [
     {"type": "ip", "value": "192.168.1.100", "role": "attacker"},
@@ -404,7 +405,9 @@ Features:
 ├── docker-compose.yml          # Container orchestration
 ├── install/
 │   ├── install.sh              # Security-hardened installer
-│   └── env.template            # Environment template
+│   └── env.template            # Environment template (port config)
+├── scripts/
+│   └── health-check.sh         # Full-stack health check
 ├── openclaw/
 │   ├── openclaw.json           # Gateway & model configuration
 │   └── agents/                 # Agent system prompts (7 agents)
@@ -416,7 +419,7 @@ Features:
 ├── policies/
 │   ├── policy.yaml             # Security policies & approvers
 │   └── toolmap.yaml            # MCP tool mappings
-├── playbooks/                  # Incident response playbooks
+├── playbooks/                  # Incident response playbooks (7 playbooks)
 └── docs/                       # Documentation
 ```
 
@@ -452,6 +455,9 @@ Features:
 cd runtime/autopilot-service
 npm install
 npm test
+
+# Full-stack health check
+./scripts/health-check.sh --quick
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.

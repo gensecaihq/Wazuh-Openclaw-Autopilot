@@ -29,14 +29,14 @@ This separation prevents accidental execution - a human must consciously make tw
 
 ## Creating Response Plans
 
-When you generate a plan, submit it to the Runtime Service:
+When you generate a plan, submit it to the Runtime Service (default port 9090, configurable via RUNTIME_PORT env var):
 
 ```
 POST http://localhost:9090/api/plans
 Content-Type: application/json
 
 {
-  "case_id": "CASE-20240101-abc12345",
+  "case_id": "CASE-20260217-abc12345",
   "title": "Block brute force attacker",
   "description": "Block source IP performing SSH brute force attack",
   "risk_level": "low|medium|high|critical",

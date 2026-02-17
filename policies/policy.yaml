@@ -38,16 +38,21 @@ autonomy:
       auto_execute: false
 
 # =============================================================================
-# SLACK WORKSPACE & CHANNEL ALLOWLISTS
+# SLACK INTEGRATION (OPTIONAL)
 # =============================================================================
-# CONFIGURATION REQUIRED: Replace all <PLACEHOLDER> values before use
+# Slack is NOT required for core functionality. Without Slack, approvals are
+# handled via the REST API (POST /api/plans/:id/approve and /execute).
+# Configure Slack only when you want interactive notifications and button-based
+# approval workflows.
 #
-# How to find your Slack IDs:
+# To configure later, replace all <PLACEHOLDER> values with your Slack IDs:
 # - Workspace ID: Call https://api.slack.com/methods/auth.test or check your Slack URL
 # - Channel ID: Right-click channel > Copy link > ID is the last part (e.g., C01ABCD2EFG)
 # - User ID: Click user profile > More > Copy member ID
 # =============================================================================
 slack:
+  # Set to true only after replacing all placeholder values below
+  slack_required: false
   # Allowed Slack workspaces (by workspace ID)
   workspace_allowlist:
     - id: "<SLACK_WORKSPACE_ID>"  # e.g., "T01ABCDEF"
@@ -87,9 +92,10 @@ slack:
       deny_action: reject_with_message
 
 # =============================================================================
-# APPROVER AUTHORIZATION
+# APPROVER AUTHORIZATION (OPTIONAL - Slack only)
 # =============================================================================
-# CONFIGURATION REQUIRED: Add your team members' Slack user IDs
+# Configure approvers only if using Slack integration. Without Slack, approvals
+# are handled via the REST API using any authenticated caller.
 #
 # How to find Slack User IDs:
 # 1. Click on the user's profile in Slack
@@ -155,8 +161,8 @@ approvers:
 # =============================================================================
 actions:
   # Global action enablement
-  # IMPORTANT: Set to true only after configuring Slack workspace/channel IDs
-  # and approver Slack IDs above. The system will validate these on startup.
+  # Actions work via REST API without Slack. If using Slack, configure workspace/
+  # channel IDs and approver Slack IDs in the sections above first.
   enabled: true  # Actions enabled - individual actions still require approval
 
   # Per-action configuration

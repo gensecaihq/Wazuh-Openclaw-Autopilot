@@ -9,7 +9,7 @@
  * - Slash commands for manual operations
  */
 
-const { App, ExpressReceiver } = require("@slack/bolt");
+const { App } = require("@slack/bolt");
 
 // =============================================================================
 // CONFIGURATION
@@ -47,6 +47,23 @@ let slackApp = null;
 let isInitialized = false;
 
 /**
+ * Stop and clean up the Slack app
+ * Issue #5 fix: Prevent memory leaks on reinitialization
+ */
+async function stopSlack() {
+  if (slackApp) {
+    try {
+      await slackApp.stop();
+      log("info", "cleanup", "Slack app stopped");
+    } catch (err) {
+      log("warn", "cleanup", "Error stopping Slack app", { error: err.message });
+    }
+    slackApp = null;
+    isInitialized = false;
+  }
+}
+
+/**
  * Initialize Slack integration
  * @param {Object} runtimeService - Reference to the main runtime service exports
  */
@@ -54,6 +71,12 @@ async function initSlack(runtimeService) {
   if (!config.appToken || !config.botToken) {
     log("info", "init", "Slack tokens not configured - Slack integration disabled");
     return null;
+  }
+
+  // Issue #5 fix: Clean up existing app before creating new one
+  if (slackApp) {
+    log("info", "init", "Stopping existing Slack app before reinitialization");
+    await stopSlack();
   }
 
   try {
@@ -75,6 +98,8 @@ async function initSlack(runtimeService) {
     return slackApp;
   } catch (err) {
     log("error", "init", "Failed to initialize Slack", { error: err.message });
+    slackApp = null;
+    isInitialized = false;
     return null;
   }
 }
@@ -100,21 +125,23 @@ function registerSlashCommands(runtime) {
           await respond(getHelpMessage());
           break;
 
-        case "status":
+        case "status": {
           const status = runtime.getResponderStatus();
           await respond({
             response_type: "ephemeral",
             text: `Responder Status: ${status.enabled ? "ENABLED" : "DISABLED"}\n${status.message}`,
           });
           break;
+        }
 
-        case "plans":
+        case "plans": {
           const state = args[1] || "approved";
           const plans = runtime.listPlans({ state, limit: 10 });
           await respond(formatPlansMessage(plans, state));
           break;
+        }
 
-        case "approve":
+        case "approve": {
           const planIdApprove = args[1];
           if (!planIdApprove) {
             await respond({ text: "Usage: /wazuh approve <plan_id>" });
@@ -133,8 +160,9 @@ function registerSlashCommands(runtime) {
             await respond({ text: `Error: ${err.message}` });
           }
           break;
+        }
 
-        case "execute":
+        case "execute": {
           const planIdExecute = args[1];
           if (!planIdExecute) {
             await respond({ text: "Usage: /wazuh execute <plan_id>" });
@@ -153,8 +181,9 @@ function registerSlashCommands(runtime) {
             await respond({ text: `Error: ${err.message}` });
           }
           break;
+        }
 
-        case "reject":
+        case "reject": {
           const planIdReject = args[1];
           const reason = args.slice(2).join(" ") || "Rejected via Slack";
           if (!planIdReject) {
@@ -171,6 +200,7 @@ function registerSlashCommands(runtime) {
             await respond({ text: `Error: ${err.message}` });
           }
           break;
+        }
 
         default:
           await respond(getHelpMessage());
@@ -684,6 +714,7 @@ async function postCaseAlert(caseData) {
 
 module.exports = {
   initSlack,
+  stopSlack,
   postPlanForApproval,
   postCaseAlert,
   postApprovalNotification,

@@ -4,7 +4,7 @@ The Wazuh Autopilot Runtime Service provides a REST API for case management, met
 
 ## Base URL
 
-By default, the service listens on `http://127.0.0.1:9090`.
+By default, the service listens on `http://127.0.0.1:9090`. The port is configurable via `RUNTIME_PORT` environment variable.
 
 ## Authentication
 
@@ -29,7 +29,7 @@ Returns service health status.
     "data_dir": true,
     "metrics": true
   },
-  "timestamp": "2024-01-15T10:30:00.000Z"
+  "timestamp": "2026-02-17T10:30:00.000Z"
 }
 ```
 
@@ -82,9 +82,9 @@ List all cases (most recent first).
 ```json
 [
   {
-    "case_id": "CASE-2024-001",
-    "created_at": "2024-01-15T10:30:00.000Z",
-    "updated_at": "2024-01-15T10:35:00.000Z",
+    "case_id": "CASE-2026-001",
+    "created_at": "2026-02-17T10:30:00.000Z",
+    "updated_at": "2026-02-17T10:35:00.000Z",
     "title": "Brute Force Attack on SSH",
     "severity": "high",
     "status": "open"
@@ -99,7 +99,7 @@ Create a new case with evidence pack.
 **Request Body:**
 ```json
 {
-  "case_id": "CASE-2024-001",
+  "case_id": "CASE-2026-001",
   "title": "Brute Force Attack on SSH",
   "summary": "Multiple failed login attempts detected",
   "severity": "high",
@@ -116,8 +116,8 @@ Create a new case with evidence pack.
 ```json
 {
   "schema_version": "1.0",
-  "case_id": "CASE-2024-001",
-  "created_at": "2024-01-15T10:30:00.000Z",
+  "case_id": "CASE-2026-001",
+  "created_at": "2026-02-17T10:30:00.000Z",
   "title": "Brute Force Attack on SSH",
   ...
 }
@@ -131,9 +131,9 @@ Get a specific case by ID.
 ```json
 {
   "schema_version": "1.0",
-  "case_id": "CASE-2024-001",
-  "created_at": "2024-01-15T10:30:00.000Z",
-  "updated_at": "2024-01-15T10:35:00.000Z",
+  "case_id": "CASE-2026-001",
+  "created_at": "2026-02-17T10:30:00.000Z",
+  "updated_at": "2026-02-17T10:35:00.000Z",
   "title": "Brute Force Attack on SSH",
   "summary": "Multiple failed login attempts detected",
   "severity": "high",

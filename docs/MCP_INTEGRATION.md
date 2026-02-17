@@ -383,7 +383,7 @@ MCP calls are logged with correlation IDs:
 
 ```json
 {
-  "ts": "2024-01-15T10:30:00Z",
+  "ts": "2026-02-17T10:30:00Z",
   "level": "info",
   "component": "mcp",
   "msg": "Tool call completed",

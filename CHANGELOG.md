@@ -7,17 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-02-17
+
 ### Added
-- Production-ready Dockerfile with multi-stage build
-- Docker Compose configuration for local deployment
-- GitHub Actions CI/CD pipeline (lint, test, security audit, build)
+- **Multi-provider LLM support**: Claude, OpenAI, Groq, Mistral, xAI, Google, Ollama, OpenRouter, Together, Cerebras
+- **Centralized port configuration**: All service ports (Gateway, MCP, Runtime) configurable via environment variables
+- **Pre-flight configuration validator**: Interactive validation in installer checks required settings before starting services
+- **Full-stack health check script** (`scripts/health-check.sh`): Verifies Runtime, MCP, OpenClaw, Wazuh, Slack, permissions, services, disk space
+- **Production-ready Dockerfile** with multi-stage build and configurable runtime port
+- **Docker Compose** configuration for container deployment
+- **GitHub Actions CI/CD pipeline** (lint, test, security audit, build)
 - ESLint configuration for code quality
-- Comprehensive .env.example template
 
 ### Changed
-- Fixed model name in openclaw.json (claude-opus-4-6 -> claude-sonnet-4-5)
+- **Playbooks upgraded to v2.0**: All 7 incident response playbooks rewritten with TLP markings, expanded MITRE ATT&CK sub-techniques, OS-specific forensic artifacts, chain of custody requirements, regulatory compliance mappings (NIST, ISO, SANS), communication templates, and agent pipeline integration
+- **Policy configuration**: Slack integration marked as optional with `slack_required: false`; API-based approval works without Slack
+- **Installer**: Added `validate_configuration()` step with interactive prompts; Slack remains optional and deferrable
+- Ports no longer hardcoded across files; `install/env.template` is the single source of truth
+- Agent prompts note configurable runtime port (default 9090)
+- Wazuh integrator in installer uses configured port variables instead of hardcoded values
 
-## [2.0.0] - 2024-01-15
+### Security
+- Gateway binds to localhost only (127.0.0.1:18789)
+- MCP Server binds to Tailscale IP only
+- Runtime Service binds to localhost only
+- Docker container: read-only root filesystem, all capabilities dropped, no privilege escalation
+- Pairing mode for device authorization
+- Credential isolation with 600/700 permissions
+
+## [2.0.0] - 2025-11-20
 
 ### Added
 - **Two-tier approval workflow** for response plans (Approve → Execute)
@@ -47,14 +65,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Security headers on all HTTP responses
 
 ### Security
-- Gateway binds to localhost only (127.0.0.1:18789)
-- MCP Server binds to Tailscale IP only
-- Pairing mode for device authorization
-- Credential isolation with 600/700 permissions
 - Input validation for all API endpoints
 - Authorization validation for sensitive operations
+- Timing-safe token comparison
+- Auth failure lockout (5 attempts, 30-minute lockout)
 
-## [1.0.0] - 2024-01-01
+## [1.0.0] - 2025-09-15
 
 ### Added
 - Initial release
@@ -72,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Responder Agent
   - Reporting Agent
 
-[Unreleased]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/releases/tag/v1.0.0

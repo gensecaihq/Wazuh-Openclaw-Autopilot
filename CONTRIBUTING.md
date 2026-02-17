@@ -39,8 +39,8 @@ When reporting bugs, please include:
 
 4. **Test your changes**
    ```bash
-   # Run the doctor to verify configuration
-   ./install/doctor.sh
+   # Run health check
+   ./scripts/health-check.sh --quick
 
    # Run tests
    cd runtime/autopilot-service
@@ -107,18 +107,21 @@ node index.js
 
 - All new features should include tests
 - Run `npm test` before submitting PRs
-- Ensure the doctor passes: `./install/doctor.sh`
+- Run health check: `./scripts/health-check.sh --quick`
 
 ## Project Structure
 
 ```
 Wazuh-Openclaw-Autopilot/
-├── agents/           # OpenClaw agent YAML configurations
-├── policies/         # Security policies and tool mappings
-├── playbooks/        # Incident response playbooks
-├── install/          # Installation and diagnostic scripts
-├── runtime/          # Node.js runtime service
-├── docs/             # Documentation
+├── openclaw/
+│   ├── openclaw.json           # Gateway & model configuration
+│   └── agents/                 # Agent system prompts (7 agents)
+├── policies/                   # Security policies and tool mappings
+├── playbooks/                  # Incident response playbooks (7 playbooks)
+├── install/                    # Installation scripts and env template
+├── scripts/                    # Health check and operational scripts
+├── runtime/autopilot-service/  # Node.js runtime service
+├── docs/                       # Documentation
 └── README.md
 ```
 
@@ -126,10 +129,12 @@ Wazuh-Openclaw-Autopilot/
 
 | File | Purpose |
 |------|---------|
+| `openclaw/openclaw.json` | OpenClaw gateway & agent configuration |
 | `policies/policy.yaml` | Security policy definitions |
 | `policies/toolmap.yaml` | MCP tool name mappings |
-| `install/install.sh` | Universal installer |
-| `install/doctor.sh` | Diagnostic tool |
+| `install/install.sh` | Security-hardened installer |
+| `install/env.template` | Environment variable template |
+| `scripts/health-check.sh` | Full-stack health check |
 | `runtime/autopilot-service/index.js` | Core runtime service |
 
 ## Adding New Agents

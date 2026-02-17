@@ -11,9 +11,9 @@ Current version: `1.0`
 ```json
 {
   "schema_version": "1.0",
-  "case_id": "CASE-2024-001",
-  "created_at": "2024-01-15T10:30:00.000Z",
-  "updated_at": "2024-01-15T10:35:00.000Z",
+  "case_id": "CASE-2026-001",
+  "created_at": "2026-02-17T10:30:00.000Z",
+  "updated_at": "2026-02-17T10:35:00.000Z",
   "title": "Brute Force Attack on SSH",
   "summary": "Multiple failed login attempts detected from external IP",
   "severity": "high",
@@ -92,13 +92,13 @@ Chronological sequence of events.
 {
   "timeline": [
     {
-      "timestamp": "2024-01-15T10:25:00.000Z",
+      "timestamp": "2026-02-17T10:25:00.000Z",
       "event": "First failed login attempt",
       "source": "alert-123",
       "severity": "low"
     },
     {
-      "timestamp": "2024-01-15T10:28:00.000Z",
+      "timestamp": "2026-02-17T10:28:00.000Z",
       "event": "100+ failed attempts in 3 minutes",
       "source": "correlation-engine",
       "severity": "high"
@@ -136,7 +136,7 @@ Record of all MCP tool calls made during investigation.
       "response_hash": "def456...",
       "status": "success",
       "latency_ms": 150,
-      "timestamp": "2024-01-15T10:30:15.000Z"
+      "timestamp": "2026-02-17T10:30:15.000Z"
     }
   ]
 }
@@ -165,7 +165,7 @@ Response plans proposed by the Response Planner agent.
   "plans": [
     {
       "plan_id": "PLAN-001",
-      "created_at": "2024-01-15T10:32:00.000Z",
+      "created_at": "2026-02-17T10:32:00.000Z",
       "proposed_by": "response-planner",
       "risk_level": "medium",
       "actions": [
@@ -200,7 +200,7 @@ Human approval decisions.
       "approver_name": "Security Analyst",
       "decision": "approve",
       "decision_reason": "",
-      "decided_at": "2024-01-15T10:40:00.000Z"
+      "decided_at": "2026-02-17T10:40:00.000Z"
     }
   ]
 }
@@ -218,8 +218,8 @@ Executed response actions.
       "sequence": 1,
       "action": "block_ip",
       "target": "192.168.1.100",
-      "started_at": "2024-01-15T10:41:00.000Z",
-      "completed_at": "2024-01-15T10:41:02.000Z",
+      "started_at": "2026-02-17T10:41:00.000Z",
+      "completed_at": "2026-02-17T10:41:02.000Z",
       "status": "success",
       "result": {
         "blocked": true,
@@ -227,7 +227,7 @@ Executed response actions.
       },
       "verification": {
         "verified": true,
-        "verified_at": "2024-01-15T10:41:05.000Z"
+        "verified_at": "2026-02-17T10:41:05.000Z"
       }
     }
   ]
@@ -241,7 +241,7 @@ Evidence packs are stored as JSON files:
 ```
 /var/lib/wazuh-autopilot/
 └── cases/
-    └── CASE-2024-001/
+    └── CASE-2026-001/
         ├── evidence-pack.json    # Full evidence pack
         └── case.json             # Lightweight summary
 ```

@@ -51,22 +51,25 @@ RUN mkdir -p /var/lib/wazuh-autopilot/cases \
              /etc/wazuh-autopilot/policies && \
     chown -R autopilot:autopilot /var/lib/wazuh-autopilot /etc/wazuh-autopilot
 
+# Configurable runtime port (change via --build-arg or env)
+ARG RUNTIME_PORT=9090
+
 # Environment defaults
 ENV NODE_ENV=production \
     AUTOPILOT_MODE=production \
     AUTOPILOT_DATA_DIR=/var/lib/wazuh-autopilot \
     AUTOPILOT_CONFIG_DIR=/etc/wazuh-autopilot \
-    METRICS_PORT=9090 \
+    METRICS_PORT=${RUNTIME_PORT} \
     METRICS_HOST=0.0.0.0 \
     LOG_FORMAT=json \
     LOG_LEVEL=info
 
-# Expose metrics port
-EXPOSE 9090
+# Expose runtime port
+EXPOSE ${RUNTIME_PORT}
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:9090/health || exit 1
+    CMD curl -f http://localhost:${METRICS_PORT}/health || exit 1
 
 # Switch to non-root user
 USER autopilot
