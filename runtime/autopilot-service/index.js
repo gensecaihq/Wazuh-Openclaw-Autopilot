@@ -310,29 +310,33 @@ async function updateCase(caseId, updates) {
   // Bug #11 fix: Sync status field to evidence pack
   if (Object.prototype.hasOwnProperty.call(updates, "status")) evidencePack.status = updates.status;
 
+  // Append arrays with size cap to prevent unbounded growth
+  const MAX_ARRAY_ITEMS = 10000;
+  const appendCapped = (existing, incoming) => {
+    const merged = [...existing, ...incoming];
+    return merged.length > MAX_ARRAY_ITEMS ? merged.slice(-MAX_ARRAY_ITEMS) : merged;
+  };
+
   if (updates.entities) {
-    evidencePack.entities = [...evidencePack.entities, ...updates.entities];
+    evidencePack.entities = appendCapped(evidencePack.entities, updates.entities);
   }
   if (updates.timeline) {
-    evidencePack.timeline = [...evidencePack.timeline, ...updates.timeline];
+    evidencePack.timeline = appendCapped(evidencePack.timeline, updates.timeline);
   }
   if (updates.mcp_calls) {
-    evidencePack.mcp_calls = [...evidencePack.mcp_calls, ...updates.mcp_calls];
+    evidencePack.mcp_calls = appendCapped(evidencePack.mcp_calls, updates.mcp_calls);
   }
   if (updates.evidence_refs) {
-    evidencePack.evidence_refs = [
-      ...evidencePack.evidence_refs,
-      ...updates.evidence_refs,
-    ];
+    evidencePack.evidence_refs = appendCapped(evidencePack.evidence_refs, updates.evidence_refs);
   }
   if (updates.plans) {
-    evidencePack.plans = [...evidencePack.plans, ...updates.plans];
+    evidencePack.plans = appendCapped(evidencePack.plans, updates.plans);
   }
   if (updates.approvals) {
-    evidencePack.approvals = [...evidencePack.approvals, ...updates.approvals];
+    evidencePack.approvals = appendCapped(evidencePack.approvals, updates.approvals);
   }
   if (updates.actions) {
-    evidencePack.actions = [...evidencePack.actions, ...updates.actions];
+    evidencePack.actions = appendCapped(evidencePack.actions, updates.actions);
   }
 
   await fs.writeFile(packPath, JSON.stringify(evidencePack, null, 2));
@@ -343,9 +347,9 @@ async function updateCase(caseId, updates) {
     const summaryContent = await fs.readFile(summaryPath, "utf8");
     const summary = JSON.parse(summaryContent);
     summary.updated_at = now;
-    if (updates.title) summary.title = updates.title;
-    if (updates.severity) summary.severity = updates.severity;
-    if (updates.status) summary.status = updates.status;
+    if (Object.prototype.hasOwnProperty.call(updates, "title")) summary.title = updates.title;
+    if (Object.prototype.hasOwnProperty.call(updates, "severity")) summary.severity = updates.severity;
+    if (Object.prototype.hasOwnProperty.call(updates, "status")) summary.status = updates.status;
     await fs.writeFile(summaryPath, JSON.stringify(summary, null, 2));
   } catch (err) {
     // Summary file might not exist, that's ok
@@ -416,7 +420,7 @@ function generateApprovalToken(planId, caseId) {
     const now = Date.now();
     let removed = 0;
     for (const [token, data] of approvalTokens.entries()) {
-      if (new Date(data.expires_at) < new Date(now) || data.used) {
+      if (Date.parse(data.expires_at) < now || data.used) {
         approvalTokens.delete(token);
         removed++;
         if (approvalTokens.size < MAX_APPROVAL_TOKENS * 0.9) break;
@@ -977,8 +981,8 @@ function parseSimpleYaml(content) {
         else value = value.replace(/^["']|["']$/g, "");
 
         parent[key] = value;
-        // Reset pending list key since we got a value
-        current.pendingListKey = key;
+        // Clear pending list key — scalar value assigned, not expecting list items
+        current.pendingListKey = null;
       }
     }
   }
@@ -1269,18 +1273,13 @@ function secureCompare(a, b) {
     return false;
   }
 
-  // Use crypto.timingSafeEqual for constant-time comparison
-  // Pad to same length to avoid length-based timing leaks
-  const aBuffer = Buffer.from(a);
-  const bBuffer = Buffer.from(b);
+  // Hash both values to fixed-length buffers before comparing.
+  // This prevents length-based timing leaks — both hashes are always 32 bytes
+  // regardless of input length, and timingSafeEqual runs in constant time.
+  const aHash = crypto.createHash("sha256").update(a).digest();
+  const bHash = crypto.createHash("sha256").update(b).digest();
 
-  if (aBuffer.length !== bBuffer.length) {
-    // Compare against self to maintain constant time
-    crypto.timingSafeEqual(aBuffer, aBuffer);
-    return false;
-  }
-
-  return crypto.timingSafeEqual(aBuffer, bBuffer);
+  return crypto.timingSafeEqual(aHash, bHash);
 }
 
 // =============================================================================
@@ -1307,7 +1306,7 @@ function isValidCaseId(caseId) {
 // Authorization validation for sensitive endpoints
 // Issue #1 fix: Uses timing-safe comparison
 // Issue #3 fix: Includes auth failure rate limiting
-function validateAuthorization(req, _requiredScope = "write") {
+function validateAuthorization(req, requiredScope = "write") {
   const authHeader = req.headers.authorization;
 
   // Get client IP for auth failure tracking
@@ -1349,14 +1348,19 @@ function validateAuthorization(req, _requiredScope = "write") {
   // Validate against configured MCP auth token using timing-safe comparison
   if (config.mcpAuth && secureCompare(token, config.mcpAuth)) {
     clearAuthFailures(clientIp); // Clear on success
-    return { valid: true, source: "api_token" };
+    return { valid: true, source: "api_token", scope: "write" };
   }
 
   // Also check for internal service token (environment variable)
+  // Service tokens have read-only scope; MCP auth tokens have full write access
   const serviceToken = process.env.AUTOPILOT_SERVICE_TOKEN;
   if (serviceToken && secureCompare(token, serviceToken)) {
     clearAuthFailures(clientIp); // Clear on success
-    return { valid: true, source: "service_token" };
+    const tokenScope = "read";
+    if (requiredScope === "write" && tokenScope !== "write") {
+      return { valid: false, reason: "Insufficient scope: write access required" };
+    }
+    return { valid: true, source: "service_token", scope: tokenScope };
   }
 
   // Record auth failure for rate limiting
@@ -2187,6 +2191,7 @@ module.exports = {
   // Metrics
   incrementMetric,
   recordLatency,
+  formatMetrics,
   // Auth (exported for testing)
   validateAuthorization,
   isValidCaseId,

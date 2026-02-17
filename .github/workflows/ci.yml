@@ -118,9 +118,18 @@ jobs:
         with:
           context: ./runtime/autopilot-service
           push: false
+          load: true
           tags: wazuh-autopilot:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Scan Docker image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: wazuh-autopilot:${{ github.sha }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
 
   # ---------------------------------------------------------------------------
   # Policy Validation

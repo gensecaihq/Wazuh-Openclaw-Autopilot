@@ -23,6 +23,7 @@ const {
   consumeApprovalToken,
   incrementMetric,
   recordLatency,
+  formatMetrics,
   createResponsePlan,
   getPlan,
   listPlans,
@@ -187,24 +188,49 @@ describe("Approval Token Management", () => {
 });
 
 describe("Metrics", () => {
-  it("should increment simple counter", () => {
+  it("should increment simple counter and appear in formatted output", () => {
+    // cases_created_total is a known simple counter in formatMetrics
+    const beforeOutput = formatMetrics();
+    const beforeMatch = beforeOutput.match(/autopilot_cases_created_total (\d+)/);
+    const beforeVal = beforeMatch ? parseInt(beforeMatch[1], 10) : 0;
+
     incrementMetric("cases_created_total");
     incrementMetric("cases_created_total");
-    // Metrics are internal, just verify no errors
-    assert.ok(true);
+
+    const afterOutput = formatMetrics();
+    const afterMatch = afterOutput.match(/autopilot_cases_created_total (\d+)/);
+    const afterVal = afterMatch ? parseInt(afterMatch[1], 10) : 0;
+
+    assert.strictEqual(afterVal - beforeVal, 2, "Counter should have incremented by 2");
   });
 
-  it("should increment labeled counter", () => {
-    incrementMetric("mcp_tool_calls_total", { tool: "get_alert", status: "success" });
-    incrementMetric("mcp_tool_calls_total", { tool: "get_alert", status: "error" });
-    assert.ok(true);
+  it("should increment labeled counter with distinct labels", () => {
+    incrementMetric("mcp_tool_calls_total", { tool: "test_tool", status: "success" });
+    incrementMetric("mcp_tool_calls_total", { tool: "test_tool", status: "success" });
+    incrementMetric("mcp_tool_calls_total", { tool: "test_tool", status: "error" });
+
+    const output = formatMetrics();
+    assert.ok(
+      output.includes('autopilot_mcp_tool_calls_total{tool="test_tool",status="success"} 2'),
+      "Expected labeled counter with value 2",
+    );
+    assert.ok(
+      output.includes('autopilot_mcp_tool_calls_total{tool="test_tool",status="error"} 1'),
+      "Expected labeled counter with value 1",
+    );
   });
 
-  it("should record latency", () => {
+  it("should record latency and include sum/count in output", () => {
     recordLatency("triage_latency_seconds", 1.5);
     recordLatency("triage_latency_seconds", 2.0);
-    recordLatency("mcp_tool_call_latency_seconds", 0.5, { tool: "search_alerts" });
-    assert.ok(true);
+
+    const output = formatMetrics();
+    assert.ok(output.includes("autopilot_triage_latency_seconds_sum"), "Expected sum in output");
+    assert.ok(output.includes("autopilot_triage_latency_seconds_count"), "Expected count in output");
+    // Verify count is at least 2 (may be higher from other tests)
+    const countMatch = output.match(/autopilot_triage_latency_seconds_count (\d+)/);
+    assert.ok(countMatch, "Expected count metric");
+    assert.ok(parseInt(countMatch[1], 10) >= 2, "Expected count >= 2");
   });
 });
 
@@ -230,6 +256,23 @@ describe("Edge Cases", () => {
     assert.strictEqual(result.title, "");
     assert.strictEqual(result.severity, "medium");
     assert.strictEqual(result.confidence, 0);
+  });
+
+  it("should sync summary with evidence pack using hasOwnProperty", async () => {
+    await createCase("CASE-SYNC", {
+      title: "Original Title",
+      severity: "high",
+    });
+
+    // Update with empty string title (falsy but valid)
+    const updated = await updateCase("CASE-SYNC", { title: "" });
+    // Evidence pack should have empty title
+    assert.strictEqual(updated.title, "");
+
+    // Read the summary file directly to verify it was also updated
+    const summaryPath = path.join(process.env.AUTOPILOT_DATA_DIR, "cases", "CASE-SYNC", "case.json");
+    const summary = JSON.parse(await fs.readFile(summaryPath, "utf8"));
+    assert.strictEqual(summary.title, "");
   });
 
   it("should append to existing arrays on update", async () => {
@@ -302,9 +345,17 @@ describe("Response Plans - Two-Tier Approval", () => {
 
     const caseFiltered = listPlans({ case_id: "CASE-LIST-001" });
     assert.ok(caseFiltered.length >= 2);
+    // Verify filtering actually worked — all returned plans belong to the filtered case
+    for (const p of caseFiltered) {
+      assert.strictEqual(p.case_id, "CASE-LIST-001");
+    }
 
     const proposedPlans = listPlans({ state: "proposed" });
     assert.ok(proposedPlans.length >= 2);
+    // Verify state filtering — all returned plans are in proposed state
+    for (const p of proposedPlans) {
+      assert.strictEqual(p.state, "proposed");
+    }
   });
 
   it("should approve a plan (Tier 1)", () => {
@@ -486,6 +537,30 @@ describe("Authorization Validation", () => {
     };
     const result = validateAuthorization(req, "read");
     assert.strictEqual(result.valid, false);
+  });
+
+  it("should enforce scope for service tokens", () => {
+    // Service tokens have read-only scope; write-scope requests should be rejected
+    const origToken = process.env.AUTOPILOT_SERVICE_TOKEN;
+    process.env.AUTOPILOT_SERVICE_TOKEN = "test-service-token-12345";
+    try {
+      const req = {
+        headers: { authorization: "Bearer test-service-token-12345" },
+        socket: { remoteAddress: "192.168.1.100" },
+      };
+      // Read scope should pass
+      const readResult = validateAuthorization(req, "read");
+      assert.strictEqual(readResult.valid, true);
+      assert.strictEqual(readResult.scope, "read");
+
+      // Write scope should be rejected for service tokens
+      const writeResult = validateAuthorization(req, "write");
+      assert.strictEqual(writeResult.valid, false);
+      assert.ok(writeResult.reason.includes("Insufficient scope"));
+    } finally {
+      if (origToken === undefined) delete process.env.AUTOPILOT_SERVICE_TOKEN;
+      else process.env.AUTOPILOT_SERVICE_TOKEN = origToken;
+    }
   });
 });
 

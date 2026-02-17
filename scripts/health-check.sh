@@ -49,10 +49,10 @@ if [[ -f "$CONFIG_DIR/.env" ]]; then
     set -a
     source "$CONFIG_DIR/.env" 2>/dev/null || true
     set +a
-    # Override ports from env
-    RUNTIME_PORT="${METRICS_PORT:-${RUNTIME_PORT}}"
+    # RUNTIME_PORT is canonical; fall back to METRICS_PORT for backward compat
+    RUNTIME_PORT="${RUNTIME_PORT:-${METRICS_PORT:-9090}}"
     RUNTIME_HOST="${METRICS_HOST:-${RUNTIME_HOST}}"
-    GATEWAY_PORT="${OPENCLAW_PORT:-${GATEWAY_PORT}}"
+    GATEWAY_PORT="${GATEWAY_PORT:-${OPENCLAW_PORT:-18789}}"
     MCP_PORT="${MCP_PORT:-8080}"
 fi
 

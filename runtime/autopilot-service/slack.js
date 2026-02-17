@@ -13,6 +13,16 @@ const { App } = require("@slack/bolt");
 const crypto = require("crypto");
 
 // =============================================================================
+// HELPERS
+// =============================================================================
+
+// Escape Slack mrkdwn special characters in user-controlled text
+function escapeMrkdwn(text) {
+  if (!text) return text;
+  return String(text).replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]));
+}
+
+// =============================================================================
 // CONFIGURATION
 // =============================================================================
 
@@ -93,8 +103,14 @@ async function initSlack(runtimeService) {
     registerSlashCommands(runtimeService);
     registerInteractiveButtons(runtimeService);
 
-    // Start the app
-    await slackApp.start();
+    // Start the app with a timeout to prevent hanging if Slack is unreachable
+    const SLACK_INIT_TIMEOUT_MS = 30000;
+    await Promise.race([
+      slackApp.start(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Slack Socket Mode connection timed out")), SLACK_INIT_TIMEOUT_MS)
+      ),
+    ]);
     isInitialized = true;
 
     log("info", "init", "Slack Socket Mode connected successfully");
@@ -387,7 +403,7 @@ function formatPlansMessage(plans, state) {
  * Generate Slack blocks for a new plan requiring approval
  */
 function getProposedPlanBlocks(plan) {
-  const actionsText = plan.actions.map((a) => `• ${a.type}: ${a.target}`).join("\n");
+  const actionsText = plan.actions.map((a) => `• ${escapeMrkdwn(a.type)}: ${escapeMrkdwn(a.target)}`).join("\n");
 
   return [
     {
@@ -405,7 +421,7 @@ function getProposedPlanBlocks(plan) {
     },
     {
       type: "section",
-      text: { type: "mrkdwn", text: `*Title:* ${plan.title}\n\n*Description:*\n${plan.description || "_No description_"}` },
+      text: { type: "mrkdwn", text: `*Title:* ${escapeMrkdwn(plan.title)}\n\n*Description:*\n${escapeMrkdwn(plan.description) || "_No description_"}` },
     },
     {
       type: "section",
@@ -440,7 +456,7 @@ function getProposedPlanBlocks(plan) {
 }
 
 function getApprovedPlanBlocks(plan, approverId) {
-  const actionsText = plan.actions.map((a) => `• ${a.type}: ${a.target}`).join("\n");
+  const actionsText = plan.actions.map((a) => `• ${escapeMrkdwn(a.type)}: ${escapeMrkdwn(a.target)}`).join("\n");
 
   return [
     {

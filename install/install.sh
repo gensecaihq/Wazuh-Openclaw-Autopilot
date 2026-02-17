@@ -261,7 +261,11 @@ install_dependencies() {
     fi
 
     local node_ver
-    node_ver=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
+    node_ver=$(node -v 2>/dev/null | cut -d'v' -f2 | cut -d'.' -f1)
+    if [[ -z "$node_ver" ]]; then
+        log_error "Could not determine Node.js version"
+        exit 1
+    fi
     if [[ "$node_ver" -lt 18 ]]; then
         log_error "Node.js 18+ required. Found: $(node -v)"
         exit 1
@@ -303,12 +307,12 @@ configure_firewall() {
         # Allow SSH
         ufw allow ssh >/dev/null 2>&1
 
-        # Block gateway and MCP ports from public (they should be localhost only)
-        # These rules ensure even if binding changes, traffic is blocked
-        ufw deny in on eth0 to any port $GATEWAY_PORT >/dev/null 2>&1 || true
-        ufw deny in on eth0 to any port $MCP_PORT >/dev/null 2>&1 || true
-        ufw deny in on ens3 to any port $GATEWAY_PORT >/dev/null 2>&1 || true
-        ufw deny in on ens3 to any port $MCP_PORT >/dev/null 2>&1 || true
+        # Block gateway and MCP ports from all non-loopback/tailscale interfaces
+        local _iface
+        while IFS= read -r _iface; do
+            ufw deny in on "$_iface" to any port "$GATEWAY_PORT" >/dev/null 2>&1 || true
+            ufw deny in on "$_iface" to any port "$MCP_PORT" >/dev/null 2>&1 || true
+        done < <(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep -v "^lo$\|^tailscale")
 
         # Allow Tailscale
         ufw allow in on tailscale0 >/dev/null 2>&1 || true
@@ -462,13 +466,17 @@ setup_credentials() {
     PAIRING_SECRET=$(generate_secret 16)
     APPROVAL_SECRET=$(generate_secret 32)
 
-    # Store secrets in isolated files
+    # Store secrets in isolated files with restrictive umask
+    local _old_umask
+    _old_umask=$(umask)
+    umask 0077
     echo "$MCP_AUTH_TOKEN" > "$SECRETS_DIR/mcp_token"
     echo "$OPENCLAW_TOKEN" > "$SECRETS_DIR/openclaw_token"
     echo "$PAIRING_SECRET" > "$SECRETS_DIR/pairing_code"
     echo "$APPROVAL_SECRET" > "$SECRETS_DIR/approval_secret"
+    umask "$_old_umask"
 
-    # Lock down permissions
+    # Verify permissions
     chmod 600 "$SECRETS_DIR"/*
 
     log_security "MCP token stored: $SECRETS_DIR/mcp_token (mode 600)"
@@ -585,14 +593,14 @@ deploy_agents() {
     OPENCLAW_TOKEN=$(cat "$SECRETS_DIR/openclaw_token")
 
     # Create security-hardened OpenClaw configuration
+    # NOTE: JSON does not support comments; metadata is in "_comment" fields
     cat > "$OC_DIR/openclaw.json" << EOF
 {
-  // =============================================================================
-  // WAZUH OPENCLAW AUTOPILOT - SECURITY HARDENED CONFIGURATION
-  // =============================================================================
-  // SECURITY: Gateway binds to localhost only - never exposed to internet
-  // SECURITY: Pairing mode enabled - explicit device approval required
-  // =============================================================================
+  "_comment": "Wazuh OpenClaw Autopilot - Security Hardened Configuration",
+  "_security": [
+    "Gateway binds to localhost only - never exposed to internet",
+    "Pairing mode enabled - explicit device approval required"
+  ],
 
   "gateway": {
     "port": $GATEWAY_PORT,
@@ -615,9 +623,6 @@ deploy_agents() {
     }
   },
 
-  // =============================================================================
-  // AGENT CONFIGURATION
-  // =============================================================================
   "agents": {
     "defaults": {
       "workspace": "~/.openclaw/wazuh-autopilot/workspace",
@@ -740,9 +745,6 @@ deploy_agents() {
     ]
   },
 
-  // =============================================================================
-  // CHANNEL SECURITY - Pairing mode and allowlists
-  // =============================================================================
   "channels": {
     "slack": {
       "enabled": true,
@@ -757,9 +759,6 @@ deploy_agents() {
     }
   },
 
-  // =============================================================================
-  // TOOL SECURITY - Strict allowlists
-  // =============================================================================
   "tools": {
     "profile": "minimal",
     "allow": [
@@ -794,9 +793,6 @@ deploy_agents() {
     }
   },
 
-  // =============================================================================
-  // AUTOMATION - Scheduled tasks
-  // =============================================================================
   "automation": {
     "cron": [
       {"id": "hourly-snapshot", "schedule": "0 * * * *", "agentId": "wazuh-reporting"},
@@ -816,9 +812,6 @@ deploy_agents() {
     ]
   },
 
-  // =============================================================================
-  // MEMORY CONFIGURATION
-  // =============================================================================
   "memory": {
     "enabled": true,
     "search": {
@@ -828,9 +821,6 @@ deploy_agents() {
     }
   },
 
-  // =============================================================================
-  // ENVIRONMENT VARIABLES
-  // =============================================================================
   "env": {
     "OPENCLAW_TOKEN": "\${OPENCLAW_TOKEN}",
     "ANTHROPIC_API_KEY": "\${ANTHROPIC_API_KEY}",
@@ -907,6 +897,7 @@ Wants=wazuh-mcp-server.service
 Type=simple
 User=root
 WorkingDirectory=$RUNTIME_DST
+Environment="NODE_ENV=production"
 ExecStart=/usr/bin/node index.js
 Restart=always
 RestartSec=10
@@ -1001,101 +992,104 @@ configure_system() {
     fi
 
     # Create configuration file
-    cat > "$CONFIG_DIR/.env" << EOF
+    # Use quoted heredoc to prevent shell expansion of $, then substitute known vars
+    local _generated_at
+    _generated_at=$(date -Iseconds)
+    cat > "$CONFIG_DIR/.env" << 'ENVEOF'
 # =============================================================================
 # WAZUH OPENCLAW AUTOPILOT - SECURITY HARDENED CONFIGURATION
 # =============================================================================
-# Generated: $(date -Iseconds)
-# Version: $VERSION
-#
-# SECURITY NOTES:
-# - Gateway binds to localhost only (never exposed)
-# - MCP Server binds to Tailscale IP only
-# - Credentials isolated in $SECRETS_DIR
-# - Two-tier human approval required for all actions
+# Two-tier human approval required for all actions
 # =============================================================================
 
-# -----------------------------------------------------------------------------
 # WAZUH API CONNECTION
-# -----------------------------------------------------------------------------
-WAZUH_API_URL=$WAZUH_API_URL
-WAZUH_API_USER=$WAZUH_API_USER
-WAZUH_API_PASSWORD=$WAZUH_API_PASSWORD
+WAZUH_API_URL=__WAZUH_API_URL__
+WAZUH_API_USER=__WAZUH_API_USER__
+WAZUH_API_PASSWORD=__WAZUH_API_PASSWORD__
 
-# -----------------------------------------------------------------------------
-# MCP SERVER (Tailscale Only - NOT public)
-# -----------------------------------------------------------------------------
-# SECURITY: MCP binds to Tailscale IP, not 0.0.0.0
-MCP_HOST=$TAILSCALE_IP
-MCP_PORT=$MCP_PORT
-MCP_URL=http://$TAILSCALE_IP:$MCP_PORT
-MCP_AUTH_TOKEN=$MCP_AUTH_TOKEN
+# MCP SERVER
+MCP_HOST=__TAILSCALE_IP__
+MCP_PORT=__MCP_PORT__
+MCP_URL=http://__TAILSCALE_IP__:__MCP_PORT__
+MCP_AUTH_TOKEN=__MCP_AUTH_TOKEN__
 
-# -----------------------------------------------------------------------------
-# OPENCLAW GATEWAY (Localhost Only - NOT public)
-# -----------------------------------------------------------------------------
-# SECURITY: Gateway binds to 127.0.0.1 only
-OPENCLAW_HOST=$GATEWAY_BIND
-OPENCLAW_PORT=$GATEWAY_PORT
-OPENCLAW_TOKEN=$OPENCLAW_TOKEN
+# OPENCLAW GATEWAY (Localhost Only)
+OPENCLAW_HOST=__GATEWAY_BIND__
+OPENCLAW_PORT=__GATEWAY_PORT__
+OPENCLAW_TOKEN=__OPENCLAW_TOKEN__
 
-# -----------------------------------------------------------------------------
 # AI PROVIDER
-# -----------------------------------------------------------------------------
-ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+ANTHROPIC_API_KEY=__ANTHROPIC_API_KEY__
 
-# -----------------------------------------------------------------------------
 # RUNTIME SERVICE (Localhost Only)
-# -----------------------------------------------------------------------------
-# SECURITY: Runtime binds to 127.0.0.1 only
-AUTOPILOT_HOST=$GATEWAY_BIND
-AUTOPILOT_PORT=$RUNTIME_PORT
-AUTOPILOT_DATA_DIR=$DATA_DIR
-AUTOPILOT_LOG_DIR=$LOG_DIR
-AUTOPILOT_CONFIG_DIR=$CONFIG_DIR
+AUTOPILOT_HOST=__GATEWAY_BIND__
+AUTOPILOT_PORT=__RUNTIME_PORT__
+AUTOPILOT_DATA_DIR=__DATA_DIR__
+AUTOPILOT_LOG_DIR=__LOG_DIR__
+AUTOPILOT_CONFIG_DIR=__CONFIG_DIR__
 
-# -----------------------------------------------------------------------------
 # APPROVAL SYSTEM
-# -----------------------------------------------------------------------------
-AUTOPILOT_TOKEN_SECRET=$APPROVAL_SECRET
+AUTOPILOT_TOKEN_SECRET=__APPROVAL_SECRET__
 AUTOPILOT_TOKEN_TTL_MINUTES=60
 
-# -----------------------------------------------------------------------------
 # PAIRING MODE
-# -----------------------------------------------------------------------------
-# SECURITY: Devices must pair with this code before connecting
-AUTOPILOT_PAIRING_CODE=$PAIRING_SECRET
+AUTOPILOT_PAIRING_CODE=__PAIRING_SECRET__
 AUTOPILOT_PAIRING_ENABLED=true
 
-# -----------------------------------------------------------------------------
 # RESPONDER AGENT - TWO-TIER HUMAN APPROVAL
-# -----------------------------------------------------------------------------
-#
-# SAFETY: Response execution is DISABLED by default.
-#
-# Even when enabled, EVERY action requires:
-#   1. Human clicks "Approve" (Tier 1)
-#   2. Human clicks "Execute" (Tier 2)
-#
-# AI agents CANNOT execute actions autonomously.
-#
-# To enable: Set to "true" and restart services
-# -----------------------------------------------------------------------------
+# SAFETY: Disabled by default. Every action requires human Approve + Execute.
 AUTOPILOT_RESPONDER_ENABLED=false
 
-# -----------------------------------------------------------------------------
 # SLACK INTEGRATION
-# -----------------------------------------------------------------------------
-SLACK_APP_TOKEN=$SLACK_APP_TOKEN
-SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN
-SLACK_ALERTS_CHANNEL=$SLACK_ALERTS_CHANNEL
-SLACK_APPROVALS_CHANNEL=$SLACK_APPROVALS_CHANNEL
+SLACK_APP_TOKEN=__SLACK_APP_TOKEN__
+SLACK_BOT_TOKEN=__SLACK_BOT_TOKEN__
+SLACK_ALERTS_CHANNEL=__SLACK_ALERTS_CHANNEL__
+SLACK_APPROVALS_CHANNEL=__SLACK_APPROVALS_CHANNEL__
 
-# -----------------------------------------------------------------------------
 # TAILSCALE
-# -----------------------------------------------------------------------------
-TAILSCALE_IP=$TAILSCALE_IP
-EOF
+TAILSCALE_IP=__TAILSCALE_IP__
+ENVEOF
+
+    # Substitute placeholders with actual values (safe for special chars in passwords)
+    local _envfile="$CONFIG_DIR/.env"
+    sed -i.bak \
+        -e "s|__WAZUH_API_URL__|${WAZUH_API_URL}|g" \
+        -e "s|__WAZUH_API_USER__|${WAZUH_API_USER}|g" \
+        -e "s|__MCP_PORT__|${MCP_PORT}|g" \
+        -e "s|__GATEWAY_BIND__|${GATEWAY_BIND}|g" \
+        -e "s|__GATEWAY_PORT__|${GATEWAY_PORT}|g" \
+        -e "s|__RUNTIME_PORT__|${RUNTIME_PORT}|g" \
+        -e "s|__DATA_DIR__|${DATA_DIR}|g" \
+        -e "s|__LOG_DIR__|${LOG_DIR}|g" \
+        -e "s|__CONFIG_DIR__|${CONFIG_DIR}|g" \
+        "$_envfile"
+    rm -f "${_envfile}.bak"
+
+    # Substitute secrets separately using awk to avoid sed delimiter issues
+    # This handles passwords/tokens containing any special characters
+    local _tmpenv
+    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
+    awk -v val="$WAZUH_API_PASSWORD" '{gsub(/__WAZUH_API_PASSWORD__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
+    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
+    awk -v val="$TAILSCALE_IP" '{gsub(/__TAILSCALE_IP__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
+    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
+    awk -v val="$MCP_AUTH_TOKEN" '{gsub(/__MCP_AUTH_TOKEN__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
+    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
+    awk -v val="$OPENCLAW_TOKEN" '{gsub(/__OPENCLAW_TOKEN__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
+    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
+    awk -v val="$ANTHROPIC_API_KEY" '{gsub(/__ANTHROPIC_API_KEY__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
+    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
+    awk -v val="$APPROVAL_SECRET" '{gsub(/__APPROVAL_SECRET__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
+    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
+    awk -v val="$PAIRING_SECRET" '{gsub(/__PAIRING_SECRET__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
+    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
+    awk -v val="$SLACK_APP_TOKEN" '{gsub(/__SLACK_APP_TOKEN__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
+    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
+    awk -v val="$SLACK_BOT_TOKEN" '{gsub(/__SLACK_BOT_TOKEN__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
+    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
+    awk -v val="$SLACK_ALERTS_CHANNEL" '{gsub(/__SLACK_ALERTS_CHANNEL__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
+    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
+    awk -v val="$SLACK_APPROVALS_CHANNEL" '{gsub(/__SLACK_APPROVALS_CHANNEL__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
 
     chmod 600 "$CONFIG_DIR/.env"
 
@@ -1448,7 +1442,7 @@ run_security_audit() {
 
     # Check directory permissions
     local config_perms
-    config_perms=$(stat -c %a "$CONFIG_DIR" 2>/dev/null || echo "000")
+    config_perms=$(stat -c %a 2>/dev/null || stat -f %OLp "$CONFIG_DIR" 2>/dev/null || echo "000")
     if [[ "$config_perms" == "700" ]]; then
         echo -e "  ${GREEN}✓${NC} Config directory permissions (700)"
     else
@@ -1458,7 +1452,7 @@ run_security_audit() {
 
     # Check secrets permissions
     local secrets_perms
-    secrets_perms=$(stat -c %a "$SECRETS_DIR" 2>/dev/null || echo "000")
+    secrets_perms=$(stat -c %a 2>/dev/null || stat -f %OLp "$SECRETS_DIR" 2>/dev/null || echo "000")
     if [[ "$secrets_perms" == "700" ]]; then
         echo -e "  ${GREEN}✓${NC} Secrets directory permissions (700)"
     else
@@ -1468,7 +1462,7 @@ run_security_audit() {
 
     # Check env file permissions
     local env_perms
-    env_perms=$(stat -c %a "$CONFIG_DIR/.env" 2>/dev/null || echo "000")
+    env_perms=$(stat -c %a 2>/dev/null || stat -f %OLp "$CONFIG_DIR/.env" 2>/dev/null || echo "000")
     if [[ "$env_perms" == "600" ]]; then
         echo -e "  ${GREEN}✓${NC} Environment file permissions (600)"
     else

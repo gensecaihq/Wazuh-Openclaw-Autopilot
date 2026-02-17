@@ -223,12 +223,12 @@ actions:
 
     firewall_drop:
       enabled: true
-      risk_level: medium
+      risk_level: low
       requires_approval: true
-      min_approver_group: elevated
-      min_confidence: 0.8
-      min_evidence_items: 3
-      cooldown_minutes: 10
+      min_approver_group: standard
+      min_confidence: 0.7
+      min_evidence_items: 2
+      cooldown_minutes: 5
 
     host_deny:
       enabled: true
