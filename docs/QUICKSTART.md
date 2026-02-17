@@ -49,7 +49,7 @@ sudo nano /etc/wazuh-autopilot/.env
 ```bash
 # MCP Server Connection
 # Replace with your actual MCP server URL
-MCP_URL=https://your-mcp-server:8080
+MCP_URL=https://your-mcp-server:3000
 
 # MCP Authentication Token
 # Get this from your MCP server configuration
@@ -188,7 +188,7 @@ sudo journalctl -u wazuh-autopilot -f
 
 1. Verify MCP_URL is correct and reachable
 2. Check AUTOPILOT_MCP_AUTH token is valid
-3. Test connectivity: `curl -v https://your-mcp-server:8080/health`
+3. Test connectivity: `curl -v https://your-mcp-server:3000/health`
 
 ### Placeholder validation error
 

@@ -55,9 +55,9 @@ systemctl start docker
 
 Edit `/etc/wazuh-autopilot/.env`:
 ```bash
-MCP_URL=https://your-mcp-server:8080
+MCP_URL=https://your-mcp-server:3000
 # OR for bootstrap mode:
-MCP_BOOTSTRAP_URL=http://192.168.1.100:8080
+MCP_BOOTSTRAP_URL=http://192.168.1.100:3000
 ```
 
 ### "MCP authentication failed"
@@ -69,7 +69,7 @@ MCP_BOOTSTRAP_URL=http://192.168.1.100:8080
 **Test manually:**
 ```bash
 curl -H "Authorization: Bearer YOUR_TOKEN" \
-  https://your-mcp-server:8080/health
+  https://your-mcp-server:3000/health
 ```
 
 ### "Production mode requires Tailnet MCP URL"
@@ -99,7 +99,7 @@ In production mode, MCP_URL must be a Tailnet address.
 ping mcp-server.tail123.ts.net
 
 # Test HTTP
-curl -v https://mcp-server.tail123.ts.net:8080/health
+curl -v https://mcp-server.tail123.ts.net:3000/health
 ```
 
 **If using Tailscale:**
@@ -374,12 +374,12 @@ curl -k https://YOUR_WAZUH_HOST:55000/ -o /dev/null -w "%{http_code}" -s
 
 ### MCP authentication failed
 
-1. Verify `AUTOPILOT_MCP_AUTH` token matches the MCP server's `MCP_AUTH_TOKEN`
+1. Verify `AUTOPILOT_MCP_AUTH` token matches the MCP server's `MCP_API_KEY`
 2. Check the token has no extra whitespace or newlines
 3. Test manually:
    ```bash
    curl -H "Authorization: Bearer $AUTOPILOT_MCP_AUTH" \
-     https://mcp-server:8080/health
+     https://mcp-server:3000/health
    ```
 
 ---
@@ -400,7 +400,7 @@ read_operations:
 **Discover available tools:**
 ```bash
 curl -H "Authorization: Bearer TOKEN" \
-  https://mcp-server:8080/tools
+  https://mcp-server:3000/tools
 ```
 
 ### Tool calls timing out

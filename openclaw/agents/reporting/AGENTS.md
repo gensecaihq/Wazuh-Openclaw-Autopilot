@@ -192,8 +192,8 @@ The Reporting Agent cannot execute any response actions. It is strictly read-onl
 | Cases | Internal case store |
 | Evidence packs | Internal evidence store |
 | Metrics | Prometheus endpoint |
-| Alerts/Events | MCP via `search_alerts`, `search_events` |
-| Agent status | MCP via `get_agent` |
+| Alerts/Events | MCP via `get_wazuh_alerts`, `search_security_events` |
+| Agent status | MCP via `get_wazuh_agents` |
 
 ---
 

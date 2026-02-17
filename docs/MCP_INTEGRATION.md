@@ -59,27 +59,30 @@ cp .env.example .env
 nano .env
 
 # Start
-docker-compose up -d
+docker compose up -d
 ```
 
 ### Configuration
 
 ```env
 # .env file for Wazuh MCP Server
-WAZUH_API_URL=https://wazuh-manager:55000
-WAZUH_API_USER=wazuh
-WAZUH_API_PASSWORD=your-password
-WAZUH_API_VERIFY_SSL=true
+WAZUH_HOST=wazuh-manager
+WAZUH_PORT=55000
+WAZUH_USER=wazuh
+WAZUH_PASS=your-password
+WAZUH_VERIFY_SSL=true
+WAZUH_ALLOW_SELF_SIGNED=true
 
 # MCP Server settings
-MCP_PORT=8080
+MCP_PORT=3000
 MCP_HOST=0.0.0.0
-MCP_AUTH_ENABLED=true
-MCP_AUTH_TOKEN=your-secret-token
+AUTH_MODE=bearer
+MCP_API_KEY=your-api-key
 
-# Rate limiting
-RATE_LIMIT_WINDOW_MS=60000
-RATE_LIMIT_MAX_REQUESTS=100
+# Advanced
+REQUEST_TIMEOUT_SECONDS=30
+MAX_ALERTS_PER_QUERY=1000
+MAX_CONNECTIONS=10
 ```
 
 ---
@@ -97,7 +100,7 @@ Runtime → MCP (HTTP/HTTPS on LAN)
 **Autopilot Configuration:**
 ```env
 AUTOPILOT_MODE=bootstrap
-MCP_URL=http://192.168.1.100:8080
+MCP_URL=http://192.168.1.100:3000
 AUTOPILOT_MCP_AUTH=your-token
 ```
 
@@ -118,7 +121,7 @@ Runtime → Tailscale → MCP (encrypted tunnel)
 ```env
 AUTOPILOT_MODE=production
 AUTOPILOT_REQUIRE_TAILSCALE=true
-MCP_URL=https://mcp-server.tailnet12345.ts.net:8080
+MCP_URL=https://mcp-server.tailnet12345.ts.net:3000
 AUTOPILOT_MCP_AUTH=your-token
 ```
 
@@ -138,160 +141,111 @@ Runtime → localhost → MCP
 
 **Autopilot Configuration:**
 ```env
-MCP_URL=http://127.0.0.1:8080
+MCP_URL=http://127.0.0.1:3000
 ```
 
 ---
 
 ## Available MCP Tools
 
-### Alert Operations
+The Wazuh MCP Server v4.0.6 exposes **29 tools** organized into five categories. All tools are invoked via the MCP protocol through the `/mcp` (Streamable HTTP) or `/sse` (legacy) endpoints.
 
-#### `get_alert`
-Retrieve a specific alert by ID.
+### Tool Reference
+
+| Category | Tool | Description |
+|----------|------|-------------|
+| **Alert Operations** | `get_wazuh_alerts` | Retrieve alerts with filtering (limit, rule_id, level, agent_id, timestamp range) |
+| | `get_wazuh_alert_summary` | Alert summary grouped by field (time_range, group_by) |
+| | `analyze_alert_patterns` | Identify trends and anomalies (time_range, min_frequency) |
+| | `search_security_events` | Search events across Wazuh data (query, time_range, limit) |
+| **Agent Operations** | `get_wazuh_agents` | Agent information (agent_id, status filter, limit) |
+| | `get_wazuh_running_agents` | List running/active agents |
+| | `check_agent_health` | Agent health status (agent_id required) |
+| | `get_agent_processes` | Running processes from agent (agent_id, limit) |
+| | `get_agent_ports` | Open ports from agent (agent_id, limit) |
+| | `get_agent_configuration` | Agent configuration details (agent_id) |
+| **Vulnerability Operations** | `get_wazuh_vulnerabilities` | Vulnerability data (agent_id, severity, limit) |
+| | `get_wazuh_critical_vulnerabilities` | Critical vulnerabilities only (limit) |
+| | `get_wazuh_vulnerability_summary` | Vulnerability statistics (time_range) |
+| **Security Analysis** | `analyze_security_threat` | AI-powered threat analysis (indicator, indicator_type) |
+| | `check_ioc_reputation` | IoC reputation check (indicator, indicator_type) |
+| | `perform_risk_assessment` | Risk assessment (agent_id optional) |
+| | `get_top_security_threats` | Top threats by frequency/severity (limit, time_range) |
+| | `generate_security_report` | Comprehensive report (report_type, include_recommendations) |
+| | `run_compliance_check` | Compliance framework check (framework: PCI-DSS/HIPAA/SOX/GDPR/NIST) |
+| **System Monitoring** | `get_wazuh_statistics` | Comprehensive statistics |
+| | `get_wazuh_weekly_stats` | Weekly statistics |
+| | `get_wazuh_cluster_health` | Cluster health info |
+| | `get_wazuh_cluster_nodes` | Cluster node information |
+| | `get_wazuh_rules_summary` | Rules and effectiveness |
+| | `get_wazuh_remoted_stats` | Agent communication statistics |
+| | `get_wazuh_log_collector_stats` | Log collector statistics |
+| | `search_wazuh_manager_logs` | Search manager logs (query, limit) |
+| | `get_wazuh_manager_error_logs` | Recent error logs (limit) |
+| | `validate_wazuh_connection` | Connection validation |
+
+> **Note:** Vulnerability Operations tools require Wazuh Indexer 4.8.0 or later.
+
+### Tool Examples
+
+#### Retrieving Alerts
 
 ```json
-// Tool allowlist in openclaw.json (per-agent)
-"tools": {
-  "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
-  "deny": ["write", "exec", "delete", "browser"]
+{
+  "tool": "get_wazuh_alerts",
+  "arguments": {
+    "level": 12,
+    "agent_id": "001",
+    "limit": 50
+  }
 }
 ```
-
-**Parameters:**
-- `alert_id` (string): The Wazuh alert ID
 
 **Response:**
 ```json
 {
-  "alert": {
-    "_id": "12345",
-    "rule": {
-      "level": 12,
-      "description": "SSH brute force attack",
-      "mitre": { "id": ["T1110"], "tactic": ["Credential Access"] }
-    },
-    "agent": {
-      "id": "001",
-      "name": "server-prod-01",
-      "ip": "10.0.1.100"
-    },
-    "data": {
-      "srcip": "192.168.1.50",
-      "srcuser": "root"
+  "alerts": [
+    {
+      "rule": {
+        "level": 12,
+        "description": "SSH brute force attack",
+        "mitre": { "id": ["T1110"], "tactic": ["Credential Access"] }
+      },
+      "agent": {
+        "id": "001",
+        "name": "server-prod-01",
+        "ip": "10.0.1.100"
+      },
+      "data": {
+        "srcip": "192.168.1.50",
+        "srcuser": "root"
+      }
     }
+  ]
+}
+```
+
+#### Checking Agent Health
+
+```json
+{
+  "tool": "check_agent_health",
+  "arguments": {
+    "agent_id": "001"
   }
 }
 ```
 
-#### `search_alerts`
-Search for alerts matching criteria.
+#### Running a Compliance Check
 
-**Parameters:**
-- `query` (string): Elasticsearch query string
-- `size` (number): Maximum results (default: 10)
-- `from` (number): Offset for pagination
-
-**Example Query:**
 ```json
 {
-  "query": "rule.level:>=10 AND agent.name:server-prod-*",
-  "size": 50,
-  "from": 0
-}
-```
-
-#### `search_events`
-Search raw events (not just alerts).
-
-**Parameters:**
-- `query` (string): Elasticsearch query string
-- `index` (string): Index pattern (default: "wazuh-alerts-*")
-- `size` (number): Maximum results
-
-### Agent Operations
-
-#### `get_agent`
-Get information about a Wazuh agent.
-
-**Parameters:**
-- `agent_id` (string): The agent ID
-
-**Response:**
-```json
-{
-  "agent": {
-    "id": "001",
-    "name": "server-prod-01",
-    "ip": "10.0.1.100",
-    "status": "active",
-    "os": {
-      "platform": "ubuntu",
-      "version": "22.04"
-    },
-    "manager": "wazuh-manager"
+  "tool": "run_compliance_check",
+  "arguments": {
+    "framework": "PCI-DSS"
   }
 }
 ```
-
-#### `list_agents`
-List all agents with optional filtering.
-
-**Parameters:**
-- `status` (string): Filter by status (active, disconnected, pending)
-- `group` (string): Filter by group
-- `limit` (number): Maximum results
-
-### Rule Operations
-
-#### `get_rule_info`
-Get rule metadata including MITRE mappings.
-
-**Parameters:**
-- `rule_id` (string): The Wazuh rule ID
-
-**Response:**
-```json
-{
-  "rule": {
-    "id": "5712",
-    "level": 10,
-    "description": "sshd: brute force attack",
-    "groups": ["sshd", "authentication_failed"],
-    "mitre": {
-      "id": ["T1110"],
-      "tactic": ["Credential Access"],
-      "technique": ["Brute Force"]
-    }
-  }
-}
-```
-
-### Active Response Operations (Restricted)
-
-These tools are restricted and require elevated permissions.
-
-#### `block_ip`
-Block an IP address via Wazuh active response.
-
-**Parameters:**
-- `agent_id` (string): Target agent
-- `ip` (string): IP address to block
-- `duration` (number): Block duration in seconds (optional)
-
-#### `isolate_host`
-Network isolate an endpoint.
-
-**Parameters:**
-- `agent_id` (string): Target agent
-
-#### `kill_process`
-Terminate a process on an endpoint.
-
-**Parameters:**
-- `agent_id` (string): Target agent
-- `pid` (number): Process ID
-- `process_name` (string): Process name (alternative to PID)
 
 ---
 
@@ -321,33 +275,68 @@ action_operations:
 
 ## Authentication
 
-### Token-Based Authentication
+The Wazuh MCP Server v4.0.6 supports three authentication modes, configured via `AUTH_MODE`.
 
-MCP uses Bearer token authentication.
+### Bearer Token Authentication (Default)
 
-**Request:**
+Set `AUTH_MODE=bearer`. An API key (`MCP_API_KEY`) is exchanged for a short-lived JWT.
+
+**Step 1 -- Exchange API key for JWT:**
 ```http
-POST /tools/get_alert HTTP/1.1
-Host: mcp-server:8080
-Authorization: Bearer your-secret-token
+POST /auth/token HTTP/1.1
+Host: mcp-server:3000
+Authorization: Bearer your-api-key
+Content-Type: application/json
+```
+
+**Response:**
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "expires_in": 3600
+}
+```
+
+**Step 2 -- Use the JWT for MCP calls:**
+
+All tool invocations go through the `/mcp` endpoint (Streamable HTTP, MCP protocol 2025-11-25) or `/sse` (legacy SSE).
+
+```http
+POST /mcp HTTP/1.1
+Host: mcp-server:3000
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 Content-Type: application/json
 
-{"alert_id": "12345"}
+{
+  "method": "tools/call",
+  "params": {
+    "name": "get_wazuh_alerts",
+    "arguments": { "level": 10, "limit": 20 }
+  }
+}
 ```
 
 **Autopilot Configuration:**
 ```env
-AUTOPILOT_MCP_AUTH=your-secret-token
+MCP_API_KEY=your-api-key
 ```
 
-### Rotating Tokens
+### OAuth 2.0 Authentication
 
-For production, implement token rotation:
+Set `AUTH_MODE=oauth`. Uses OAuth 2.0 with Dynamic Client Registration. Suitable for multi-tenant or federated deployments.
 
-1. Generate new token
-2. Update MCP server configuration
-3. Update Autopilot configuration
-4. Restart both services
+### No Authentication (Development Only)
+
+Set `AUTH_MODE=none`. Disables authentication entirely. **Never use in production.**
+
+### Token Validation
+
+You can verify a JWT is still valid:
+```http
+GET /auth/validate HTTP/1.1
+Host: mcp-server:3000
+Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+```
 
 ---
 
@@ -371,7 +360,7 @@ The runtime service includes retry logic and circuit breaker protection.
 |------|---------|--------|
 | 200 | Success | Process response |
 | 400 | Bad request | Check parameters |
-| 401 | Unauthorized | Check MCP_AUTH token |
+| 401 | Unauthorized | Check MCP_API_KEY / JWT token |
 | 403 | Forbidden | Check permissions |
 | 404 | Not found | Resource doesn't exist |
 | 429 | Rate limited | Retry after delay |
@@ -388,7 +377,7 @@ MCP calls are logged with correlation IDs:
   "level": "info",
   "component": "mcp",
   "msg": "Tool call completed",
-  "tool": "get_alert",
+  "tool": "get_wazuh_alerts",
   "status": "success",
   "latency_ms": 45,
   "correlation_id": "abc-123-def"
@@ -422,24 +411,44 @@ MCP calls are logged with correlation IDs:
 
 ---
 
+## API Endpoints
+
+The Wazuh MCP Server v4.0.6 exposes the following HTTP endpoints:
+
+| Endpoint | Method | Purpose | Auth Required |
+|----------|--------|---------|---------------|
+| `/mcp` | GET/POST | Primary MCP endpoint (Streamable HTTP, protocol 2025-11-25) | Yes |
+| `/sse` | GET | Legacy SSE endpoint | Yes |
+| `/health` | GET | Health check | No |
+| `/metrics` | GET | Prometheus metrics | No |
+| `/docs` | GET | OpenAPI/Swagger documentation | No |
+| `/auth/token` | POST | Exchange API key for JWT | API Key |
+| `/auth/validate` | GET | Validate a JWT token | Bearer |
+
+---
+
 ## Troubleshooting
 
 ### MCP Connection Test
 
 ```bash
-# Test basic connectivity
-curl -v https://mcp-server:8080/health
+# Test health (no auth required)
+curl https://mcp-server:3000/health
 
-# Test with authentication
-curl -H "Authorization: Bearer $AUTOPILOT_MCP_AUTH" \
-  https://mcp-server:8080/health
+# Check Prometheus metrics (no auth required)
+curl https://mcp-server:3000/metrics
 
-# Test a tool call
+# View available tools (Swagger docs)
+# Open https://mcp-server:3000/docs in a browser
+
+# Exchange API key for a JWT
 curl -X POST \
-  -H "Authorization: Bearer $AUTOPILOT_MCP_AUTH" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "rule.level:>=10", "size": 1}' \
-  https://mcp-server:8080/tools/search_alerts
+  -H "Authorization: Bearer $MCP_API_KEY" \
+  https://mcp-server:3000/auth/token
+
+# Validate a JWT
+curl -H "Authorization: Bearer $JWT_TOKEN" \
+  https://mcp-server:3000/auth/validate
 ```
 
 ### Common Issues

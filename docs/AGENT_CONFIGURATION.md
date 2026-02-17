@@ -244,8 +244,10 @@ Environment-specific settings are managed via `.env`:
 # /etc/wazuh-autopilot/.env
 
 # Required: Wazuh connection
-WAZUH_API_URL=https://localhost:55000
-WAZUH_API_USER=wazuh-wui
+WAZUH_HOST=localhost
+WAZUH_PORT=55000
+WAZUH_USER=wazuh-wui
+WAZUH_PASS=your-password
 
 # Required: At least one LLM provider
 ANTHROPIC_API_KEY=sk-ant-...

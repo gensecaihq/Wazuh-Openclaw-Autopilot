@@ -80,8 +80,8 @@ tailscale status
 ```
 
 Your MCP Tailnet URL will be something like:
-- `https://mcp-server.your-tailnet.ts.net:8080`
-- or `https://100.64.0.1:8080`
+- `https://mcp-server.your-tailnet.ts.net:3000`
+- or `https://100.64.0.1:3000`
 
 ### Step 4: Configure Autopilot for Production
 
@@ -90,7 +90,7 @@ Update `/etc/wazuh-autopilot/.env`:
 ```bash
 AUTOPILOT_MODE=production
 AUTOPILOT_REQUIRE_TAILSCALE=true
-MCP_URL=https://mcp-server.your-tailnet.ts.net:8080
+MCP_URL=https://mcp-server.your-tailnet.ts.net:3000
 ```
 
 ### Step 5: Transition to Production (If Previously in Bootstrap)
@@ -101,7 +101,7 @@ If you were running in bootstrap mode:
    ```bash
    AUTOPILOT_MODE=production
    AUTOPILOT_REQUIRE_TAILSCALE=true
-   MCP_URL=https://mcp-server.your-tailnet.ts.net:8080
+   MCP_URL=https://mcp-server.your-tailnet.ts.net:3000
    ```
 
 2. Restart the service:
@@ -124,7 +124,7 @@ For additional security, configure Tailscale ACLs to restrict access:
     {
       "action": "accept",
       "src": ["tag:autopilot"],
-      "dst": ["tag:mcp:8080"]
+      "dst": ["tag:mcp:3000"]
     }
   ],
   "tagOwners": {
@@ -158,7 +158,7 @@ Should show both machines online.
 
 ```bash
 # From Autopilot host
-curl https://mcp-server.your-tailnet.ts.net:8080/health
+curl https://mcp-server.your-tailnet.ts.net:3000/health
 ```
 
 ### Run Doctor
@@ -194,7 +194,7 @@ Update `MCP_URL` in `/etc/wazuh-autopilot/.env` to use the Tailnet address.
 2. Check MCP is listening:
    ```bash
    # On MCP host
-   ss -tlnp | grep 8080
+   ss -tlnp | grep 3000
    ```
 
 3. Check Tailscale ACLs allow the connection

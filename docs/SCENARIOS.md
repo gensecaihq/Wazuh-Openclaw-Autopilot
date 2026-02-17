@@ -38,7 +38,7 @@ sudo ./install/install.sh
 │                                                             │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │
 │  │ Wazuh   │─▶│   MCP   │─▶│OpenClaw │─▶│ Runtime │       │
-│  │ Manager │  │ :8080   │  │ :18789  │  │ :9090   │       │
+│  │ Manager │  │ :3000   │  │ :18789  │  │ :9090   │       │
 │  └─────────┘  └─────────┘  └─────────┘  └─────────┘       │
 │                                                             │
 │            All communication via localhost                  │
@@ -66,7 +66,7 @@ sudo ./install/install.sh
 sudo nano /etc/wazuh-autopilot/.env
 
 # Set MCP URL (localhost for all-in-one)
-MCP_URL=http://127.0.0.1:8080
+MCP_URL=http://127.0.0.1:3000
 ```
 
 ---
@@ -87,7 +87,7 @@ MCP_URL=http://127.0.0.1:8080
 │       │                 │      │            ┌────┴────┐ │
 │  ┌────┴────┐            │ HTTP │            │ Runtime │ │
 │  │   MCP   │◀───────────│──────│────────────┤ :9090   │ │
-│  │ :8080   │            │      │            └─────────┘ │
+│  │ :3000   │            │      │            └─────────┘ │
 │  └─────────┘            │      │                        │
 └─────────────────────────┘      └─────────────────────────┘
 ```
@@ -103,9 +103,9 @@ sudo ./install/install.sh
 
 ```bash
 # Server B configuration
-MCP_URL=https://server-a.example.com:8080
+MCP_URL=https://server-a.example.com:3000
 # Or with Tailscale
-MCP_URL=https://server-a.tail12345.ts.net:8080
+MCP_URL=https://server-a.tail12345.ts.net:3000
 ```
 
 ---
@@ -222,7 +222,7 @@ scp -r openclaw/agents/* admin@openclaw.example.com:/opt/openclaw/agents/
 │                                                       │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐           │
 │  │  wazuh   │  │   mcp    │  │ openclaw │           │
-│  │ :55000   │──│  :8080   │──│  :18789  │           │
+│  │ :55000   │──│  :3000   │──│  :18789  │           │
 │  └──────────┘  └──────────┘  └──────────┘           │
 │                      │                               │
 │                ┌─────┴─────┐                         │
@@ -293,7 +293,7 @@ kubectl apply -f your-deployment.yaml
 │  │                    DMZ / Secure Zone                       │ │
 │  │  ┌─────────┐    ┌─────────┐                               │ │
 │  │  │ Wazuh   │───▶│   MCP   │──── Tailscale ────┐          │ │
-│  │  │ Manager │    │ :8080   │                    │          │ │
+│  │  │ Manager │    │ :3000   │                    │          │ │
 │  │  └─────────┘    └─────────┘                    │          │ │
 │  └────────────────────────────────────────────────│──────────┘ │
 └───────────────────────────────────────────────────│─────────────┘
@@ -322,8 +322,8 @@ Run the standard installer in the cloud, then configure `MCP_URL` to point to th
 
 | From | To | Port | Protocol |
 |------|-----|------|----------|
-| OpenClaw | MCP | 8080 | HTTPS |
-| Runtime | MCP | 8080 | HTTPS |
+| OpenClaw | MCP | 3000 | HTTPS |
+| Runtime | MCP | 3000 | HTTPS |
 | MCP | Wazuh API | 55000 | HTTPS |
 | Runtime | Slack | 443 | HTTPS |
 | Prometheus | Runtime | 9090 | HTTP |
@@ -371,7 +371,7 @@ sudo systemctl restart wazuh-mcp-server wazuh-autopilot
 
 ```bash
 export AUTOPILOT_MODE=production
-export MCP_URL=https://mcp.your-tailnet.ts.net:8080
+export MCP_URL=https://mcp.your-tailnet.ts.net:3000
 export AUTOPILOT_MCP_AUTH=your-token
 
 sudo ./install/install.sh

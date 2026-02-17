@@ -41,7 +41,7 @@ RUNTIME_PORT="${RUNTIME_PORT:-9090}"
 RUNTIME_HOST="${METRICS_HOST:-127.0.0.1}"
 GATEWAY_PORT="${GATEWAY_PORT:-18789}"
 GATEWAY_HOST="127.0.0.1"
-MCP_PORT="${MCP_PORT:-8080}"
+MCP_PORT="${MCP_PORT:-3000}"
 
 # Load .env if available
 if [[ -f "$CONFIG_DIR/.env" ]]; then
@@ -53,7 +53,7 @@ if [[ -f "$CONFIG_DIR/.env" ]]; then
     RUNTIME_PORT="${RUNTIME_PORT:-${METRICS_PORT:-9090}}"
     RUNTIME_HOST="${METRICS_HOST:-${RUNTIME_HOST}}"
     GATEWAY_PORT="${GATEWAY_PORT:-${OPENCLAW_PORT:-18789}}"
-    MCP_PORT="${MCP_PORT:-8080}"
+    MCP_PORT="${MCP_PORT:-3000}"
 fi
 
 # Flags
@@ -247,21 +247,17 @@ check_wazuh_api() {
         return
     fi
 
-    local wazuh_url="${WAZUH_API_URL:-}"
-    local wazuh_user="${WAZUH_API_USER:-}"
-    local wazuh_pass="${WAZUH_API_PASSWORD:-}"
+    local wazuh_host="${WAZUH_HOST:-}"
+    local wazuh_port="${WAZUH_PORT:-55000}"
+    local wazuh_user="${WAZUH_USER:-}"
+    local wazuh_pass="${WAZUH_PASS:-}"
 
-    if [[ -z "$wazuh_url" ]]; then
-        check_warn "Wazuh API URL" "WAZUH_API_URL not configured"
+    if [[ -z "$wazuh_host" ]]; then
+        check_warn "Wazuh Host" "WAZUH_HOST not configured"
         return
     fi
 
     # TCP connectivity
-    local wazuh_host wazuh_port
-    wazuh_host=$(echo "$wazuh_url" | sed -E 's|https?://||;s|:.*||;s|/.*||')
-    wazuh_port=$(echo "$wazuh_url" | sed -n 's|.*:\([0-9][0-9]*\).*|\1|p' | head -1)
-    wazuh_port="${wazuh_port:-55000}"
-
     if timeout 5 bash -c "echo >/dev/tcp/$wazuh_host/$wazuh_port" 2>/dev/null; then
         check_pass "Wazuh API TCP" "Reachable at $wazuh_host:$wazuh_port"
     else
@@ -273,7 +269,7 @@ check_wazuh_api() {
     if [[ -n "$wazuh_user" ]] && [[ -n "$wazuh_pass" ]]; then
         local auth_response
         auth_response=$(curl -sf --connect-timeout 10 -k -u "$wazuh_user:$wazuh_pass" \
-            "$wazuh_url/security/user/authenticate" 2>/dev/null)
+            "https://$wazuh_host:$wazuh_port/security/user/authenticate" 2>/dev/null)
         if [[ $? -eq 0 ]] && echo "$auth_response" | grep -q "token"; then
             check_pass "Wazuh API Auth" "Authentication successful"
         else

@@ -91,7 +91,7 @@ openclaw/
 export OPENCLAW_TOKEN="your-gateway-token"
 export ANTHROPIC_API_KEY="your-anthropic-key"
 export OPENAI_API_KEY="your-openai-key"  # For embeddings
-export MCP_URL="https://your-mcp-server:8080"
+export MCP_URL="https://your-mcp-server:3000"
 export AUTOPILOT_MCP_AUTH="your-mcp-token"
 
 # Optional: Additional LLM providers
@@ -254,7 +254,7 @@ POST /api/plans/{plan_id}/execute
 | Component | Binding | Note |
 |-----------|---------|------|
 | OpenClaw Gateway | `127.0.0.1:18789` | Localhost only, NEVER 0.0.0.0 |
-| MCP Server | `<tailscale-ip>:8080` | Tailscale network only |
+| MCP Server | `<tailscale-ip>:3000` | Tailscale network only |
 
 **The gateway is NEVER exposed to the public internet.** All remote access goes through Tailscale VPN.
 

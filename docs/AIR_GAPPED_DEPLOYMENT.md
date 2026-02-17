@@ -174,7 +174,7 @@ sudo systemctl restart wazuh-autopilot
 curl http://127.0.0.1:9090/health
 
 # Check MCP connectivity
-curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:3000/health
 
 # Run diagnostics
 ./install/doctor.sh
@@ -294,7 +294,7 @@ OpenClaw does **not** natively support Ollama as an embedding provider. The supp
 │                                                              │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
 │  │  Wazuh   │  │   MCP    │  │ OpenClaw │  │  Ollama  │   │
-│  │ Manager  │──│ :8080    │──│ :18789   │──│ :11434   │   │
+│  │ Manager  │──│ :3000    │──│ :18789   │──│ :11434   │   │
 │  │ :55000   │  │          │  │          │  │          │   │
 │  └──────────┘  └──────────┘  └────┬─────┘  └──────────┘   │
 │                                    │                        │

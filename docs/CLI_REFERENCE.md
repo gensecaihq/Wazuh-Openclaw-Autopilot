@@ -178,7 +178,7 @@ tailscale status
 docker ps
 
 # Check MCP connectivity
-curl -s https://your-mcp-server:8080/health
+curl -s https://your-mcp-server:3000/health
 
 # Check runtime metrics
 curl -s http://127.0.0.1:9090/metrics | grep autopilot
@@ -212,14 +212,14 @@ ls -la /var/lib/wazuh-autopilot/
 **MCP connection failed:**
 ```bash
 # Test MCP directly
-curl -v https://mcp-server:8080/health
+curl -v https://mcp-server:3000/health
 
 # Check Tailscale connectivity (if using)
 tailscale ping mcp-server
 
 # Verify auth token
 curl -H "Authorization: Bearer $AUTOPILOT_MCP_AUTH" \
-  https://mcp-server:8080/health
+  https://mcp-server:3000/health
 ```
 
 **Agent not loading:**

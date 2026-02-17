@@ -45,7 +45,7 @@ MCP_SERVER_DIR="$INSTALL_DIR/wazuh-mcp-server"
 # SECURITY: Gateway binds to localhost ONLY
 GATEWAY_BIND="127.0.0.1"
 GATEWAY_PORT="18789"
-MCP_PORT="8080"
+MCP_PORT="3000"
 RUNTIME_PORT="9090"
 
 # Flags (set by parse_args or environment)
@@ -332,6 +332,21 @@ install_dependencies() {
     fi
     log_success "Node.js $(node -v)"
 
+    # Python 3.11+ (required for Wazuh MCP Server)
+    if ! command -v python3 &>/dev/null; then
+        log_info "Installing Python 3..."
+        $PKG_INSTALL python3 python3-pip python3-venv
+    fi
+
+    local py_ver
+    py_ver=$(python3 -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo "0")
+    if [[ "$py_ver" -lt 11 ]]; then
+        log_warn "Python 3.11+ recommended for Wazuh MCP Server. Found: $(python3 --version)"
+        log_warn "MCP Server may still work but is untested on older versions"
+    else
+        log_success "Python $(python3 --version 2>&1 | awk '{print $2}')"
+    fi
+
     log_success "All dependencies installed"
 }
 
@@ -569,8 +584,13 @@ install_mcp_server() {
 
     cd "$MCP_SERVER_DIR"
 
-    log_info "Installing dependencies..."
-    npm install --production 2>/dev/null || npm install
+    log_info "Installing Python dependencies..."
+    python3 -m venv "$MCP_SERVER_DIR/.venv" 2>/dev/null || true
+    if [[ -f "$MCP_SERVER_DIR/.venv/bin/pip" ]]; then
+        "$MCP_SERVER_DIR/.venv/bin/pip" install --quiet -r requirements.txt
+    else
+        pip3 install --quiet -r requirements.txt 2>/dev/null || pip install --quiet -r requirements.txt
+    fi
 
     # Get Tailscale IP for binding
     TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "127.0.0.1")
@@ -596,17 +616,19 @@ ${_ts_requires}
 Type=simple
 User=root
 WorkingDirectory=$MCP_SERVER_DIR
-ExecStart=/usr/bin/node index.js
+ExecStart=$MCP_SERVER_DIR/.venv/bin/python -m wazuh_mcp_server
 Restart=always
 RestartSec=10
 EnvironmentFile=$CONFIG_DIR/.env
+Environment="MCP_HOST=$TAILSCALE_IP"
+Environment="MCP_PORT=$MCP_PORT"
 
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=$DATA_DIR $LOG_DIR
+ReadWritePaths=$DATA_DIR $LOG_DIR $MCP_SERVER_DIR
 
 [Install]
 WantedBy=multi-user.target
@@ -614,7 +636,7 @@ EOF
 
     systemctl daemon-reload
 
-    log_success "Wazuh MCP Server installed"
+    log_success "Wazuh MCP Server installed (Python)"
     log_security "MCP Server will bind to Tailscale IP: $TAILSCALE_IP:$MCP_PORT"
     log_security "NOT accessible from public internet"
 }
@@ -1023,17 +1045,27 @@ configure_system() {
     echo "  Enter your Wazuh API credentials."
     echo ""
 
-    local WAZUH_API_URL WAZUH_API_USER WAZUH_API_PASSWORD
+    local WAZUH_API_URL WAZUH_HOST WAZUH_PORT_NUM WAZUH_USER WAZUH_PASS
     read -rp "  Wazuh API URL [https://127.0.0.1:55000]: " WAZUH_API_URL
     WAZUH_API_URL="${WAZUH_API_URL:-https://127.0.0.1:55000}"
 
-    read -rp "  Wazuh API Username [wazuh-wui]: " WAZUH_API_USER
-    WAZUH_API_USER="${WAZUH_API_USER:-wazuh-wui}"
+    # Parse URL into host and port for Wazuh MCP Server
+    WAZUH_HOST="${WAZUH_API_URL#https://}"
+    WAZUH_HOST="${WAZUH_HOST#http://}"
+    if [[ "$WAZUH_HOST" == *:* ]]; then
+        WAZUH_PORT_NUM="${WAZUH_HOST##*:}"
+        WAZUH_HOST="${WAZUH_HOST%:*}"
+    else
+        WAZUH_PORT_NUM="55000"
+    fi
 
-    read -rsp "  Wazuh API Password: " WAZUH_API_PASSWORD
+    read -rp "  Wazuh API Username [wazuh-wui]: " WAZUH_USER
+    WAZUH_USER="${WAZUH_USER:-wazuh-wui}"
+
+    read -rsp "  Wazuh API Password: " WAZUH_PASS
     echo ""
 
-    if [[ -z "$WAZUH_API_PASSWORD" ]]; then
+    if [[ -z "$WAZUH_PASS" ]]; then
         log_error "Wazuh API password cannot be empty"
         exit 1
     fi
@@ -1082,12 +1114,19 @@ configure_system() {
 # Two-tier human approval required for all actions
 # =============================================================================
 
-# WAZUH API CONNECTION
-WAZUH_API_URL=__WAZUH_API_URL__
-WAZUH_API_USER=__WAZUH_API_USER__
-WAZUH_API_PASSWORD=__WAZUH_API_PASSWORD__
+# WAZUH CONNECTION (used by Wazuh MCP Server)
+WAZUH_HOST=__WAZUH_HOST__
+WAZUH_PORT=__WAZUH_PORT_NUM__
+WAZUH_USER=__WAZUH_USER__
+WAZUH_PASS=__WAZUH_PASS__
+WAZUH_VERIFY_SSL=true
+WAZUH_ALLOW_SELF_SIGNED=true
 
-# MCP SERVER
+# MCP SERVER AUTHENTICATION
+AUTH_MODE=bearer
+MCP_API_KEY=__MCP_AUTH_TOKEN__
+
+# MCP SERVER NETWORK
 MCP_HOST=__TAILSCALE_IP__
 MCP_PORT=__MCP_PORT__
 MCP_URL=http://__TAILSCALE_IP__:__MCP_PORT__
@@ -1133,8 +1172,8 @@ ENVEOF
     # Substitute placeholders with actual values (safe for special chars in passwords)
     local _envfile="$CONFIG_DIR/.env"
     sed -i.bak \
-        -e "s|__WAZUH_API_URL__|${WAZUH_API_URL}|g" \
-        -e "s|__WAZUH_API_USER__|${WAZUH_API_USER}|g" \
+        -e "s|__WAZUH_HOST__|${WAZUH_HOST}|g" \
+        -e "s|__WAZUH_PORT_NUM__|${WAZUH_PORT_NUM}|g" \
         -e "s|__MCP_PORT__|${MCP_PORT}|g" \
         -e "s|__GATEWAY_BIND__|${GATEWAY_BIND}|g" \
         -e "s|__GATEWAY_PORT__|${GATEWAY_PORT}|g" \
@@ -1149,7 +1188,9 @@ ENVEOF
     # This handles passwords/tokens containing any special characters
     local _tmpenv
     _tmpenv=$(mktemp "${_envfile}.XXXXXX")
-    awk -v val="$WAZUH_API_PASSWORD" '{gsub(/__WAZUH_API_PASSWORD__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
+    awk -v val="$WAZUH_USER" '{gsub(/__WAZUH_USER__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
+    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
+    awk -v val="$WAZUH_PASS" '{gsub(/__WAZUH_PASS__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
     _tmpenv=$(mktemp "${_envfile}.XXXXXX")
     awk -v val="$TAILSCALE_IP" '{gsub(/__TAILSCALE_IP__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
     _tmpenv=$(mktemp "${_envfile}.XXXXXX")
@@ -1272,17 +1313,17 @@ validate_configuration() {
     # --- Required checks ---
 
     # Check Wazuh API config
-    if grep -q "^WAZUH_API_URL=.\+" "$CONFIG_DIR/.env" 2>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} Wazuh API URL configured"
+    if grep -q "^WAZUH_HOST=.\+" "$CONFIG_DIR/.env" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} Wazuh host configured"
     else
-        echo -e "  ${RED}✗${NC} Wazuh API URL not configured"
+        echo -e "  ${RED}✗${NC} WAZUH_HOST not configured"
         ((issues++))
     fi
 
-    if grep -q "^WAZUH_API_PASSWORD=.\+" "$CONFIG_DIR/.env" 2>/dev/null; then
+    if grep -q "^WAZUH_PASS=.\+" "$CONFIG_DIR/.env" 2>/dev/null; then
         echo -e "  ${GREEN}✓${NC} Wazuh API credentials set"
     else
-        echo -e "  ${RED}✗${NC} Wazuh API password not set"
+        echo -e "  ${RED}✗${NC} WAZUH_PASS not set"
         ((issues++))
     fi
 
