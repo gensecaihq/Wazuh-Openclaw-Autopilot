@@ -202,17 +202,41 @@ Every response action requires explicit human authorization through a two-tier w
 
 ---
 
+## Compatibility
+
+### Wazuh Version Support
+
+Tested via [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) v4.0.6:
+
+| Wazuh Version | Support Level | Notes |
+|---------------|-------------|-------|
+| **4.14.x** | Fully Supported | Recommended. All 29 MCP tools work. |
+| 4.10.x – 4.13.x | Fully Supported | All features available |
+| 4.8.x – 4.9.x | Fully Supported | Minimum for vulnerability tools |
+| 4.0.0 – 4.7.x | Limited | 3 vulnerability tools unavailable (require Wazuh Indexer) |
+
+### Platform Support
+
+| Platform | Status |
+|----------|--------|
+| Ubuntu 22.04 / 24.04 | Tested |
+| Debian 11 / 12 | Tested |
+| RHEL / Rocky / AlmaLinux 8/9 | Supported |
+| Air-gapped (Ollama) | Supported — see [Air-Gapped Deployment Guide](docs/AIR_GAPPED_DEPLOYMENT.md) |
+
+---
+
 ## Quick Start
 
 ### Prerequisites
 
 | Requirement | Description |
 |-------------|-------------|
-| [Wazuh Manager](https://wazuh.com) | SIEM platform (installed and running) |
+| [Wazuh Manager](https://wazuh.com) | SIEM platform (installed and running, 4.8.0+) |
 | [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) | MCP bridge for Wazuh API access |
 | [OpenClaw](https://github.com/openclaw/openclaw) | AI agent framework ([docs](https://openclaw.ai)) |
 | Node.js 18+ | Runtime for autopilot service |
-| LLM API Key | Claude, GPT, Groq, Mistral, or other supported provider |
+| LLM API Key | Claude, GPT, Groq, Mistral, or [Ollama](https://ollama.com) (local/free) |
 
 ### Installation
 
@@ -222,8 +246,14 @@ cd Wazuh-Openclaw-Autopilot
 sudo ./install/install.sh
 ```
 
+For air-gapped or bootstrap environments (no Tailscale):
+
+```bash
+sudo ./install/install.sh --skip-tailscale
+```
+
 The installer will guide you through:
-1. Tailscale setup (zero-trust networking)
+1. Tailscale setup (zero-trust networking — skippable with `--skip-tailscale`)
 2. MCP Server installation
 3. OpenClaw Gateway configuration
 4. Agent deployment
@@ -459,6 +489,7 @@ Features:
 | [SLACK_SOCKET_MODE.md](docs/SLACK_SOCKET_MODE.md) | Slack Socket Mode setup |
 | [EVIDENCE_PACK_SCHEMA.md](docs/EVIDENCE_PACK_SCHEMA.md) | Evidence pack JSON format |
 | [AGENT_CONFIGURATION.md](docs/AGENT_CONFIGURATION.md) | Agent file structure and customization |
+| [AIR_GAPPED_DEPLOYMENT.md](docs/AIR_GAPPED_DEPLOYMENT.md) | Air-gapped deployment with Ollama |
 | [MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md) | MCP server integration |
 | [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) | Installer and CLI commands |
 | [OBSERVABILITY_EXPORT.md](docs/OBSERVABILITY_EXPORT.md) | Prometheus metrics and logging |

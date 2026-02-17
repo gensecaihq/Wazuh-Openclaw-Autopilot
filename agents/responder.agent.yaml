@@ -39,7 +39,7 @@ can_execute_actions: true    # CAN execute after approval
 # CRITICAL: Disabled by default
 enabled: false
 enable_requirements:
-  - config_flag: AUTOPILOT_ENABLE_RESPONDER=true
+  - config_flag: AUTOPILOT_RESPONDER_ENABLED=true
   - mcp_tools_available: true
   - policy_guard_active: true
   - approval_workflow_configured: true

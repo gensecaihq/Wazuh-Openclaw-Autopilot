@@ -17,7 +17,8 @@ AI agents cannot execute response actions autonomously.
 
 ```
 openclaw/
-├── openclaw.json                    # Main OpenClaw configuration
+├── openclaw.json                    # Main OpenClaw configuration (multi-provider)
+├── openclaw-airgapped.json          # Air-gapped config (Ollama only, no cloud APIs)
 ├── agents/
 │   ├── _shared/                     # Shared files (copied into each agent at install)
 │   │   ├── SOUL.md                  # SOC operating principles

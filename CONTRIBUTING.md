@@ -92,8 +92,8 @@ feat: Add Teams integration support
 git clone https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot.git
 cd Wazuh-Openclaw-Autopilot
 
-# Install in development mode
-sudo ./install/install.sh --mode bootstrap-openclaw
+# Install (skip Tailscale for dev/testing)
+sudo ./install/install.sh --skip-tailscale
 
 # Run tests
 cd runtime/autopilot-service

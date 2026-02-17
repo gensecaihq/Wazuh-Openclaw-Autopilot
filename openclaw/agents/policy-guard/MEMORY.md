@@ -11,3 +11,9 @@
 
 ## Efficiency Notes
 <!-- Operational optimizations -- add entries as discovered -->
+
+## Policy Override History
+<!-- Policy override decisions and justifications -- add entries as discovered -->
+
+## Approval Pattern Notes
+<!-- Approval pattern observations and trends -- add entries as discovered -->

@@ -7,93 +7,39 @@ Complete command-line reference for Wazuh Autopilot installer and management too
 ### Basic Usage
 
 ```bash
-# Interactive mode (recommended for first installation)
+# Standard installation (interactive)
 sudo ./install/install.sh
 
-# Interactive menu
-sudo ./install/install.sh --menu
-```
+# Air-gapped / bootstrap (skip Tailscale)
+sudo ./install/install.sh --skip-tailscale
 
-### Installation Modes
+# Show help
+sudo ./install/install.sh --help
 
-```bash
-# All-in-One: Everything on single server
-sudo ./install/install.sh --mode all-in-one
-
-# OpenClaw + Runtime: For remote MCP
-sudo ./install/install.sh --mode openclaw-runtime \
-  --mcp-url https://mcp-server:8080 \
-  --mcp-auth YOUR_TOKEN
-
-# Runtime Only: Just runtime service
-sudo ./install/install.sh --mode runtime-only \
-  --mcp-url https://mcp-server:8080
-
-# Agent Pack: Copy agents to existing local OpenClaw
-sudo ./install/install.sh --mode agent-pack
-
-# Remote OpenClaw: Copy agents to remote server
-sudo ./install/install.sh --mode remote-openclaw \
-  --remote-host openclaw.example.com \
-  --remote-user admin \
-  --remote-path /opt/openclaw/agents
-
-# Docker Compose: Generate docker-compose.yml
-sudo ./install/install.sh --mode docker \
-  --output-dir ./deploy/docker
-
-# Kubernetes: Generate K8s manifests
-sudo ./install/install.sh --mode kubernetes \
-  --output-dir ./deploy/k8s
-
-# Doctor: Run diagnostics
-sudo ./install/install.sh --mode doctor
-
-# Cutover: Transition to production mode
-sudo ./install/install.sh --mode cutover
+# Show version
+sudo ./install/install.sh --version
 ```
 
 ### Command-Line Options
 
 | Option | Description | Example |
 |--------|-------------|---------|
-| `--mode <mode>` | Installation mode (see above) | `--mode all-in-one` |
-| `--mcp-url <url>` | MCP server URL | `--mcp-url https://mcp:8080` |
-| `--mcp-auth <token>` | MCP authentication token | `--mcp-auth abc123` |
-| `--remote-host <host>` | Remote server hostname | `--remote-host server.com` |
-| `--remote-user <user>` | SSH username | `--remote-user admin` |
-| `--remote-path <path>` | Remote agents path | `--remote-path /opt/openclaw/agents` |
-| `--output-dir <dir>` | Output directory for manifests | `--output-dir ./deploy` |
-| `--non-interactive` | Skip prompts, use defaults | `--non-interactive` |
-| `--force` | Force overwrite existing files | `--force` |
+| `--skip-tailscale` | Skip Tailscale installation (air-gapped/bootstrap) | `--skip-tailscale` |
 | `--help` | Show help message | `--help` |
 | `--version` | Show version | `--version` |
 
 ### Environment Variables
 
-Set these before running the installer for non-interactive configuration:
+Set these before running the installer:
 
 ```bash
 # Deployment mode
-export AUTOPILOT_MODE=production          # bootstrap | production
+export AUTOPILOT_MODE=bootstrap           # Skips Tailscale automatically
+export AUTOPILOT_MODE=production          # Full install with Tailscale (default)
 
-# MCP Configuration
-export MCP_URL=https://mcp.ts.net:8080
-export MCP_BOOTSTRAP_URL=http://localhost:8080
-export AUTOPILOT_MCP_AUTH=your-token
-
-# Slack Configuration
+# Slack Configuration (prompted during install if not set)
 export SLACK_APP_TOKEN=xapp-1-...
 export SLACK_BOT_TOKEN=xoxb-...
-
-# Storage Paths
-export AUTOPILOT_DATA_DIR=/var/lib/wazuh-autopilot
-export AUTOPILOT_CONFIG_DIR=/etc/wazuh-autopilot
-export OPENCLAW_HOME=/opt/openclaw
-
-# Feature Flags
-export AUTOPILOT_ENABLE_RESPONDER=false   # Enable action execution
-export AUTOPILOT_REQUIRE_TAILSCALE=true   # Require Tailscale in production
 ```
 
 ---
@@ -212,7 +158,7 @@ When integrated with Slack, the following commands are available:
 
 ```bash
 # Run full diagnostics
-sudo ./install/install.sh --mode doctor
+./install/doctor.sh
 ```
 
 Doctor checks:

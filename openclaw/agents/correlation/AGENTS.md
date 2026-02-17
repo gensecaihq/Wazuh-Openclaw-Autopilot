@@ -147,9 +147,11 @@ Classify hostnames by regex match:
 
 | Pattern | Criticality |
 |---|---|
-| `^prod-\|^db-\|^dc-\|-prod$` | CRITICAL |
+| `^dc-\|^ad-\|^ldap-` | CRITICAL |
+| `^prod-\|^prd-` | HIGH |
+| `^db-\|^sql-\|^mongo-\|^redis-` | HIGH |
 | `^app-\|^web-\|^api-` | HIGH |
-| `^stage-\|^staging-` | MEDIUM |
+| `^stage-\|^staging-\|^stg-` | MEDIUM |
 | `^dev-\|^test-\|^sandbox-` | LOW |
 
 ---

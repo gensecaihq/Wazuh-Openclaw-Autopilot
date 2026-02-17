@@ -11,3 +11,9 @@
 
 ## Efficiency Notes
 <!-- Operational optimizations -- add entries as discovered -->
+
+## Plan Template Refinements
+<!-- Plan template improvements and adjustments -- add entries as discovered -->
+
+## Risk Score Calibrations
+<!-- Risk score calibration changes and rationale -- add entries as discovered -->

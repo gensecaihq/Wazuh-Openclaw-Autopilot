@@ -18,31 +18,23 @@ git clone https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot.git
 cd Wazuh-Openclaw-Autopilot
 ```
 
-## Step 2: Choose Your Installation Mode
+## Step 2: Run the Installer
 
-### Option A: All-in-One (Recommended for Testing)
-
-Everything on a single server including OpenClaw bootstrap:
-
-```bash
-sudo ./install/install.sh --mode all-in-one
-```
-
-### Option B: Agent Pack Only
-
-If you already have OpenClaw installed:
-
-```bash
-sudo ./install/install.sh --mode agent-pack
-```
-
-### Option C: Interactive Menu
-
-For guided installation:
+### Standard Installation
 
 ```bash
 sudo ./install/install.sh
 ```
+
+### Air-Gapped / Bootstrap (No Tailscale)
+
+For environments without internet access or during evaluation:
+
+```bash
+sudo ./install/install.sh --skip-tailscale
+```
+
+See the [Air-Gapped Deployment Guide](AIR_GAPPED_DEPLOYMENT.md) for Ollama-only setups.
 
 ## Step 3: Configure the Service
 
@@ -159,10 +151,10 @@ curl -X POST http://127.0.0.1:9090/api/alerts \
   }'
 ```
 
-Expected response:
+Expected response (case_id is a hash-based identifier):
 ```json
 {
-  "case_id": "CASE-20260217-test-001",
+  "case_id": "CASE-20260217-6a82c1f38bed",
   "status": "created",
   "severity": "high",
   "entities_extracted": 2

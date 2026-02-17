@@ -1,55 +1,29 @@
 # Deployment Scenarios
 
-Wazuh Autopilot supports multiple deployment architectures to fit your infrastructure.
+Wazuh Autopilot supports multiple deployment architectures. The installer runs a single guided flow — you adapt the resulting configuration for your scenario.
 
 ## Quick Reference
 
-| Scenario | Use Case | Command |
-|----------|----------|---------|
-| All-in-One | Dev/Test, small deployments | `--mode all-in-one` |
-| OpenClaw + Runtime | MCP on different server | `--mode openclaw-runtime` |
-| Runtime Only | OpenClaw also elsewhere | `--mode runtime-only` |
-| Agent Pack (Local) | Existing local OpenClaw | `--mode agent-pack` |
-| Agent Pack (Remote) | Existing remote OpenClaw | `--mode remote-openclaw` |
-| Docker Compose | Containerized deployment | `--mode docker` |
-| Kubernetes | Cloud-native deployment | `--mode kubernetes` |
+| Scenario | Use Case | Installation |
+|----------|----------|-------------|
+| All-in-One | Dev/Test, small deployments | `sudo ./install/install.sh` |
+| Air-Gapped | No internet, Ollama-only | `sudo ./install/install.sh --skip-tailscale` |
+| Distributed | MCP on different server | Install on each server, configure MCP_URL |
+| Docker Compose | Containerized deployment | See Scenario 6 |
+| Kubernetes | Cloud-native deployment | See Scenario 7 |
 
-## Interactive Menu
-
-Run the installer without arguments or with `--menu` for an interactive experience:
+## Installer Options
 
 ```bash
+# Standard installation (with Tailscale)
 sudo ./install/install.sh
-# or
-sudo ./install/install.sh --menu
-```
 
-```
-╔═══════════════════════════════════════════════════════════════════╗
-║           Wazuh Autopilot Installer v2.1.0                        ║
-║       Autonomous SOC Layer for Wazuh via OpenClaw Agents          ║
-╚═══════════════════════════════════════════════════════════════════╝
+# Air-gapped / bootstrap (skip Tailscale)
+sudo ./install/install.sh --skip-tailscale
 
-Select your deployment scenario:
-
-  Single Server:
-    1) All-in-One         - Wazuh + MCP + OpenClaw + Runtime on this server
-
-  Distributed (MCP on remote server):
-    2) OpenClaw + Runtime - Install OpenClaw and Runtime here (MCP elsewhere)
-    3) Runtime Only       - Just the Runtime service (OpenClaw also elsewhere)
-
-  Existing OpenClaw:
-    4) Agent Pack (Local) - Add agents to existing local OpenClaw
-    5) Agent Pack (Remote)- Copy agents to remote OpenClaw via SSH
-
-  Container Deployments:
-    6) Docker Compose     - Generate docker-compose.yml
-    7) Kubernetes         - Generate K8s manifests
-
-  Utilities:
-    8) Doctor             - Run diagnostics
-    9) Cutover            - Transition to production mode (Tailscale)
+# Or set the environment variable
+export AUTOPILOT_MODE=bootstrap
+sudo ./install/install.sh
 ```
 
 ---
@@ -74,7 +48,7 @@ Select your deployment scenario:
 ### Installation
 
 ```bash
-sudo ./install/install.sh --mode all-in-one
+sudo ./install/install.sh
 ```
 
 ### What Gets Installed
@@ -121,9 +95,8 @@ MCP_URL=http://127.0.0.1:8080
 ### Installation (on Server B)
 
 ```bash
-sudo ./install/install.sh --mode openclaw-runtime \
-  --mcp-url https://server-a:8080 \
-  --mcp-auth your-token
+sudo ./install/install.sh
+# Then edit /etc/wazuh-autopilot/.env to set MCP_URL
 ```
 
 ### Configuration
@@ -151,8 +124,8 @@ MCP_URL=https://server-a.tail12345.ts.net:8080
 ### Installation (on Server C)
 
 ```bash
-sudo ./install/install.sh --mode runtime-only \
-  --mcp-url https://server-a:8080
+sudo ./install/install.sh
+# Then edit /etc/wazuh-autopilot/.env to set MCP_URL
 ```
 
 ### What Gets Installed
@@ -183,7 +156,7 @@ sudo ./install/install.sh --mode runtime-only \
 ### Installation
 
 ```bash
-sudo ./install/install.sh --mode agent-pack
+sudo ./install/install.sh
 ```
 
 ### What Happens
@@ -221,9 +194,8 @@ docker restart openclaw
 ### Installation
 
 ```bash
-./install/install.sh --mode remote-openclaw \
-  --remote-host openclaw.example.com \
-  --remote-user admin
+# Copy agent files to the remote server manually
+scp -r openclaw/agents/* admin@openclaw.example.com:/opt/openclaw/agents/
 ```
 
 ### Requirements
@@ -260,28 +232,13 @@ docker restart openclaw
 └──────────────────────────────────────────────────────┘
 ```
 
-### Generate Files
+### Configuration
+
+The `docker-compose.yml` at the project root provides a production-ready deployment:
 
 ```bash
-./install/install.sh --mode docker --output-dir ./deploy/docker
-```
-
-### Generated Files
-
-```
-deploy/docker/
-├── docker-compose.yml
-├── .env
-├── agents/
-├── config/
-└── runtime/
-```
-
-### Deploy
-
-```bash
-cd deploy/docker
-# Edit .env with your credentials
+# Copy and edit environment variables
+cp .env.example .env
 nano .env
 
 # Start services
@@ -297,42 +254,30 @@ docker-compose logs -f
 
 **Best for:** Cloud-native, scalable deployments
 
-### Generate Manifests
-
-```bash
-./install/install.sh --mode kubernetes --output-dir ./deploy/k8s
-```
-
-### Generated Files
-
-```
-deploy/k8s/
-├── namespace.yaml
-├── configmap.yaml
-├── configmap-agents.yaml        # Agent workspace files
-├── secret.yaml
-└── deployment.yaml
-```
-
 ### Deploy
 
-```bash
-cd deploy/k8s
+Create Kubernetes manifests for your cluster. Example:
 
+```bash
 # Create namespace
-kubectl apply -f namespace.yaml
+kubectl create namespace wazuh-autopilot
 
 # Create ConfigMaps from agent files
 kubectl create configmap autopilot-agents \
   -n wazuh-autopilot \
-  --from-file=../../agents/
+  --from-file=openclaw/agents/
 
 kubectl create configmap autopilot-runtime \
   -n wazuh-autopilot \
-  --from-file=../../runtime/autopilot-service/
+  --from-file=runtime/autopilot-service/
 
-# Apply remaining manifests
-kubectl apply -f .
+# Create secrets from .env
+kubectl create secret generic autopilot-secrets \
+  -n wazuh-autopilot \
+  --from-env-file=.env
+
+# Deploy (create your own deployment manifest)
+kubectl apply -f your-deployment.yaml
 ```
 
 ---
@@ -369,7 +314,7 @@ kubectl apply -f .
 
 ### Setup
 
-Use `--mode openclaw-runtime` in the cloud, with Tailscale connecting to on-prem MCP.
+Run the standard installer in the cloud, then configure `MCP_URL` to point to the on-prem MCP via Tailscale.
 
 ---
 
@@ -411,7 +356,13 @@ AUTOPILOT_REQUIRE_TAILSCALE=true
 ### Transition to Production
 
 ```bash
-sudo ./install/install.sh --mode cutover
+# 1. Install and authenticate Tailscale
+sudo tailscale up
+
+# 2. Update MCP_URL in /etc/wazuh-autopilot/.env to use Tailnet address
+# 3. Set AUTOPILOT_MODE=production
+# 4. Restart services
+sudo systemctl restart wazuh-mcp-server wazuh-autopilot
 ```
 
 ---
@@ -423,7 +374,7 @@ export AUTOPILOT_MODE=production
 export MCP_URL=https://mcp.your-tailnet.ts.net:8080
 export AUTOPILOT_MCP_AUTH=your-token
 
-sudo ./install/install.sh --mode all-in-one --non-interactive
+sudo ./install/install.sh
 ```
 
 ---
@@ -431,7 +382,7 @@ sudo ./install/install.sh --mode all-in-one --non-interactive
 ## Verifying Installation
 
 ```bash
-./install/install.sh --mode doctor
+./install/doctor.sh
 ```
 
 ---

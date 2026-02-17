@@ -24,7 +24,7 @@ Wazuh OpenClaw Autopilot implements a defense-in-depth security model:
 ### Key Security Controls
 
 1. **Responder Agent Disabled by Default**
-   - Requires explicit `AUTOPILOT_ENABLE_RESPONDER=true`
+   - Requires explicit `AUTOPILOT_RESPONDER_ENABLED=true`
    - Cannot be enabled without policy configuration
 
 2. **Approval Tokens**

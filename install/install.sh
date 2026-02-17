@@ -48,6 +48,9 @@ GATEWAY_PORT="18789"
 MCP_PORT="8080"
 RUNTIME_PORT="9090"
 
+# Flags (set by parse_args or environment)
+SKIP_TAILSCALE=false
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -91,6 +94,59 @@ generate_secret() {
 }
 
 # =============================================================================
+# ARGUMENT PARSING
+# =============================================================================
+
+show_help() {
+    echo ""
+    echo "Usage: sudo ./install.sh [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --skip-tailscale    Skip Tailscale installation (for air-gapped/bootstrap)"
+    echo "  --help              Show this help message"
+    echo "  --version           Show version"
+    echo ""
+    echo "Environment Variables:"
+    echo "  AUTOPILOT_MODE=bootstrap    Automatically skip Tailscale requirement"
+    echo "  AUTOPILOT_MODE=production   Full installation with Tailscale (default)"
+    echo ""
+    echo "Examples:"
+    echo "  sudo ./install.sh                          # Standard installation"
+    echo "  sudo ./install.sh --skip-tailscale         # Air-gapped / no Tailscale"
+    echo "  AUTOPILOT_MODE=bootstrap sudo ./install.sh # Bootstrap mode (skips Tailscale)"
+    echo ""
+    exit 0
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --skip-tailscale)
+                SKIP_TAILSCALE=true
+                shift
+                ;;
+            --help|-h)
+                show_help
+                ;;
+            --version|-v)
+                echo "Wazuh OpenClaw Autopilot Installer v$VERSION"
+                exit 0
+                ;;
+            *)
+                log_warn "Unknown option: $1 (ignored)"
+                shift
+                ;;
+        esac
+    done
+
+    # Read AUTOPILOT_MODE from environment
+    if [[ "${AUTOPILOT_MODE:-}" == "bootstrap" ]]; then
+        SKIP_TAILSCALE=true
+        log_info "AUTOPILOT_MODE=bootstrap detected — Tailscale will be skipped"
+    fi
+}
+
+# =============================================================================
 # SECURITY BANNER
 # =============================================================================
 
@@ -120,7 +176,11 @@ show_security_banner() {
     echo ""
     echo -e "  ${CYAN}What will be installed:${NC}"
     echo ""
-    echo "    • Tailscale (secure networking)"
+    if [[ "$SKIP_TAILSCALE" != "true" ]]; then
+        echo "    • Tailscale (secure networking)"
+    else
+        echo "    • Tailscale: SKIPPED (bootstrap/air-gapped mode)"
+    fi
     echo "    • Wazuh MCP Server (localhost only)"
     echo "    • OpenClaw Gateway (localhost only)"
     echo "    • 7 SOC Agents (read-only by default)"
@@ -349,10 +409,10 @@ configure_firewall() {
 # =============================================================================
 
 install_tailscale() {
-    log_step "Installing Tailscale (Mandatory)"
+    log_step "Installing Tailscale"
 
     echo ""
-    echo -e "  ${YELLOW}Tailscale is REQUIRED for secure operation${NC}"
+    echo -e "  ${YELLOW}Tailscale is recommended for secure operation${NC}"
     echo ""
     echo "  Tailscale provides:"
     echo "    • Zero-trust VPN between components"
@@ -516,13 +576,21 @@ install_mcp_server() {
     TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "127.0.0.1")
 
     # Create systemd service with secure binding
+    local _ts_after=""
+    local _ts_requires=""
+    local _ts_desc="Wazuh MCP Server"
+    if [[ "$SKIP_TAILSCALE" != "true" ]]; then
+        _ts_after=" tailscaled.service"
+        _ts_requires="Requires=tailscaled.service"
+        _ts_desc="Wazuh MCP Server (Tailscale Only)"
+    fi
     cat > /etc/systemd/system/wazuh-mcp-server.service << EOF
 [Unit]
-Description=Wazuh MCP Server (Tailscale Only)
+Description=$_ts_desc
 Documentation=https://github.com/gensecaihq/Wazuh-MCP-Server
-After=network.target wazuh-manager.service tailscaled.service
+After=network.target wazuh-manager.service${_ts_after}
 Wants=wazuh-manager.service
-Requires=tailscaled.service
+${_ts_requires}
 
 [Service]
 Type=simple
@@ -689,7 +757,7 @@ deploy_agents() {
       {
         "id": "wazuh-investigation",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/investigation",
-        "model": {"primary": "anthropic/claude-opus-4-6"},
+        "model": {"primary": "anthropic/claude-sonnet-4-5"},
         "tools": {
           "profile": "minimal",
           "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
@@ -825,7 +893,7 @@ deploy_agents() {
     "OPENCLAW_TOKEN": "\${OPENCLAW_TOKEN}",
     "ANTHROPIC_API_KEY": "\${ANTHROPIC_API_KEY}",
     "WAZUH_MCP_URL": "\${MCP_URL}",
-    "WAZUH_MCP_TOKEN": "\${MCP_AUTH_TOKEN}"
+    "WAZUH_MCP_TOKEN": "\${AUTOPILOT_MCP_AUTH}"
   },
 
   "provider": {
@@ -1023,7 +1091,7 @@ WAZUH_API_PASSWORD=__WAZUH_API_PASSWORD__
 MCP_HOST=__TAILSCALE_IP__
 MCP_PORT=__MCP_PORT__
 MCP_URL=http://__TAILSCALE_IP__:__MCP_PORT__
-MCP_AUTH_TOKEN=__MCP_AUTH_TOKEN__
+AUTOPILOT_MCP_AUTH=__MCP_AUTH_TOKEN__
 
 # OPENCLAW GATEWAY (Localhost Only)
 OPENCLAW_HOST=__GATEWAY_BIND__
@@ -1483,7 +1551,9 @@ run_security_audit() {
     fi
 
     # Check Tailscale
-    if tailscale status &>/dev/null; then
+    if [[ "$SKIP_TAILSCALE" == "true" ]]; then
+        echo -e "  ${YELLOW}○${NC} Tailscale skipped (bootstrap/air-gapped mode)"
+    elif tailscale status &>/dev/null; then
         echo -e "  ${GREEN}✓${NC} Tailscale connected"
     else
         echo -e "  ${RED}✗${NC} Tailscale not connected"
@@ -1520,7 +1590,7 @@ run_security_audit() {
 # =============================================================================
 
 print_summary() {
-    TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "127.0.0.1")
+    TAILSCALE_IP="${TAILSCALE_IP:-$(tailscale ip -4 2>/dev/null || echo '127.0.0.1')}"
 
     echo ""
     echo -e "${GREEN}${BOLD}"
@@ -1568,6 +1638,8 @@ print_summary() {
 # =============================================================================
 
 main() {
+    parse_args "$@"
+
     show_security_banner
 
     if ! confirm "Continue with security-hardened installation?" "y"; then
@@ -1582,7 +1654,15 @@ main() {
     check_wazuh
     install_dependencies
     configure_firewall
-    install_tailscale
+
+    if [[ "$SKIP_TAILSCALE" == "true" ]]; then
+        log_step "Skipping Tailscale (bootstrap/air-gapped mode)"
+        log_info "Using 127.0.0.1 for all service bindings"
+        TAILSCALE_IP="127.0.0.1"
+    else
+        install_tailscale
+    fi
+
     setup_secure_directories
     setup_credentials
     install_mcp_server

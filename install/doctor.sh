@@ -102,7 +102,7 @@ check_configuration() {
         load_env
     else
         check_fail "Configuration file missing: $CONFIG_DIR/.env"
-        add_remediation "Run the installer: sudo $SCRIPT_DIR/install.sh --mode fresh"
+        add_remediation "Run the installer: sudo $SCRIPT_DIR/install.sh"
         return 1
     fi
 
@@ -353,48 +353,49 @@ check_openclaw() {
         add_remediation "Start OpenClaw: cd $openclaw_home && docker-compose up -d"
     else
         check_fail "OpenClaw not found"
-        add_remediation "Run: sudo $SCRIPT_DIR/install.sh --mode bootstrap-openclaw"
+        add_remediation "Run: sudo $SCRIPT_DIR/install.sh"
     fi
 }
 
 check_agent_pack() {
     header "Agent Pack"
 
-    local agents_dir="$CONFIG_DIR/agents"
+    # Agents are deployed as multi-file workspaces under OpenClaw's agent directory
+    local agents_dir="$HOME/.openclaw/wazuh-autopilot/agents"
 
     if [[ ! -d "$agents_dir" ]]; then
         check_fail "Agents directory not found: $agents_dir"
-        add_remediation "Run: sudo $SCRIPT_DIR/install.sh --mode agent-pack"
+        add_remediation "Run: sudo $SCRIPT_DIR/install.sh"
         return
     fi
 
-    # Check for required agents
+    # Check for required agents (each must have an AGENTS.md file)
     local required_agents=(
-        "triage.agent.yaml"
-        "correlation.agent.yaml"
-        "response-planner.agent.yaml"
-        "policy-guard.agent.yaml"
-        "reporting.agent.yaml"
+        "triage"
+        "correlation"
+        "response-planner"
+        "policy-guard"
+        "reporting"
     )
 
     local missing=0
     for agent in "${required_agents[@]}"; do
-        if [[ -f "$agents_dir/$agent" ]]; then
+        if [[ -f "$agents_dir/$agent/AGENTS.md" ]]; then
             check_pass "Agent: $agent"
         else
-            check_fail "Missing agent: $agent"
+            check_fail "Missing agent: $agent (no AGENTS.md found)"
             ((missing++))
         fi
     done
 
     # Check optional agents
     local optional_agents=(
-        "investigation.agent.yaml"
-        "responder.agent.yaml"
+        "investigation"
+        "responder"
     )
 
     for agent in "${optional_agents[@]}"; do
-        if [[ -f "$agents_dir/$agent" ]]; then
+        if [[ -f "$agents_dir/$agent/AGENTS.md" ]]; then
             check_pass "Agent (optional): $agent"
         else
             check_info "Optional agent not installed: $agent"
@@ -402,7 +403,7 @@ check_agent_pack() {
     done
 
     if [[ $missing -gt 0 ]]; then
-        add_remediation "Reinstall agents: sudo $SCRIPT_DIR/install.sh --mode agent-pack"
+        add_remediation "Reinstall agents: sudo $SCRIPT_DIR/install.sh"
     fi
 }
 

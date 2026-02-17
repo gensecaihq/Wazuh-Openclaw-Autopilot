@@ -11,3 +11,9 @@
 
 ## Efficiency Notes
 <!-- Operational optimizations -- add entries as discovered -->
+
+## Execution Failure Patterns
+<!-- Execution failure patterns and root causes -- add entries as discovered -->
+
+## Verification Timing Notes
+<!-- Verification timing observations and adjustments -- add entries as discovered -->

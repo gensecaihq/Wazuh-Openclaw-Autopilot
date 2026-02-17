@@ -41,7 +41,7 @@ Map `rule.level` to case severity:
 | 13-15 | critical |
 
 **Severity modifiers** -- Boost severity by +1 when any of these apply:
-- Alert involves a critical asset (hostname matches `^prod-|^db-|^dc-|-prod$`)
+- Alert involves a critical asset (hostname matches `^dc-|^ad-|^ldap-`)
 - Alert involves a privileged user (root, Administrator, service accounts)
 - Alert contains multiple distinct entities (e.g., >3 IPs or >3 users)
 - Alert matches a known attack pattern from MITRE mapping
@@ -114,7 +114,7 @@ When rule metadata does not include a MITRE mapping, infer from patterns in the 
 
 ## Confidence Score Calculation
 
-Score each case 0-100 across four dimensions:
+Score each case 0.0-1.0 across four dimensions:
 
 | Dimension | Weight |
 |---|---|
@@ -147,7 +147,7 @@ Emit a JSON object for each triaged alert. Example:
   "case_id": "TRI-20260217-00042",
   "title": "[high] SSH brute force attack on prod-web-01",
   "severity": "high",
-  "confidence": 82,
+  "confidence": 0.82,
   "mitre": {
     "technique": "T1110",
     "tactic": "credential-access"

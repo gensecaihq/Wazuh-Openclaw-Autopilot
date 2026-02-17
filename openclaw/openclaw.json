@@ -29,6 +29,16 @@
     },
     "logging": {
       "redactSensitive": true
+    },
+    "security": {
+      "cors": {
+        "enabled": false
+      },
+      "rateLimit": {
+        "enabled": true,
+        "maxRequests": 100,
+        "windowMs": 60000
+      }
     }
   },
 
@@ -163,7 +173,7 @@
       },
 
       "sandbox": {
-        "mode": "non-main",
+        "mode": "all",
         "scope": "session",
         "workspaceAccess": "rw"
       },
@@ -174,7 +184,8 @@
           "browser",
           "canvas",
           "nodes",
-          "exec"
+          "exec",
+          "delete"
         ]
       },
 
@@ -464,7 +475,11 @@
       "dmPolicy": "allowlist",
       "allowFrom": [],
       "groupPolicy": "mention",
-      "mentionGating": true
+      "mentionGating": true,
+      "pairing": {
+        "enabled": true,
+        "requireApproval": true
+      }
     }
   },
 

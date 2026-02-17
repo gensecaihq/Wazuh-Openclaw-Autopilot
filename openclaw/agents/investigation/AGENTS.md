@@ -4,7 +4,7 @@
 
 **Input**: Correlated case JSON from the Correlation Agent. Each case contains correlated alert IDs, correlation score, timeline, blast radius, attack pattern classification, entity graph, and kill chain phase mappings.
 
-**Output**: Fully investigated incident JSON with pivot results, enrichment data, historical context, IOCs, findings classification, and recommended response actions. This output is consumed by human analysts and/or automated response orchestration.
+**Output**: Fully investigated incident JSON with pivot results, enrichment data, historical context, IOCs, findings classification, and recommended response actions. This output is consumed by the **Response Planner Agent** for plan generation, and optionally by human analysts for direct review.
 
 ---
 
@@ -140,7 +140,7 @@ Emit a fully investigated case JSON. Example:
   "findings": {
     "classification": "confirmed_compromise",
     "severity": "critical",
-    "confidence": 94
+    "confidence": 0.94
   },
   "investigation_notes": "Brute force from 203.0.113.44 succeeded after 47 attempts. Attacker authenticated as admin on prod-web-01 at 10:32 UTC. Post-compromise activity includes privilege escalation via sudo and lateral movement to prod-db-01.",
   "pivot_results": {

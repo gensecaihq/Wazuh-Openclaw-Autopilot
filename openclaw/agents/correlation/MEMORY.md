@@ -11,3 +11,9 @@
 
 ## Efficiency Notes
 <!-- Operational optimizations -- add entries as discovered -->
+
+## Correlation Threshold Adjustments
+<!-- Correlation threshold changes and rationale -- add entries as discovered -->
+
+## Cluster Merging Patterns
+<!-- Cluster merging decisions and outcomes -- add entries as discovered -->

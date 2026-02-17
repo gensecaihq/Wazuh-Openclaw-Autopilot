@@ -15,10 +15,10 @@
 - Cluster or correlate isolated cases into attack chains (that is the Correlation Agent's job)
 
 ## Pipeline Position
-**Correlation Agent** --> **Investigation Agent** --> **Human Analyst / Response Orchestration**
+**Correlation Agent** --> **Investigation Agent** --> **Response Planner Agent**
 
 ## What Downstream Consumers Need From My Output
-Human analysts and response orchestration rely on:
+The Response Planner Agent relies on:
 - Clear `findings.classification` and `confidence` to determine urgency and whether automated response is warranted
 - Complete `iocs_identified` list for blocking and detection rule creation
 - Specific `recommended_response` actions that are immediately executable

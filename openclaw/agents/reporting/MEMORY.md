@@ -11,3 +11,9 @@
 
 ## Efficiency Notes
 <!-- Operational optimizations -- add entries as discovered -->
+
+## Baseline Calibration Notes
+<!-- Baseline calibration observations and adjustments -- add entries as discovered -->
+
+## KPI Threshold Adjustments
+<!-- KPI threshold changes and rationale -- add entries as discovered -->

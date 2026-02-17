@@ -23,7 +23,11 @@ let slack = null;
 try {
   slack = require("./slack");
 } catch (err) {
-  // Slack module not available or dependencies not installed
+  if (err.code === "MODULE_NOT_FOUND" && err.message.includes("@slack/bolt")) {
+    // Slack dependencies not installed -- optional integration disabled
+  } else {
+    console.error(`[WARN] Slack module failed to load: ${err.message}`);
+  }
 }
 
 // =============================================================================
@@ -81,11 +85,11 @@ function log(level, component, msg, extra = {}) {
   if (levelValue === undefined || levelValue < currentLogLevel) return;
 
   const entry = {
+    ...extra,
     ts: new Date().toISOString(),
     level,
     component,
     msg,
-    ...extra,
   };
 
   // Ensure we never log secrets
@@ -177,7 +181,7 @@ function formatMetrics() {
     Object.entries(data).forEach(([labelJson, value]) => {
       const labels = JSON.parse(labelJson);
       const labelStr = Object.entries(labels)
-        .map(([k, v]) => `${k}="${v}"`)
+        .map(([k, v]) => `${k}="${String(v).replace(/[\\"]/g, "\\$&").replace(/\n/g, "\\n")}"`)
         .join(",");
       lines.push(`autopilot_${name}{${labelStr}} ${value}`);
     });
@@ -1126,7 +1130,14 @@ async function callMcpTool(toolName, params, correlationId) {
     incrementMetric("mcp_tool_calls_total", { tool: toolName, status });
     recordLatency("mcp_tool_call_latency_seconds", latencySeconds, { tool: toolName });
 
-    const responseData = await response.json();
+    let responseData;
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      responseData = await response.json();
+    } else {
+      const text = await response.text();
+      responseData = { raw_response: text.substring(0, 1000), content_type: contentType };
+    }
     const responseHash = crypto
       .createHash("sha256")
       .update(JSON.stringify(responseData))
@@ -1297,6 +1308,18 @@ function generateRequestId() {
 const SERVICE_VERSION = "2.1.0"; // Bumped for security fixes
 const startTime = Date.now();
 
+// Auth error response helper
+function sendAuthError(res, authResult, requestId) {
+  if (authResult.locked) {
+    res.setHeader("Retry-After", authResult.retryAfter);
+    res.writeHead(429, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: authResult.reason, retry_after: authResult.retryAfter, request_id: requestId }));
+  } else {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: authResult.reason, request_id: requestId }));
+  }
+}
+
 // Input validation
 function isValidCaseId(caseId) {
   // Case IDs must be alphanumeric with hyphens, 1-64 chars
@@ -1310,8 +1333,13 @@ function validateAuthorization(req, requiredScope = "write") {
   const authHeader = req.headers.authorization;
 
   // Get client IP for auth failure tracking
-  const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
-                   req.socket.remoteAddress || "unknown";
+  // Only trust X-Forwarded-For from loopback connections (behind a local reverse proxy)
+  const directIp = req.socket.remoteAddress || "unknown";
+  const isDirectLocalhost = directIp === "127.0.0.1" || directIp === "::1" ||
+                            directIp === "::ffff:127.0.0.1";
+  const clientIp = (isDirectLocalhost && req.headers["x-forwarded-for"])
+    ? req.headers["x-forwarded-for"].split(",")[0].trim()
+    : directIp;
   const isLocalhost = clientIp === "127.0.0.1" || clientIp === "::1" ||
                       clientIp === "::ffff:127.0.0.1";
 
@@ -1417,8 +1445,13 @@ function createServer() {
     res.setHeader("X-Request-ID", requestId);
 
     // Get client IP for rate limiting
-    const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
-                     req.socket.remoteAddress || "unknown";
+    // Only trust X-Forwarded-For from loopback connections (behind a local reverse proxy)
+    const directIpRL = req.socket.remoteAddress || "unknown";
+    const isDirectLocalRL = directIpRL === "127.0.0.1" || directIpRL === "::1" ||
+                            directIpRL === "::ffff:127.0.0.1";
+    const clientIp = (isDirectLocalRL && req.headers["x-forwarded-for"])
+      ? req.headers["x-forwarded-for"].split(",")[0].trim()
+      : directIpRL;
 
     // Security headers
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -1457,6 +1490,14 @@ function createServer() {
     }
 
     try {
+      // Reject new requests during shutdown (except health checks)
+      if (isShuttingDown && url.pathname !== "/health" && url.pathname !== "/ready") {
+        res.setHeader("Connection", "close");
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Service is shutting down" }));
+        return;
+      }
+
       // Metrics endpoint
       if (url.pathname === "/metrics" && req.method === "GET") {
         res.writeHead(200, { "Content-Type": "text/plain" });
@@ -1467,13 +1508,22 @@ function createServer() {
       // Health endpoint (enhanced)
       if (url.pathname === "/health" && req.method === "GET") {
         const uptimeSeconds = Math.floor((Date.now() - startTime) / 1000);
+        let dataDirOk = false;
+        try {
+          await fs.access(path.join(config.dataDir, "cases"));
+          dataDirOk = true;
+        } catch {
+          // data dir not accessible
+        }
+        const overallStatus = dataDirOk ? "healthy" : "degraded";
+        const statusCode = dataDirOk ? 200 : 503;
         const health = {
-          status: "healthy",
+          status: overallStatus,
           version: SERVICE_VERSION,
           mode: config.mode,
           uptime_seconds: uptimeSeconds,
           checks: {
-            data_dir: true,
+            data_dir: dataDirOk,
             metrics: config.metricsEnabled,
           },
           responder: {
@@ -1482,15 +1532,28 @@ function createServer() {
           },
           timestamp: new Date().toISOString(),
         };
-        res.writeHead(200, { "Content-Type": "application/json" });
+        res.writeHead(statusCode, { "Content-Type": "application/json" });
         res.end(JSON.stringify(health));
         return;
       }
 
       // Readiness endpoint
       if (url.pathname === "/ready" && req.method === "GET") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ready: true }));
+        if (isShuttingDown) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ready: false, reason: "shutting_down" }));
+          return;
+        }
+        let dataDirReady = false;
+        try {
+          await fs.access(path.join(config.dataDir, "cases"));
+          dataDirReady = true;
+        } catch {
+          // data dir not accessible
+        }
+        const ready = dataDirReady;
+        res.writeHead(ready ? 200 : 503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ready, checks: { data_dir: dataDirReady } }));
         return;
       }
 
@@ -1509,8 +1572,7 @@ function createServer() {
       if (url.pathname === "/api/cases" && req.method === "GET") {
         const authResult = validateAuthorization(req, "read");
         if (!authResult.valid) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: authResult.reason }));
+          sendAuthError(res, authResult, requestId);
           return;
         }
 
@@ -1525,8 +1587,7 @@ function createServer() {
         // Require authorization for write operations
         const authResult = validateAuthorization(req, "write");
         if (!authResult.valid) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: authResult.reason }));
+          sendAuthError(res, authResult, requestId);
           return;
         }
 
@@ -1548,8 +1609,7 @@ function createServer() {
       if (url.pathname.startsWith("/api/cases/") && req.method === "GET") {
         const authResult = validateAuthorization(req, "read");
         if (!authResult.valid) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: authResult.reason }));
+          sendAuthError(res, authResult, requestId);
           return;
         }
 
@@ -1578,8 +1638,7 @@ function createServer() {
         // Require authorization for write operations
         const authResult = validateAuthorization(req, "write");
         if (!authResult.valid) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: authResult.reason }));
+          sendAuthError(res, authResult, requestId);
           return;
         }
 
@@ -1616,8 +1675,7 @@ function createServer() {
         // Require authorization for alert ingestion
         const authResult = validateAuthorization(req, "write");
         if (!authResult.valid) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: authResult.reason }));
+          sendAuthError(res, authResult, requestId);
           return;
         }
 
@@ -1792,8 +1850,7 @@ function createServer() {
       if (url.pathname === "/api/responder/status" && req.method === "GET") {
         const authResult = validateAuthorization(req, "read");
         if (!authResult.valid) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: authResult.reason }));
+          sendAuthError(res, authResult, requestId);
           return;
         }
 
@@ -1811,8 +1868,7 @@ function createServer() {
       if (url.pathname === "/api/plans" && req.method === "GET") {
         const authResult = validateAuthorization(req, "read");
         if (!authResult.valid) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: authResult.reason }));
+          sendAuthError(res, authResult, requestId);
           return;
         }
 
@@ -1828,16 +1884,15 @@ function createServer() {
       if (url.pathname === "/api/plans" && req.method === "POST") {
         const authResult = validateAuthorization(req, "write");
         if (!authResult.valid) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: authResult.reason }));
+          sendAuthError(res, authResult, requestId);
           return;
         }
 
         const body = await parseJsonBody(req);
 
-        if (!body.case_id) {
+        if (!body.case_id || !isValidCaseId(body.case_id)) {
           res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "case_id is required" }));
+          res.end(JSON.stringify({ error: "Invalid or missing case_id" }));
           return;
         }
 
@@ -1887,8 +1942,7 @@ function createServer() {
       if (url.pathname.match(/^\/api\/plans\/[^/]+$/) && req.method === "GET") {
         const authResult = validateAuthorization(req, "read");
         if (!authResult.valid) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: authResult.reason }));
+          sendAuthError(res, authResult, requestId);
           return;
         }
 
@@ -1908,8 +1962,7 @@ function createServer() {
       if (url.pathname.match(/^\/api\/plans\/[^/]+\/approve$/) && req.method === "POST") {
         const authResult = validateAuthorization(req, "write");
         if (!authResult.valid) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: authResult.reason }));
+          sendAuthError(res, authResult, requestId);
           return;
         }
 
@@ -1943,8 +1996,7 @@ function createServer() {
       if (url.pathname.match(/^\/api\/plans\/[^/]+\/reject$/) && req.method === "POST") {
         const authResult = validateAuthorization(req, "write");
         if (!authResult.valid) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: authResult.reason }));
+          sendAuthError(res, authResult, requestId);
           return;
         }
 
@@ -1976,8 +2028,7 @@ function createServer() {
       if (url.pathname.match(/^\/api\/plans\/[^/]+\/execute$/) && req.method === "POST") {
         const authResult = validateAuthorization(req, "write");
         if (!authResult.valid) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: authResult.reason }));
+          sendAuthError(res, authResult, requestId);
           return;
         }
 
@@ -2105,6 +2156,26 @@ async function validateStartup() {
   // Load toolmap
   await loadToolmap();
 
+  // Validate numeric configuration values
+  const numericConfigs = [
+    ["metricsPort", config.metricsPort],
+    ["approvalTtlMinutes", config.approvalTtlMinutes],
+    ["rateLimitWindowMs", config.rateLimitWindowMs],
+    ["rateLimitMaxRequests", config.rateLimitMaxRequests],
+    ["authFailureWindowMs", config.authFailureWindowMs],
+    ["authFailureMaxAttempts", config.authFailureMaxAttempts],
+    ["authLockoutDurationMs", config.authLockoutDurationMs],
+    ["mcpTimeoutMs", config.mcpTimeoutMs],
+    ["planExpiryMinutes", config.planExpiryMinutes],
+    ["shutdownTimeoutMs", config.shutdownTimeoutMs],
+  ];
+  for (const [name, value] of numericConfigs) {
+    if (isNaN(value) || value < 0) {
+      log("error", "startup", `Invalid configuration: ${name} = ${value}`);
+      process.exit(1);
+    }
+  }
+
   log("info", "startup", "Configuration validated", { mode: config.mode });
 }
 
@@ -2142,6 +2213,15 @@ async function main() {
 
   if (config.metricsEnabled) {
     server = createServer();
+    server.on("error", (err) => {
+      log("error", "startup", "Server failed to start", {
+        error: err.message,
+        code: err.code,
+        host: config.metricsHost,
+        port: config.metricsPort,
+      });
+      process.exit(1);
+    });
     server.listen(config.metricsPort, config.metricsHost, () => {
       log("info", "startup", "Server listening", {
         host: config.metricsHost,
@@ -2285,6 +2365,14 @@ function setupCleanupIntervals() {
     if (removed > 0) {
       log("debug", "cleanup", "Old plans removed", { count: removed });
     }
+
+    // Clean up stale executingPlans entries (plan no longer in EXECUTING state)
+    for (const planId of executingPlans) {
+      const plan = responsePlans.get(planId);
+      if (!plan || plan.state !== PLAN_STATES.EXECUTING) {
+        executingPlans.delete(planId);
+      }
+    }
   }, 60000);
   cleanupIntervals.push(plansCleanup);
 }
@@ -2308,11 +2396,20 @@ function gracefulShutdown(signal) {
   }, config.shutdownTimeoutMs);
   forceKillTimer.unref(); // Don't keep process alive just for this timer
 
-  // Stop accepting new requests
+  // Stop accepting new requests and close idle connections
   if (server) {
+    if (typeof server.closeIdleConnections === "function") {
+      server.closeIdleConnections();
+    }
     server.close(() => {
       log("info", "shutdown", "HTTP server closed");
     });
+    // After grace period, force-close remaining connections
+    setTimeout(() => {
+      if (typeof server.closeAllConnections === "function") {
+        server.closeAllConnections();
+      }
+    }, 5000);
   }
 
   // Clear all cleanup intervals
@@ -2330,6 +2427,21 @@ function gracefulShutdown(signal) {
 
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+
+process.on("unhandledRejection", (reason) => {
+  log("error", "process", "Unhandled promise rejection", {
+    reason: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+  });
+});
+
+process.on("uncaughtException", (err) => {
+  log("error", "process", "Uncaught exception", {
+    error: err.message,
+    stack: err.stack,
+  });
+  setTimeout(() => process.exit(1), 1000);
+});
 
 // Run if executed directly
 if (require.main === module) {

@@ -11,3 +11,9 @@
 
 ## Efficiency Notes
 <!-- Operational optimizations -- add entries as discovered -->
+
+## Pivot Query Optimizations
+<!-- Pivot query performance improvements -- add entries as discovered -->
+
+## IOC Reputation Notes
+<!-- IOC reputation findings and context -- add entries as discovered -->

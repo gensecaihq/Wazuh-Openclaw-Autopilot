@@ -59,7 +59,7 @@ ENV NODE_ENV=production \
     AUTOPILOT_MODE=production \
     AUTOPILOT_DATA_DIR=/var/lib/wazuh-autopilot \
     AUTOPILOT_CONFIG_DIR=/etc/wazuh-autopilot \
-    METRICS_PORT=${RUNTIME_PORT} \
+    RUNTIME_PORT=${RUNTIME_PORT} \
     # 0.0.0.0 required inside container for Docker port forwarding;
     # host access restricted to localhost via docker-compose ports mapping
     METRICS_HOST=0.0.0.0 \
@@ -71,7 +71,7 @@ EXPOSE ${RUNTIME_PORT}
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${METRICS_PORT}/health || exit 1
+    CMD curl -f http://localhost:${RUNTIME_PORT}/health || exit 1
 
 # Switch to non-root user
 USER autopilot

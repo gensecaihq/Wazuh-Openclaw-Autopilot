@@ -11,3 +11,9 @@
 
 ## Efficiency Notes
 <!-- Operational optimizations -- add entries as discovered -->
+
+## Entity Extraction Edge Cases
+<!-- Edge cases in entity extraction -- add entries as discovered -->
+
+## Severity Override History
+<!-- Severity override decisions and rationale -- add entries as discovered -->

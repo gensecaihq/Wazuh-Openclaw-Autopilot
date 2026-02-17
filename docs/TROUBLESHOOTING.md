@@ -18,27 +18,19 @@ This identifies most common issues and provides specific remediation steps.
 
 **Solution:**
 ```bash
-sudo ./install/install.sh --mode fresh
+sudo ./install/install.sh
 ```
 
 ### "Ubuntu version not supported"
 
-Autopilot is tested on Ubuntu 22.04 and 24.04. Other versions may work but are unsupported.
+Autopilot is tested on Ubuntu 22.04 and 24.04, Debian 11/12, and RHEL-based distros. Other versions may work but are unsupported.
 
-**For other versions:**
+### "OpenClaw not found"
+
+OpenClaw must be installed first. The installer will attempt to install it automatically. If it fails, install manually:
+
 ```bash
-# Force installation (at your own risk)
-sudo ./install/install.sh --mode fresh --force
-```
-
-### "OpenClaw not found" when using agent-pack mode
-
-You need OpenClaw installed first.
-
-**Solution:**
-```bash
-# Use bootstrap mode instead
-sudo ./install/install.sh --mode bootstrap-openclaw
+curl -fsSL https://openclaw.ai/install.sh | sh
 ```
 
 ### Docker installation fails
@@ -261,7 +253,7 @@ ls /etc/wazuh-autopilot/agents/
 
 **Reinstall agents:**
 ```bash
-sudo ./install/install.sh --mode agent-pack
+sudo ./install/install.sh
 ```
 
 ### Agent file validation errors
@@ -310,6 +302,86 @@ Default TTL is 60 minutes.
 # In .env
 APPROVAL_TOKEN_TTL_MINUTES=120
 ```
+
+## MCP Connectivity Issues
+
+### "Most MCP endpoints not responding"
+
+This is almost always a configuration issue, not a version incompatibility. Follow this 6-step diagnostic process:
+
+**Step 1 — Verify Wazuh API is reachable:**
+
+```bash
+curl -k -u YOUR_WAZUH_USER:YOUR_PASSWORD https://YOUR_WAZUH_HOST:55000/
+```
+
+You should get a JSON response with manager info. If this fails, the problem is Wazuh API access (firewall, credentials, or the API service is not running).
+
+**Step 2 — Check MCP server logs:**
+
+```bash
+# If running as Docker:
+docker logs wazuh-mcp-server 2>&1 | tail -50
+
+# If running as systemd:
+journalctl -u wazuh-mcp-server -n 50
+```
+
+Look for authentication errors, connection timeouts, or SSL certificate issues.
+
+**Step 3 — SSL certificate issues:**
+
+Wazuh uses self-signed certificates by default. If the MCP server can't verify the cert, all requests will fail:
+
+```bash
+# In MCP server .env:
+WAZUH_VERIFY_SSL=false
+WAZUH_ALLOW_SELF_SIGNED=true
+```
+
+**Step 4 — Wazuh API user permissions:**
+
+Ensure the API user has the correct roles. The default `wazuh-wui` user should have sufficient permissions, but custom users may need additional roles.
+
+**Step 5 — Wazuh Indexer (for vulnerability tools only):**
+
+3 of the 29 MCP tools (vulnerability scanning) require the Wazuh Indexer (OpenSearch, port 9200). If you don't have the Indexer running, those 3 tools will fail — but the other 26 should work:
+
+```bash
+# Check if Indexer is configured in MCP:
+WAZUH_INDEXER_HOST=https://YOUR_INDEXER_HOST:9200
+WAZUH_INDEXER_USER=admin
+WAZUH_INDEXER_PASS=your_password
+```
+
+**Step 6 — Network connectivity:**
+
+```bash
+# From the MCP server host, test Wazuh API:
+curl -k https://YOUR_WAZUH_HOST:55000/ -o /dev/null -w "%{http_code}" -s
+# Should return 401 (auth required) or 200 — not 000 (connection refused)
+```
+
+### Wazuh version compatibility
+
+| Wazuh Version | MCP Support | Notes |
+|---------------|------------|-------|
+| **4.14.x** | Fully supported | All 29 tools work |
+| 4.10.x – 4.13.x | Fully supported | All features |
+| 4.8.x – 4.9.x | Fully supported | Minimum for vulnerability tools |
+| 4.0.0 – 4.7.x | Limited | 3 vulnerability tools unavailable |
+
+### MCP authentication failed
+
+1. Verify `AUTOPILOT_MCP_AUTH` token matches the MCP server's `MCP_AUTH_TOKEN`
+2. Check the token has no extra whitespace or newlines
+3. Test manually:
+   ```bash
+   curl -H "Authorization: Bearer $AUTOPILOT_MCP_AUTH" \
+     https://mcp-server:8080/health
+   ```
+
+---
 
 ## MCP Tool Issues
 
