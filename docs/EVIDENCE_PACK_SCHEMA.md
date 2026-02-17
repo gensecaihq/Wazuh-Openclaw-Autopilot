@@ -41,7 +41,7 @@ Current version: `1.0`
 | `updated_at` | ISO 8601 | Yes | Last update timestamp |
 | `title` | string | Yes | Brief case title |
 | `summary` | string | No | Detailed case summary |
-| `severity` | enum | Yes | low, medium, high, critical |
+| `severity` | enum | Yes | informational, low, medium, high, critical |
 | `confidence` | float | No | Confidence score 0.0-1.0 |
 
 ### Entities
@@ -250,7 +250,7 @@ Evidence packs are stored as JSON files:
 
 1. **Case ID Format:** Alphanumeric with hyphens, 1-64 characters
 2. **Timestamps:** Must be valid ISO 8601 format
-3. **Severity:** Must be one of: low, medium, high, critical
+3. **Severity:** Must be one of: informational, low, medium, high, critical
 4. **Confidence:** Float between 0.0 and 1.0
 5. **Entity types:** Must be from the defined list
 

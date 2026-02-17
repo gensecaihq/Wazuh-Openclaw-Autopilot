@@ -85,7 +85,8 @@ In production mode, MCP_URL must be a Tailnet address.
 
 2. Set up Tailnet properly:
    ```bash
-   sudo ./install/install.sh --cutover
+   # Update .env: set AUTOPILOT_MODE=production and MCP_URL to Tailnet address
+   sudo systemctl restart wazuh-autopilot
    ```
 
 ## Connectivity Issues
@@ -248,7 +249,7 @@ RUNTIME_PORT=9091
 
 **Verify agents are installed:**
 ```bash
-ls /etc/wazuh-autopilot/agents/
+ls ~/.openclaw/wazuh-autopilot/agents/
 ```
 
 **Reinstall agents:**
@@ -260,7 +261,7 @@ sudo ./install/install.sh
 
 **Check agent files exist:**
 ```bash
-ls /etc/wazuh-autopilot/agents/triage/
+ls ~/.openclaw/wazuh-autopilot/agents/triage/
 # Expected: AGENTS.md IDENTITY.md TOOLS.md MEMORY.md HEARTBEAT.md SOUL.md USER.md
 ```
 

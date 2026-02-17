@@ -139,22 +139,22 @@ Wazuh-Openclaw-Autopilot/
 
 ## Adding New Agents
 
-1. Create a new YAML file in `agents/`:
-   ```yaml
-   name: wazuh-new-agent
-   version: "2.1.0"
-   description: |
-     Description of what this agent does.
+1. Create a new agent workspace:
+   ```bash
+   # Create agent workspace directory
+   mkdir -p ~/.openclaw/wazuh-autopilot/agents/new-agent/
 
-   role: new_role
-   autonomy_level: read-only
+   # Create required files:
+   # AGENTS.md  - Operating instructions and domain knowledge
+   # IDENTITY.md - Role, pipeline position, consumers
+   # TOOLS.md   - Tool usage guidance, query patterns
+   # MEMORY.md  - Seed template for accumulated learnings
 
-   allowed_tools:
-     - get_alert
-     - search_alerts
+   # Copy shared files:
+   cp ~/.openclaw/wazuh-autopilot/agents/triage/SOUL.md ~/.openclaw/wazuh-autopilot/agents/new-agent/
+   cp ~/.openclaw/wazuh-autopilot/agents/triage/USER.md ~/.openclaw/wazuh-autopilot/agents/new-agent/
 
-   denied_tools:
-     - "*_execute"
+   # Register the agent in openclaw/openclaw.json agents.list array
    ```
 
 2. Update documentation in `docs/` if needed
@@ -184,7 +184,7 @@ Wazuh-Openclaw-Autopilot/
 - Use ES6+ features
 - Include JSDoc comments for functions
 - Follow existing code patterns
-- No external dependencies (stdlib only)
+- Minimal external dependencies (only `@slack/bolt` and `@slack/web-api`)
 
 ### Shell Scripts
 

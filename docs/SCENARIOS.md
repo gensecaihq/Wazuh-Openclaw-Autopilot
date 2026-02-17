@@ -38,7 +38,7 @@ sudo ./install/install.sh
 │                                                             │
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │
 │  │ Wazuh   │─▶│   MCP   │─▶│OpenClaw │─▶│ Runtime │       │
-│  │ Manager │  │ :8080   │  │ :3000   │  │ :9090   │       │
+│  │ Manager │  │ :8080   │  │ :18789  │  │ :9090   │       │
 │  └─────────┘  └─────────┘  └─────────┘  └─────────┘       │
 │                                                             │
 │            All communication via localhost                  │
@@ -54,10 +54,10 @@ sudo ./install/install.sh
 ### What Gets Installed
 
 - Tailscale (for future production transition)
-- Docker + Docker Compose
-- OpenClaw (containerized)
+- OpenClaw Gateway
 - Autopilot Runtime (systemd service)
-- All agents and policies
+- Agent workspace files
+- Policies and playbooks
 
 ### Configuration
 
@@ -222,7 +222,7 @@ scp -r openclaw/agents/* admin@openclaw.example.com:/opt/openclaw/agents/
 │                                                       │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐           │
 │  │  wazuh   │  │   mcp    │  │ openclaw │           │
-│  │ :55000   │──│  :8080   │──│  :3000   │           │
+│  │ :55000   │──│  :8080   │──│  :18789  │           │
 │  └──────────┘  └──────────┘  └──────────┘           │
 │                      │                               │
 │                ┌─────┴─────┐                         │

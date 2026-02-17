@@ -153,7 +153,7 @@ Retrieve a specific alert by ID.
 ```json
 // Tool allowlist in openclaw.json (per-agent)
 "tools": {
-  "allow": ["read", "sessions_create", "sessions_send"],
+  "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
   "deny": ["write", "exec", "delete", "browser"]
 }
 ```
@@ -301,20 +301,20 @@ The toolmap maps logical action names to MCP tool calls.
 
 ```yaml
 # policies/toolmap.yaml
-tools:
+action_operations:
   block_ip:
-    mcp_tool: block_ip
-    endpoint: /tools/block_ip
-    method: POST
+    logical_name: block_ip
+    mcp_tool: wazuh_block_ip
+    description: "Block an IP address via Wazuh active response"
+    risk_level: low
+    reversible: true
     parameters:
-      - name: agent_id
+      - name: ip_address
         type: string
         required: true
-      - name: ip
-        type: string
-        required: true
-    timeout_ms: 30000
-    requires_approval: true
+      - name: duration
+        type: integer
+        required: false
 ```
 
 ---
@@ -358,10 +358,11 @@ For production, implement token rotation:
 The runtime service includes retry logic and circuit breaker protection.
 
 ```javascript
-// Runtime automatically handles:
-// - Connection timeouts (30s default)
-// - Retry with exponential backoff (3 attempts)
-// - Circuit breaker (opens after 3 consecutive failures)
+// Runtime handles:
+// - Connection timeouts (configurable via MCP_TIMEOUT_MS, default 30s)
+// - Non-JSON response handling (graceful degradation)
+// Note: Retry and circuit breaker are configured in toolmap.yaml
+// but executed by the MCP client layer, not the runtime directly
 ```
 
 ### MCP Error Codes

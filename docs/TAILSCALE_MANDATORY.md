@@ -93,19 +93,26 @@ AUTOPILOT_REQUIRE_TAILSCALE=true
 MCP_URL=https://mcp-server.your-tailnet.ts.net:8080
 ```
 
-### Step 5: Run Cutover (If Previously in Bootstrap)
+### Step 5: Transition to Production (If Previously in Bootstrap)
 
 If you were running in bootstrap mode:
 
-```bash
-sudo ./install/install.sh --cutover
-```
+1. Update `/etc/wazuh-autopilot/.env`:
+   ```bash
+   AUTOPILOT_MODE=production
+   AUTOPILOT_REQUIRE_TAILSCALE=true
+   MCP_URL=https://mcp-server.your-tailnet.ts.net:8080
+   ```
 
-This will:
-1. Verify Tailscale is running
-2. Validate MCP Tailnet URL
-3. Update configuration
-4. Restart services
+2. Restart the service:
+   ```bash
+   sudo systemctl restart wazuh-autopilot
+   ```
+
+3. Verify with doctor:
+   ```bash
+   ./install/doctor.sh
+   ```
 
 ## Tailscale ACLs (Optional but Recommended)
 

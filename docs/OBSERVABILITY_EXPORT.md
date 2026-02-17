@@ -44,13 +44,7 @@ autopilot_alerts_ingested_total
 #### Triage Metrics
 
 ```prometheus
-# Histogram: Triage latency in seconds
-autopilot_triage_latency_seconds_bucket{le="1"}
-autopilot_triage_latency_seconds_bucket{le="5"}
-autopilot_triage_latency_seconds_bucket{le="15"}
-autopilot_triage_latency_seconds_bucket{le="30"}
-autopilot_triage_latency_seconds_bucket{le="60"}
-autopilot_triage_latency_seconds_bucket{le="+Inf"}
+# Histogram: Triage latency in seconds (sum and count only)
 autopilot_triage_latency_seconds_sum
 autopilot_triage_latency_seconds_count
 ```
@@ -63,10 +57,7 @@ autopilot_mcp_tool_calls_total{tool="wazuh_get_alert",status="success"}
 autopilot_mcp_tool_calls_total{tool="wazuh_get_alert",status="error"}
 autopilot_mcp_tool_calls_total{tool="wazuh_search_alerts",status="success"}
 
-# Histogram: MCP tool call latency by tool
-autopilot_mcp_tool_call_latency_seconds_bucket{tool="wazuh_get_alert",le="0.5"}
-autopilot_mcp_tool_call_latency_seconds_bucket{tool="wazuh_get_alert",le="1"}
-autopilot_mcp_tool_call_latency_seconds_bucket{tool="wazuh_get_alert",le="5"}
+# Histogram: MCP tool call latency by tool (sum and count only)
 autopilot_mcp_tool_call_latency_seconds_sum{tool="wazuh_get_alert"}
 autopilot_mcp_tool_call_latency_seconds_count{tool="wazuh_get_alert"}
 ```

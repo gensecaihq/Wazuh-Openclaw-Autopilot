@@ -23,7 +23,7 @@ Wazuh Autopilot includes 7 specialized agents, each handling a specific aspect o
 Each agent has a workspace directory containing OpenClaw standard files:
 
 ```
-/etc/wazuh-autopilot/agents/
+~/.openclaw/wazuh-autopilot/agents/
 ├── triage/
 │   ├── AGENTS.md       # Operating instructions (domain knowledge, output formats)
 │   ├── SOUL.md         # Shared SOC operating principles
@@ -75,7 +75,7 @@ Agent runtime settings (model, tools, triggers, channels) are configured in `ope
   "name": "Wazuh Triage Agent",
   "model": "anthropic/claude-sonnet-4-5",
   "tools": {
-    "allow": ["read", "sessions_create", "sessions_send"],
+    "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
     "deny": ["write", "exec", "delete", "browser"]
   }
 }
@@ -188,7 +188,7 @@ This does NOT enable autonomous execution — it only allows execution after two
 ### 1. Create Agent Workspace
 
 ```bash
-mkdir -p /etc/wazuh-autopilot/agents/custom-agent/
+mkdir -p ~/.openclaw/wazuh-autopilot/agents/custom-agent/
 ```
 
 ### 2. Create Required Files
@@ -203,8 +203,8 @@ mkdir -p /etc/wazuh-autopilot/agents/custom-agent/
 ### 3. Copy Shared Files
 
 ```bash
-cp /etc/wazuh-autopilot/agents/triage/SOUL.md /etc/wazuh-autopilot/agents/custom-agent/
-cp /etc/wazuh-autopilot/agents/triage/USER.md /etc/wazuh-autopilot/agents/custom-agent/
+cp ~/.openclaw/wazuh-autopilot/agents/triage/SOUL.md ~/.openclaw/wazuh-autopilot/agents/custom-agent/
+cp ~/.openclaw/wazuh-autopilot/agents/triage/USER.md ~/.openclaw/wazuh-autopilot/agents/custom-agent/
 ```
 
 ### 4. Register in openclaw.json
@@ -269,7 +269,7 @@ SLACK_BOT_TOKEN=xoxb-...
 # Verify all agent directories have required files
 for agent in triage correlation investigation response-planner policy-guard responder reporting; do
   echo "--- $agent ---"
-  ls /etc/wazuh-autopilot/agents/$agent/
+  ls ~/.openclaw/wazuh-autopilot/agents/$agent/
 done
 ```
 
@@ -296,7 +296,7 @@ npm test
 
 ### Agent Not Responding
 
-1. Verify agent workspace files exist: `ls /etc/wazuh-autopilot/agents/<agent>/`
+1. Verify agent workspace files exist: `ls ~/.openclaw/wazuh-autopilot/agents/<agent>/`
 2. Check that `AGENTS.md`, `IDENTITY.md`, `TOOLS.md`, and `MEMORY.md` are present
 3. Check OpenClaw logs: `docker logs openclaw`
 4. Verify MCP connectivity
@@ -310,8 +310,8 @@ npm test
 
 If `SOUL.md` or `USER.md` are missing from an agent workspace:
 ```bash
-cp /path/to/openclaw/agents/_shared/SOUL.md /etc/wazuh-autopilot/agents/<agent>/
-cp /path/to/openclaw/agents/_shared/USER.md /etc/wazuh-autopilot/agents/<agent>/
+cp /path/to/openclaw/agents/_shared/SOUL.md ~/.openclaw/wazuh-autopilot/agents/<agent>/
+cp /path/to/openclaw/agents/_shared/USER.md ~/.openclaw/wazuh-autopilot/agents/<agent>/
 ```
 
 ---

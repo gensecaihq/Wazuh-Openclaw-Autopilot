@@ -16,10 +16,8 @@ Wazuh OpenClaw Autopilot implements a defense-in-depth security model:
 
 | Level | Description | Actions Allowed |
 |-------|-------------|-----------------|
-| `read-only` | Default for most agents | Query, search, read |
-| `plan-only` | Response Planner | Generate plans, no execution |
-| `policy-enforcement` | Policy Guard | Evaluate, allow/deny |
-| `approval-gated` | Responder (disabled by default) | Execute after approval |
+| `read-only` | Triage, Correlation, Investigation, Reporting | Query, search, read (auto-execute) |
+| `approval` | Response Planner, Policy Guard, Responder | Requires human approval before execution |
 
 ### Key Security Controls
 

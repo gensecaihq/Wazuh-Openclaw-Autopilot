@@ -30,7 +30,7 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:9090/api/cases
 
 Returns service health status. Exempt from rate limiting and authentication.
 
-**Response:**
+**Response** (200 OK when healthy, 503 when degraded):
 ```json
 {
   "status": "healthy",
@@ -41,20 +41,31 @@ Returns service health status. Exempt from rate limiting and authentication.
     "data_dir": true,
     "metrics": true
   },
+  "responder": {
+    "enabled": false,
+    "status": "DISABLED"
+  },
   "timestamp": "2026-02-17T10:30:00.000Z"
 }
 ```
+
+> **Note:** `status` is `"healthy"` (HTTP 200) when all checks pass, or `"degraded"` (HTTP 503) if the data directory is inaccessible.
 
 #### GET /ready
 
 Kubernetes-style readiness probe. Exempt from rate limiting and authentication.
 
-**Response:**
+**Response** (200 OK when ready, 503 when not ready):
 ```json
 {
-  "ready": true
+  "ready": true,
+  "checks": {
+    "data_dir": true
+  }
 }
 ```
+
+> **Note:** Returns 503 with `{"ready": false, "reason": "shutting_down"}` during graceful shutdown, or 503 with `{"ready": false, "checks": {"data_dir": false}}` if the data directory is inaccessible.
 
 #### GET /version
 

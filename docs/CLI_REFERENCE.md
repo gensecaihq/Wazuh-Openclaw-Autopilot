@@ -139,16 +139,12 @@ When integrated with Slack, the following commands are available:
 
 | Command | Description |
 |---------|-------------|
-| `/wazuh triage <alert_id>` | Manually triage a specific alert |
-| `/wazuh triage-batch <query>` | Batch triage alerts matching query |
-| `/wazuh investigate <case_id>` | Deep investigation on a case |
-| `/wazuh correlate <case_id>` | Find related alerts/cases |
-| `/wazuh plan <case_id>` | Generate response plan |
-| `/wazuh execute <plan_id>` | Execute approved plan |
-| `/wazuh rollback <execution_id>` | Rollback executed action |
-| `/wazuh halt` | Emergency halt all executions |
-| `/wazuh status` | Show system status |
-| `/wazuh report <period>` | Generate summary report |
+| `/wazuh help` | Show available commands |
+| `/wazuh status` | Check responder status |
+| `/wazuh plans [state]` | List plans (proposed/approved/completed) |
+| `/wazuh approve <plan_id>` | Approve a plan (Tier 1) |
+| `/wazuh execute <plan_id>` | Execute an approved plan (Tier 2) |
+| `/wazuh reject <plan_id> [reason]` | Reject a plan |
 
 ---
 
@@ -229,7 +225,7 @@ curl -H "Authorization: Bearer $AUTOPILOT_MCP_AUTH" \
 **Agent not loading:**
 ```bash
 # Check agent workspace files exist
-ls /etc/wazuh-autopilot/agents/triage/
+ls ~/.openclaw/wazuh-autopilot/agents/triage/
 # Expected: AGENTS.md IDENTITY.md TOOLS.md MEMORY.md HEARTBEAT.md SOUL.md USER.md
 
 # Restart OpenClaw
@@ -246,7 +242,7 @@ docker logs openclaw
 | Path | Description |
 |------|-------------|
 | `/etc/wazuh-autopilot/.env` | Environment configuration |
-| `/etc/wazuh-autopilot/agents/` | Agent workspace directories (AGENTS.md, IDENTITY.md, TOOLS.md, etc.) |
+| `~/.openclaw/wazuh-autopilot/agents/` | Agent workspace directories (AGENTS.md, IDENTITY.md, TOOLS.md, etc.) |
 | `/etc/wazuh-autopilot/policies/` | Policy definitions |
 | `/etc/wazuh-autopilot/playbooks/` | Response playbooks |
 | `/etc/wazuh-autopilot/runtime/` | Runtime service code |

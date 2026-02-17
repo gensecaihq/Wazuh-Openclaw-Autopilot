@@ -294,7 +294,7 @@ docker-compose up -d
 # Or build manually
 cd runtime/autopilot-service
 docker build -t wazuh-autopilot .
-docker run -d -p 9090:9090 --env-file .env wazuh-autopilot
+docker run -d -p 127.0.0.1:9090:9090 --env-file .env wazuh-autopilot
 ```
 
 ### Verify Installation
@@ -436,7 +436,7 @@ Uses Socket Mode (outbound-only, no webhooks required):
 Features:
 - Real-time alert notifications
 - Interactive approval buttons
-- Slash commands (`/wazuh approve`, `/wazuh execute`)
+- Slash commands (`/wazuh status`, `/wazuh approve`, `/wazuh execute`)
 - No inbound ports required
 
 ---
@@ -452,11 +452,12 @@ Features:
 ├── scripts/
 │   └── health-check.sh         # Full-stack health check
 ├── openclaw/
-│   ├── openclaw.json           # Gateway & model configuration
-│   └── agents/                 # 7 SOC agents (AGENTS.md, IDENTITY.md, TOOLS.md, MEMORY.md)
+│   ├── openclaw.json           # Gateway & model configuration (multi-provider)
+│   ├── openclaw-airgapped.json # Air-gapped config (Ollama only)
+│   └── agents/                 # 7 SOC agents + _shared/ (AGENTS.md, IDENTITY.md, TOOLS.md, HEARTBEAT.md, MEMORY.md)
 ├── runtime/autopilot-service/
 │   ├── Dockerfile              # Production container
-│   ├── index.js                # Main service (2300+ LOC)
+│   ├── index.js                # Main service (2400+ LOC)
 │   ├── slack.js                # Slack Socket Mode integration
 │   └── index.test.js           # Unit tests (40 tests)
 ├── policies/

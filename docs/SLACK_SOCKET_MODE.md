@@ -103,7 +103,7 @@ Go to **Slash Commands** and create:
 | Command | `/wazuh` |
 | Request URL | (leave empty for Socket Mode) |
 | Short Description | Wazuh Autopilot commands |
-| Usage Hint | `[triage|propose|approve|deny|digest|help] [args]` |
+| Usage Hint | `[help|status|plans|approve|execute|reject] [args]` |
 
 Enable **Escape channels, users, and links sent to your app**
 
@@ -198,12 +198,11 @@ curl -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
 
 ```
 /wazuh help                    # Show available commands
-/wazuh triage <alert_id>       # Triage an alert
-/wazuh propose <case_id>       # Generate response plan
-/wazuh approve <plan_id>       # Approve a plan
-/wazuh deny <plan_id> <reason> # Deny a plan
-/wazuh digest                  # Generate daily digest
-/wazuh kpis                    # Show current KPIs
+/wazuh status                  # Check responder status
+/wazuh plans [state]           # List plans (proposed/approved/completed)
+/wazuh approve <plan_id>       # Approve a plan (Tier 1)
+/wazuh execute <plan_id>       # Execute a plan (Tier 2)
+/wazuh reject <plan_id> [reason] # Reject a plan
 ```
 
 ### Interactive Buttons
@@ -218,7 +217,7 @@ Approval requests include interactive buttons:
 │ Severity: High                          │
 │ Proposed Action: Block IP 192.168.1.100 │
 │                                         │
-│ [Approve] [Deny] [Investigate More]     │
+│ [Approve (Tier 1)] [Reject]             │
 └─────────────────────────────────────────┘
 ```
 
@@ -250,8 +249,8 @@ If interactive buttons don't work in your Slack configuration, commands work as 
 # Instead of clicking Approve button:
 /wazuh approve PLAN-20260217-abc12345
 
-# Instead of clicking Deny button:
-/wazuh deny PLAN-20260217-abc12345 "Needs more investigation"
+# Instead of clicking Reject button:
+/wazuh reject PLAN-20260217-abc12345 "Needs more investigation"
 ```
 
 ## Troubleshooting
