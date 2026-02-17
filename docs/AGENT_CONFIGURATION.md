@@ -41,7 +41,7 @@ Each agent is defined in a YAML file:
 
 ```yaml
 name: wazuh-triage-agent
-version: "2.0.0"
+version: "2.1.0"
 description: |
   Brief description of what this agent does.
   Can be multi-line.

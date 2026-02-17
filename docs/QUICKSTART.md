@@ -123,7 +123,7 @@ Expected response:
 ```json
 {
   "status": "healthy",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "mode": "bootstrap"
 }
 ```

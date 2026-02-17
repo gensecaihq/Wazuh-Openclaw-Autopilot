@@ -20,8 +20,8 @@ Autopilot exposes metrics at a Prometheus-compatible endpoint.
 ```bash
 # In /etc/wazuh-autopilot/.env
 METRICS_ENABLED=true
-METRICS_PORT=9090
-METRICS_HOST=127.0.0.1  # Localhost only for security
+RUNTIME_PORT=9090        # Primary port variable (METRICS_PORT accepted as alias)
+METRICS_HOST=127.0.0.1   # Localhost only for security
 ```
 
 **Endpoint:** `http://127.0.0.1:9090/metrics`
@@ -36,6 +36,9 @@ autopilot_cases_created_total
 
 # Counter: Total cases updated
 autopilot_cases_updated_total
+
+# Counter: Total alerts ingested
+autopilot_alerts_ingested_total
 ```
 
 #### Triage Metrics
@@ -71,7 +74,7 @@ autopilot_mcp_tool_call_latency_seconds_count{tool="wazuh_get_alert"}
 #### Planning and Approval Metrics
 
 ```prometheus
-# Counter: Response plans proposed
+# Counter: Response plans proposed (by agents)
 autopilot_action_plans_proposed_total
 
 # Counter: Approval requests sent
@@ -79,6 +82,20 @@ autopilot_approvals_requested_total
 
 # Counter: Approvals granted
 autopilot_approvals_granted_total
+
+# Counter: Two-tier approval workflow
+autopilot_plans_created_total
+autopilot_plans_approved_total
+autopilot_plans_executed_total
+autopilot_plans_rejected_total
+autopilot_plans_expired_total
+
+# Counter: Execution results
+autopilot_executions_success_total
+autopilot_executions_failed_total
+
+# Counter: Responder disabled blocks
+autopilot_responder_disabled_blocks_total
 
 # Counter: Policy denials by reason
 autopilot_policy_denies_total{reason="INSUFFICIENT_EVIDENCE"}

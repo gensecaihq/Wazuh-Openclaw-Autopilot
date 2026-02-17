@@ -26,7 +26,7 @@ sudo ./install/install.sh --menu
 
 ```
 ╔═══════════════════════════════════════════════════════════════════╗
-║           Wazuh Autopilot Installer v2.0.0                        ║
+║           Wazuh Autopilot Installer v2.1.0                        ║
 ║       Autonomous SOC Layer for Wazuh via OpenClaw Agents          ║
 ╚═══════════════════════════════════════════════════════════════════╝
 

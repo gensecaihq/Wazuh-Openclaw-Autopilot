@@ -113,7 +113,15 @@ approvers:
         - slack_id: "U2345678901"
           name: "Security Director"
       can_approve:
-        - all
+        - block_ip
+        - quarantine_file
+        - isolate_host
+        - kill_process
+        - disable_user
+        - firewall_drop
+        - host_deny
+        - active_response
+        - restart_wazuh
       max_risk_level: critical
 
   self_approval:
@@ -126,7 +134,7 @@ Control which actions are permitted:
 
 ```yaml
 actions:
-  enabled: false  # Global kill switch
+  enabled: true  # Actions enabled - individual actions still require approval
 
   allowlist:
     block_ip:
@@ -373,11 +381,21 @@ autopilot_policy_denies_total{reason="APPROVER_NOT_AUTHORIZED"}
 Begin with conservative settings:
 
 ```yaml
+# In policy.yaml — actions require individual enablement and human approval
 actions:
-  enabled: false  # Disable actions initially
+  enabled: true
+  # Each action in the allowlist must have enabled: true to be available
+  # All actions require human approval regardless of this flag
 
 autonomy:
   default_level: approval
+```
+
+Additionally, keep the responder capability disabled until ready:
+
+```bash
+# In .env — blocks execution even after human approval
+AUTOPILOT_RESPONDER_ENABLED=false
 ```
 
 ### Test in Bootstrap Mode

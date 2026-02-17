@@ -158,12 +158,15 @@ OpenClaw is model-agnostic and supports 10+ LLM providers. Configure your prefer
 
 ### Model Configuration
 
+Model format is `"provider/model-name"`. Example `openclaw.json` snippet:
+
 ```json
-// Model format: "provider/model-name"
-"model": {
-  "primary": "anthropic/claude-sonnet-4-5",
-  "fallback": "openai/gpt-4o",
-  "fast": "groq/llama-3.3-70b-versatile"
+{
+  "model": {
+    "primary": "anthropic/claude-sonnet-4-5",
+    "fallback": "openai/gpt-4o",
+    "fast": "groq/llama-3.3-70b-versatile"
+  }
 }
 ```
 
@@ -286,14 +289,16 @@ curl http://localhost:9090/metrics
 | `/api/cases` | GET | List all cases |
 | `/api/cases` | POST | Create case |
 | `/api/cases/:id` | GET | Get case details |
-| `/api/alerts` | POST | Ingest Wazuh alert |
+| `/api/cases/:id` | PUT | Update case |
+| `/api/alerts` | POST | Ingest Wazuh alert (auto-triage) |
 
 ### Response Plans
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/plans` | GET | List response plans |
+| `/api/plans` | GET | List response plans (filter: `?state=`, `?case_id=`) |
 | `/api/plans` | POST | Create response plan |
+| `/api/plans/:id` | GET | Get plan details |
 | `/api/plans/:id/approve` | POST | Tier 1: Approve plan |
 | `/api/plans/:id/execute` | POST | Tier 2: Execute plan |
 | `/api/plans/:id/reject` | POST | Reject plan |
@@ -303,6 +308,8 @@ curl http://localhost:9090/metrics
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Service health |
+| `/ready` | GET | Kubernetes readiness probe |
+| `/version` | GET | Service version info |
 | `/metrics` | GET | Prometheus metrics |
 | `/api/responder/status` | GET | Responder capability status |
 
@@ -315,6 +322,7 @@ Prometheus metrics available at `/metrics`:
 ```prometheus
 # Cases
 autopilot_cases_created_total
+autopilot_cases_updated_total
 autopilot_alerts_ingested_total
 
 # Two-tier approval
@@ -322,6 +330,7 @@ autopilot_plans_created_total
 autopilot_plans_approved_total
 autopilot_plans_executed_total
 autopilot_plans_rejected_total
+autopilot_plans_expired_total
 
 # Performance
 autopilot_triage_latency_seconds
@@ -331,6 +340,10 @@ autopilot_mcp_tool_call_latency_seconds
 autopilot_executions_success_total
 autopilot_executions_failed_total
 autopilot_responder_disabled_blocks_total
+
+# Policy
+autopilot_policy_denies_total{reason="..."}
+autopilot_errors_total{component="..."}
 ```
 
 ---
@@ -413,9 +426,9 @@ Features:
 │   └── agents/                 # Agent system prompts (7 agents)
 ├── runtime/autopilot-service/
 │   ├── Dockerfile              # Production container
-│   ├── index.js                # Main service (2000+ LOC)
+│   ├── index.js                # Main service (2300+ LOC)
 │   ├── slack.js                # Slack Socket Mode integration
-│   └── index.test.js           # Unit tests (28 tests)
+│   └── index.test.js           # Unit tests (40 tests)
 ├── policies/
 │   ├── policy.yaml             # Security policies & approvers
 │   └── toolmap.yaml            # MCP tool mappings
@@ -441,10 +454,17 @@ Features:
 | Document | Description |
 |----------|-------------|
 | [QUICKSTART.md](docs/QUICKSTART.md) | Installation guide |
-| [SLACK_SOCKET_MODE.md](docs/SLACK_SOCKET_MODE.md) | Slack setup |
-| [RUNTIME_API.md](docs/RUNTIME_API.md) | API reference |
-| [POLICY_AND_APPROVALS.md](docs/POLICY_AND_APPROVALS.md) | Policy configuration |
-| [EVIDENCE_PACK_SCHEMA.md](docs/EVIDENCE_PACK_SCHEMA.md) | Evidence pack format |
+| [RUNTIME_API.md](docs/RUNTIME_API.md) | REST API reference |
+| [POLICY_AND_APPROVALS.md](docs/POLICY_AND_APPROVALS.md) | Policy engine and approval workflow |
+| [SLACK_SOCKET_MODE.md](docs/SLACK_SOCKET_MODE.md) | Slack Socket Mode setup |
+| [EVIDENCE_PACK_SCHEMA.md](docs/EVIDENCE_PACK_SCHEMA.md) | Evidence pack JSON format |
+| [AGENT_CONFIGURATION.md](docs/AGENT_CONFIGURATION.md) | Agent YAML configuration |
+| [MCP_INTEGRATION.md](docs/MCP_INTEGRATION.md) | MCP server integration |
+| [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) | Installer and CLI commands |
+| [OBSERVABILITY_EXPORT.md](docs/OBSERVABILITY_EXPORT.md) | Prometheus metrics and logging |
+| [SCENARIOS.md](docs/SCENARIOS.md) | Deployment scenarios |
+| [TAILSCALE_MANDATORY.md](docs/TAILSCALE_MANDATORY.md) | Tailscale zero-trust networking |
+| [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Troubleshooting guide |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
 ---

@@ -247,7 +247,7 @@ ss -tlnp | grep 9090
 **Change Autopilot's port:**
 ```bash
 # In /etc/wazuh-autopilot/.env
-METRICS_PORT=9091
+RUNTIME_PORT=9091
 ```
 
 ## Agent Issues
