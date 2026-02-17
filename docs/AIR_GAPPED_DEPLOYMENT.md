@@ -18,6 +18,7 @@ Deploy Wazuh Autopilot in a fully air-gapped environment using Ollama as the sol
 | `qwen2.5` | 7B/72B | ~8 GB / ~40 GB | Scales with model size |
 | `mistral` | 7B | ~8 GB | 8 GB VRAM |
 | `codellama` | 13B | ~16 GB | 16 GB VRAM |
+| `embeddinggemma-300M` (GGUF) | 300M | ~0.6 GB | Not needed |
 
 **Minimum configuration**: 16 GB RAM with `llama3.1:8b` (primary) + `mistral` (fast/heartbeat)
 
@@ -34,13 +35,16 @@ Pull models **before** disconnecting from the internet:
 ollama pull llama3.3        # Primary reasoning model (70B)
 ollama pull mistral         # Fast model for heartbeats/reporting (7B)
 
-# Optional models
+# Optional LLM models
 ollama pull codellama       # Technical analysis, log parsing (13B)
 ollama pull llama3.1:8b     # Lighter alternative to llama3.3 (8B)
 ollama pull qwen2.5         # Multilingual support (7B)
 
-# For future embedding support (when available)
-ollama pull nomic-embed-text
+# Optional: Pre-download local embedding model for memory search (~0.6 GB)
+# This auto-downloads on first use, but pre-staging avoids the initial delay
+mkdir -p ~/.cache/node-llama-cpp/models
+wget -O ~/.cache/node-llama-cpp/models/embeddinggemma-300M.gguf \
+  https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/main/embeddinggemma-300M.gguf
 ```
 
 If your hardware cannot support the 70B model, use the lighter configuration:
@@ -96,7 +100,7 @@ chmod 600 ~/.openclaw/openclaw.json
 The air-gapped config (`openclaw/openclaw-airgapped.json`) sets:
 - Ollama as the sole LLM provider
 - All cloud providers (Anthropic, OpenAI, Google, etc.) disabled
-- Memory/embeddings disabled (no cloud embedding API)
+- Memory enabled with local GGUF embeddings (no cloud API needed)
 - `llama3.3` as the primary model, `mistral` for heartbeats/reporting
 - Web search disabled
 - No external network calls required
@@ -204,31 +208,81 @@ curl http://127.0.0.1:8080/health
 
 ## Memory / Embeddings
 
-Memory is **disabled** in the air-gapped config because the default embedding provider (OpenAI) requires internet access.
+Memory is **enabled** in the air-gapped config using OpenClaw's local GGUF embedding provider. No cloud API calls are needed.
 
-If OpenClaw adds Ollama embedding support in the future, you can re-enable memory:
+### How It Works
+
+OpenClaw supports a `"local"` embedding provider that runs a lightweight GGUF model via `node-llama-cpp` directly — no Ollama, no internet. The air-gapped config uses `embeddinggemma-300M` (~0.6 GB), which provides semantic search over agent memory files without any external API calls.
+
+The memory system has two layers:
+1. **File-based memory** (always works) — agents read/write `MEMORY.md` files in their workspace. This provides cross-session context recall.
+2. **Memory search** (requires embeddings) — builds a vector index over memory files for semantic search. The local GGUF provider handles this entirely on-device.
+
+### Configuration
+
+The air-gapped config (`openclaw-airgapped.json`) sets:
 
 ```json
 {
   "memory": {
     "enabled": true,
     "search": {
-      "provider": "ollama",
-      "model": "nomic-embed-text",
-      "hybrid": true
-    }
-  },
-  "agents": {
-    "defaults": {
-      "memory": {
-        "enabled": true
-      }
+      "provider": "local",
+      "local": {
+        "modelPath": "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M.gguf"
+      },
+      "hybrid": true,
+      "bm25Weight": 0.4,
+      "vectorWeight": 0.6
     }
   }
 }
 ```
 
-Until then, all core SOC functions (triage, correlation, investigation, response planning, reporting) work normally without memory. You only lose cross-session context recall.
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `provider` | `local` | Use node-llama-cpp GGUF embeddings (no cloud API) |
+| `modelPath` | `hf:ggml-org/...` | Auto-downloads ~0.6 GB GGUF model on first use |
+| `hybrid` | `true` | Combines vector similarity + BM25 keyword search |
+| `bm25Weight` | `0.4` | Weight for keyword matching (good for alert IDs, rule numbers) |
+| `vectorWeight` | `0.6` | Weight for semantic similarity (good for pattern recall) |
+
+### Pre-Staging the Embedding Model (Fully Air-Gapped)
+
+If the server has **no internet access at all**, pre-download the GGUF model on a connected machine and transfer it:
+
+```bash
+# On a connected machine:
+# Download the embedding model (~0.6 GB)
+wget https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/main/embeddinggemma-300M.gguf
+
+# Transfer to the air-gapped server
+scp embeddinggemma-300M.gguf admin@air-gapped-server:/tmp/
+
+# On the air-gapped server:
+mkdir -p ~/.cache/node-llama-cpp/models
+mv /tmp/embeddinggemma-300M.gguf ~/.cache/node-llama-cpp/models/
+
+# Update openclaw.json to use the local path instead of hf: URI
+# Change modelPath to: "/home/YOUR_USER/.cache/node-llama-cpp/models/embeddinggemma-300M.gguf"
+```
+
+### Disabling Memory (Optional)
+
+If you prefer to disable memory (e.g., to save RAM), set both locations in `openclaw.json`:
+
+```json
+{
+  "memory": { "enabled": false },
+  "agents": { "defaults": { "memory": { "enabled": false } } }
+}
+```
+
+All core SOC functions (triage, correlation, investigation, response planning, reporting) work normally without memory. You only lose cross-session context recall.
+
+### Alternative: Ollama Embeddings
+
+OpenClaw does **not** natively support Ollama as an embedding provider. The supported providers are: OpenAI, Gemini, Voyage, and Local (GGUF). A community fork ([memory-lancedb-local](https://github.com/48Nauts-Operator/memory-lancedb-local)) routes embeddings through Ollama's OpenAI-compatible endpoint, but it is not yet merged upstream.
 
 ---
 

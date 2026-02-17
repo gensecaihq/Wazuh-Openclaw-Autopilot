@@ -3,6 +3,7 @@
   "_security": [
     "Gateway binds to localhost only - never exposed to internet",
     "All cloud LLM providers disabled",
+    "Memory uses local GGUF embeddings (no cloud API needed)",
     "No external network calls required"
   ],
 
@@ -96,7 +97,16 @@
       },
 
       "memory": {
-        "enabled": false
+        "enabled": true,
+        "search": {
+          "provider": "local",
+          "local": {
+            "modelPath": "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M.gguf"
+          },
+          "hybrid": true,
+          "bm25Weight": 0.4,
+          "vectorWeight": 0.6
+        }
       }
     },
 
@@ -253,7 +263,20 @@
   },
 
   "memory": {
-    "enabled": false
+    "enabled": true,
+    "search": {
+      "provider": "local",
+      "local": {
+        "modelPath": "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M.gguf"
+      },
+      "hybrid": true,
+      "bm25Weight": 0.4,
+      "vectorWeight": 0.6
+    },
+    "compaction": {
+      "enabled": true,
+      "schedule": "daily"
+    }
   },
 
   "env": {
