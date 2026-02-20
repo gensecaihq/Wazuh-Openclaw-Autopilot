@@ -1,669 +1,317 @@
 {
   // =============================================================================
-  // WAZUH OPENCLAW AUTOPILOT - OPENCLAW GATEWAY CONFIGURATION
+  // WAZUH OPENCLAW AUTOPILOT — OpenClaw Gateway Configuration
   // =============================================================================
-  // This file is a REFERENCE TEMPLATE. The installer (install.sh) generates the
-  // production config at ~/.openclaw/openclaw.json using configured port values.
-  // To change ports, update install/env.template and re-run the installer.
+  // JSON5 format: comments and trailing commas are allowed.
+  // Validated by OpenClaw's strict zod schema — unknown keys prevent startup.
+  // Run `openclaw doctor --fix` to diagnose issues.
   //
-  // Supported LLM Providers (configure API keys in env section):
-  // - Anthropic (Claude): claude-sonnet-4-5, claude-opus-4-5, claude-haiku-4-5
-  // - OpenAI: gpt-4o, gpt-4.5-preview, o3-mini
-  // - Google: gemini-2.0-flash, gemini-2.0-pro
-  // - Groq: llama-3.3-70b, mixtral-8x7b-32768 (fast inference)
-  // - Mistral: mistral-large-latest, codestral-latest
-  // - xAI: grok-2, grok-3
-  // - Ollama: local models (llama3.3, mistral, etc.)
-  // - OpenRouter: 300+ models via single API
-  // - Together AI: open-source model hosting
-  // - Cerebras: ultra-fast inference
+  // This is a REFERENCE TEMPLATE. The installer (install.sh) generates the
+  // production config at ~/.openclaw/openclaw.json.
   //
   // Model format: "provider/model-name" (e.g., "anthropic/claude-sonnet-4-5")
+  // Built-in providers: anthropic, openai, google, groq, mistral, xai
+  // Custom providers (Ollama, OpenRouter, etc.): configure in "models" section
+  // API keys: set via environment variables or in the "env" section below
   // =============================================================================
 
+  // ---------------------------------------------------------------------------
+  // GATEWAY
+  // ---------------------------------------------------------------------------
   "gateway": {
     "port": 18789,
     "bind": "loopback",
     "auth": {
+      "mode": "token",
       "token": "${OPENCLAW_TOKEN}"
-    },
-    "logging": {
-      "redactSensitive": true
-    },
-    "security": {
-      "cors": {
-        "enabled": false
-      },
-      "rateLimit": {
-        "enabled": true,
-        "maxRequests": 100,
-        "windowMs": 60000
-      }
     }
   },
 
-  // =============================================================================
-  // MODEL PROVIDERS - Configure available LLM providers
-  // =============================================================================
-  // Built-in providers: anthropic, openai, google, groq, mistral, xai, ollama
-  // Set API keys in the env section below or via environment variables
-  // =============================================================================
-  "models": {
-    // Default model for all agents (can be overridden per-agent)
-    "default": "anthropic/claude-sonnet-4-5",
-
-    // Model allowlist - agents can only use models from this list
-    "allowlist": [
-      // Anthropic Claude (recommended for SOC tasks)
-      "anthropic/claude-opus-4-5",
-      "anthropic/claude-sonnet-4-5",
-      "anthropic/claude-haiku-4-5",
-
-      // OpenAI GPT
-      "openai/gpt-4o",
-      "openai/gpt-4.5-preview",
-      "openai/o3-mini",
-
-      // Google Gemini
-      "google/gemini-2.0-flash",
-      "google/gemini-2.0-pro",
-
-      // Groq (ultra-fast inference)
-      "groq/llama-3.3-70b-versatile",
-      "groq/mixtral-8x7b-32768",
-      "groq/llama-guard-3-8b",
-
-      // Mistral
-      "mistral/mistral-large-latest",
-      "mistral/codestral-latest",
-      "mistral/mistral-small-latest",
-
-      // xAI Grok
-      "xai/grok-2",
-      "xai/grok-3",
-
-      // Local models via Ollama
-      "ollama/llama3.3",
-      "ollama/mistral",
-      "ollama/codellama",
-
-      // OpenRouter (access 300+ models)
-      "openrouter/anthropic/claude-3.5-sonnet",
-      "openrouter/meta-llama/llama-3.3-70b-instruct"
-    ],
-
-    // Fallback chain - if primary fails, try next in order
-    "fallbackChain": [
-      "anthropic/claude-sonnet-4-5",
-      "openai/gpt-4o",
-      "groq/llama-3.3-70b-versatile",
-      "ollama/llama3.3"
-    ],
-
-    // Provider-specific settings
-    "providers": {
-      "anthropic": {
-        "enabled": true,
-        "apiKey": "${ANTHROPIC_API_KEY}",
-        "timeout": 120000
-      },
-      "openai": {
-        "enabled": true,
-        "apiKey": "${OPENAI_API_KEY}",
-        "timeout": 120000
-      },
-      "google": {
-        "enabled": false,
-        "apiKey": "${GOOGLE_API_KEY}",
-        "timeout": 120000
-      },
-      "groq": {
-        "enabled": false,
-        "apiKey": "${GROQ_API_KEY}",
-        "timeout": 30000
-      },
-      "mistral": {
-        "enabled": false,
-        "apiKey": "${MISTRAL_API_KEY}",
-        "timeout": 120000
-      },
-      "xai": {
-        "enabled": false,
-        "apiKey": "${XAI_API_KEY}",
-        "timeout": 120000
-      },
-      "ollama": {
-        "enabled": false,
-        "baseUrl": "http://127.0.0.1:11434/v1",
-        "timeout": 300000
-      },
-      "openrouter": {
-        "enabled": false,
-        "apiKey": "${OPENROUTER_API_KEY}",
-        "timeout": 120000
-      },
-      "together": {
-        "enabled": false,
-        "apiKey": "${TOGETHER_API_KEY}",
-        "timeout": 120000
-      },
-      "cerebras": {
-        "enabled": false,
-        "apiKey": "${CEREBRAS_API_KEY}",
-        "timeout": 30000
-      }
-    }
+  // ---------------------------------------------------------------------------
+  // LOGGING
+  // ---------------------------------------------------------------------------
+  "logging": {
+    "redactSensitive": "tools"
   },
 
-  // =============================================================================
+  // ---------------------------------------------------------------------------
   // AGENT CONFIGURATION
-  // =============================================================================
+  // ---------------------------------------------------------------------------
   "agents": {
     "defaults": {
       "workspace": "~/.openclaw/wazuh-autopilot/workspace",
-      "agentDir": "~/.openclaw/wazuh-autopilot/agents",
 
+      // Primary model + ordered fallbacks for all agents
       "model": {
-        // Primary model for complex reasoning tasks
         "primary": "anthropic/claude-sonnet-4-5",
-        // Fallback for high availability
-        "fallback": "openai/gpt-4o",
-        // Fast model for simple tasks (heartbeats, quick checks)
-        "fast": "groq/llama-3.3-70b-versatile"
+        "fallbacks": [
+          "openai/gpt-4o",
+          "groq/llama-3.3-70b-versatile"
+        ]
+      },
+
+      // Model aliases for quick switching via /model command
+      "models": {
+        "anthropic/claude-sonnet-4-5": { "alias": "sonnet" },
+        "anthropic/claude-haiku-4-5": { "alias": "haiku" },
+        "openai/gpt-4o": { "alias": "gpt4o" },
+        "groq/llama-3.3-70b-versatile": { "alias": "groq" }
       },
 
       "sandbox": {
         "mode": "all",
-        "scope": "session",
-        "workspaceAccess": "rw"
+        "scope": "session"
       },
 
-      "tools": {
-        "profile": "minimal",
-        "deny": [
-          "browser",
-          "canvas",
-          "nodes",
-          "exec",
-          "delete"
-        ]
-      },
-
+      // Heartbeat: periodic health/sweep tasks using cheap model
       "heartbeat": {
         "every": "30m",
-        "target": "last",
-        // Use fast/cheap model for heartbeats
         "model": "anthropic/claude-haiku-4-5"
-        // Alternatives: "groq/llama-3.3-70b-versatile" (faster), "ollama/llama3.3" (free)
       },
 
-      "memory": {
-        "enabled": true,
-        "search": {
-          "provider": "openai",
-          "model": "text-embedding-3-small",
-          "hybrid": true
-        }
-      }
+      // Memory search using embeddings
+      "memorySearch": {
+        "sources": ["memory", "sessions"],
+        "provider": "openai",
+        "model": "text-embedding-3-small"
+      },
+
+      "maxConcurrent": 3,
+      "timeoutSeconds": 600
     },
 
     "list": [
-      // =========================================================================
-      // TRIAGE AGENT - First responder for alert analysis
-      // =========================================================================
+      // =====================================================================
+      // TRIAGE AGENT — First responder for alert analysis
+      // =====================================================================
       {
         "id": "wazuh-triage",
         "default": true,
         "workspace": "~/.openclaw/wazuh-autopilot/agents/triage",
-        "agentDir": "~/.openclaw/wazuh-autopilot/agents/triage/state",
-
-        "model": {
-          "primary": "anthropic/claude-sonnet-4-5"
-        },
-
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/triage",
         "tools": {
           "profile": "minimal",
-          "allow": [
-            "read",
-            "sessions_list",
-            "sessions_history",
-            "sessions_send"
-          ],
-          "deny": [
-            "write",
-            "edit",
-            "exec",
-            "delete",
-            "browser",
-            "canvas"
-          ]
+          "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "edit", "exec", "delete", "browser"]
         },
-
-        "heartbeat": {
-          "every": "10m"
-        }
+        "heartbeat": { "every": "10m" }
       },
 
-      // =========================================================================
-      // CORRELATION AGENT - Pattern detection and timeline building
-      // =========================================================================
+      // =====================================================================
+      // CORRELATION AGENT — Pattern detection and timeline building
+      // =====================================================================
       {
         "id": "wazuh-correlation",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/correlation",
-        "agentDir": "~/.openclaw/wazuh-autopilot/agents/correlation/state",
-
-        "model": {
-          "primary": "anthropic/claude-sonnet-4-5"
-        },
-
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/correlation",
         "tools": {
           "profile": "minimal",
-          "allow": [
-            "read",
-            "sessions_list",
-            "sessions_history",
-            "sessions_send"
-          ],
-          "deny": [
-            "write",
-            "edit",
-            "exec",
-            "delete",
-            "browser",
-            "canvas"
-          ]
-        }
+          "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "edit", "exec", "delete", "browser"]
+        },
+        "heartbeat": { "every": "5m" }
       },
 
-      // =========================================================================
-      // INVESTIGATION AGENT - Deep analysis and evidence gathering
-      // =========================================================================
+      // =====================================================================
+      // INVESTIGATION AGENT — Deep analysis and evidence gathering
+      // =====================================================================
       {
         "id": "wazuh-investigation",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/investigation",
-        "agentDir": "~/.openclaw/wazuh-autopilot/agents/investigation/state",
-
-        "model": {
-          "primary": "anthropic/claude-sonnet-4-5"
-        },
-
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/investigation",
         "tools": {
           "profile": "minimal",
-          "allow": [
-            "read",
-            "sessions_list",
-            "sessions_history",
-            "sessions_send"
-          ],
-          "deny": [
-            "write",
-            "edit",
-            "exec",
-            "delete",
-            "browser",
-            "canvas"
-          ]
+          "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "edit", "exec", "delete", "browser"]
         }
       },
 
-      // =========================================================================
-      // RESPONSE PLANNER AGENT - Generate response plans (no execution)
-      // =========================================================================
+      // =====================================================================
+      // RESPONSE PLANNER — Generate response plans (no execution)
+      // =====================================================================
       {
         "id": "wazuh-response-planner",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/response-planner",
-        "agentDir": "~/.openclaw/wazuh-autopilot/agents/response-planner/state",
-
-        "model": {
-          "primary": "anthropic/claude-sonnet-4-5"
-        },
-
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/response-planner",
         "tools": {
           "profile": "minimal",
-          "allow": [
-            "read",
-            "write",
-            "sessions_list",
-            "sessions_history",
-            "sessions_send"
-          ],
-          "deny": [
-            "exec",
-            "delete",
-            "browser",
-            "canvas"
-          ]
+          "allow": ["read", "write", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["exec", "delete", "browser"]
         }
       },
 
-      // =========================================================================
-      // POLICY GUARD AGENT - Constitutional enforcement
-      // =========================================================================
+      // =====================================================================
+      // POLICY GUARD — Constitutional enforcement
+      // =====================================================================
       {
         "id": "wazuh-policy-guard",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/policy-guard",
-        "agentDir": "~/.openclaw/wazuh-autopilot/agents/policy-guard/state",
-
-        "model": {
-          "primary": "anthropic/claude-sonnet-4-5"
-        },
-
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/policy-guard",
         "tools": {
           "profile": "minimal",
-          "allow": [
-            "read",
-            "sessions_list",
-            "sessions_history",
-            "sessions_send"
-          ],
-          "deny": [
-            "write",
-            "edit",
-            "exec",
-            "delete",
-            "browser",
-            "canvas"
-          ]
+          "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "edit", "exec", "delete", "browser"]
         }
       },
 
-      // =========================================================================
-      // RESPONDER AGENT - Action execution (requires elevated permissions)
-      // =========================================================================
+      // =====================================================================
+      // RESPONDER — Action execution (requires elevated permissions)
+      // =====================================================================
       {
         "id": "wazuh-responder",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/responder",
-        "agentDir": "~/.openclaw/wazuh-autopilot/agents/responder/state",
-
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/responder",
         "model": {
-          "primary": "anthropic/claude-sonnet-4-5"
+          "primary": "anthropic/claude-sonnet-4-5",
+          "fallbacks": ["openai/gpt-4o"]
         },
-
         "tools": {
           "profile": "coding",
-          "allow": [
-            "read",
-            "write",
-            "exec",
-            "sessions_list",
-            "sessions_history",
-            "sessions_send"
-          ],
-          "deny": [
-            "browser",
-            "canvas",
-            "delete"
-          ],
-          "elevated": {
-            "enabled": true,
-            "allowFrom": ["slack"]
-          }
+          "allow": ["read", "write", "exec", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["browser", "delete"],
+          "elevated": { "enabled": true }
         },
-
         "sandbox": {
           "mode": "all",
-          "scope": "agent",
-          "workspaceAccess": "rw"
+          "scope": "agent"
         }
       },
 
-      // =========================================================================
-      // REPORTING AGENT - Metrics, KPIs, and digest generation
-      // =========================================================================
+      // =====================================================================
+      // REPORTING — Metrics, KPIs, and digest generation
+      // =====================================================================
       {
         "id": "wazuh-reporting",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/reporting",
-        "agentDir": "~/.openclaw/wazuh-autopilot/agents/reporting/state",
-
-        "model": {
-          "primary": "anthropic/claude-haiku-4-5"
-        },
-
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/reporting",
+        "model": "anthropic/claude-haiku-4-5",
         "tools": {
           "profile": "minimal",
-          "allow": [
-            "read",
-            "write",
-            "sessions_list",
-            "sessions_history",
-            "sessions_send"
-          ],
-          "deny": [
-            "exec",
-            "delete",
-            "browser",
-            "canvas"
-          ]
+          "allow": ["read", "write", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["exec", "delete", "browser"]
         }
       }
     ]
   },
 
-  // =============================================================================
-  // CHANNEL ROUTING - Route messages to appropriate agents
-  // =============================================================================
+  // ---------------------------------------------------------------------------
+  // CHANNEL CONFIGURATION
+  // ---------------------------------------------------------------------------
+  // Slack is optional. Without it, agents operate via REST API and heartbeats.
+  // Set SLACK_BOT_TOKEN and SLACK_APP_TOKEN in env to enable.
+  // ---------------------------------------------------------------------------
+  "channels": {
+    "slack": {
+      "enabled": true,
+      "botToken": "${SLACK_BOT_TOKEN}",
+      "appToken": "${SLACK_APP_TOKEN}",
+      "dmPolicy": "allowlist",
+      "allowFrom": [],
+      "groupPolicy": "allowlist"
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // MULTI-AGENT ROUTING
+  // ---------------------------------------------------------------------------
   "bindings": [
-    // Default triage handles alerts channel
     {
       "agentId": "wazuh-triage",
       "match": {
         "channel": "slack",
-        "peer": {
-          "kind": "group"
-        }
+        "peer": { "kind": "group" }
       }
     },
-
-    // Responder handles approval actions
     {
       "agentId": "wazuh-responder",
       "match": {
         "channel": "slack",
-        "peer": {
-          "id": "approvals"
-        }
+        "peer": { "id": "approvals" }
       }
     }
   ],
 
-  // =============================================================================
-  // CHANNEL CONFIGURATION
-  // =============================================================================
-  "channels": {
-    "slack": {
-      "enabled": true,
-      "dmPolicy": "allowlist",
-      "allowFrom": [],
-      "groupPolicy": "mention",
-      "mentionGating": true,
-      "pairing": {
-        "enabled": true,
-        "requireApproval": true
-      }
-    }
-  },
-
-  // =============================================================================
-  // TOOL CONFIGURATION
-  // =============================================================================
+  // ---------------------------------------------------------------------------
+  // GLOBAL TOOL POLICY
+  // ---------------------------------------------------------------------------
   "tools": {
     "profile": "minimal",
-    "allow": [
-      "read",
-      "sessions_list",
-      "sessions_history"
-    ],
-    "deny": [
-      "browser",
-      "canvas",
-      "nodes",
-      "cron"
-    ],
-    "webSearch": {
-      "enabled": false
-    },
-    "sandbox": {
-      "allowlist": [
-        "read",
-        "sessions_list",
-        "sessions_history",
-        "sessions_send"
-      ],
-      "denylist": [
-        "browser",
-        "canvas",
-        "exec",
-        "delete"
-      ]
+    "allow": ["read", "sessions_list", "sessions_history"],
+    "deny": ["browser", "canvas"],
+    "web": {
+      "search": { "enabled": false },
+      "fetch": { "enabled": false }
     }
   },
 
-  // =============================================================================
-  // AUTOMATION - Cron jobs for scheduled reports
-  // =============================================================================
-  "automation": {
-    "cron": [
+  // ---------------------------------------------------------------------------
+  // CRON — Enable scheduled heartbeats and tasks
+  // ---------------------------------------------------------------------------
+  // Agent heartbeats handle periodic sweeps (triage/10m, correlation/5m).
+  // Additional cron jobs can be added via: openclaw cron add
+  // ---------------------------------------------------------------------------
+  "cron": {
+    "enabled": true,
+    "maxConcurrentRuns": 3
+  },
+
+  // ---------------------------------------------------------------------------
+  // HOOKS — Webhook endpoints for Wazuh alert routing
+  // ---------------------------------------------------------------------------
+  "hooks": {
+    "enabled": true,
+    "token": "${OPENCLAW_TOKEN}",
+    "mappings": [
       {
-        "id": "hourly-snapshot",
-        "schedule": "0 * * * *",
-        "agentId": "wazuh-reporting",
-        "model": "anthropic/claude-haiku-4-5"
+        "match": { "path": "/webhook/wazuh-alert" },
+        "action": "agent",
+        "agentId": "wazuh-triage"
       },
       {
-        "id": "daily-digest",
-        "schedule": "0 8 * * *",
-        "agentId": "wazuh-reporting",
-        "model": "anthropic/claude-haiku-4-5"
+        "match": { "path": "/webhook/case-created" },
+        "action": "agent",
+        "agentId": "wazuh-correlation"
       },
       {
-        "id": "shift-handoff",
-        "schedule": "0 6,14,22 * * *",
-        "agentId": "wazuh-reporting",
-        "model": "anthropic/claude-haiku-4-5"
+        "match": { "path": "/webhook/investigation-request" },
+        "action": "agent",
+        "agentId": "wazuh-investigation"
       },
       {
-        "id": "weekly-summary",
-        "schedule": "0 9 * * 1",
-        "agentId": "wazuh-reporting",
-        "model": "anthropic/claude-sonnet-4-5"
+        "match": { "path": "/webhook/plan-request" },
+        "action": "agent",
+        "agentId": "wazuh-response-planner"
       },
       {
-        "id": "correlation-sweep",
-        "schedule": "*/5 * * * *",
-        "agentId": "wazuh-correlation",
-        "model": "anthropic/claude-haiku-4-5"
+        "match": { "path": "/webhook/policy-check" },
+        "action": "agent",
+        "agentId": "wazuh-policy-guard"
       },
       {
-        "id": "untriaged-sweep",
-        "schedule": "*/10 * * * *",
-        "agentId": "wazuh-triage",
-        "model": "anthropic/claude-haiku-4-5"
-      }
-    ],
-    "webhooks": [
-      {
-        "path": "/webhook/wazuh-alert",
-        "target": "wazuh-triage",
-        "trigger": "wazuh-alert"
-      },
-      {
-        "path": "/webhook/case-created",
-        "target": "wazuh-correlation",
-        "trigger": "case-created"
-      },
-      {
-        "path": "/webhook/investigation-request",
-        "target": "wazuh-investigation",
-        "trigger": "investigation-request"
-      },
-      {
-        "path": "/webhook/plan-request",
-        "target": "wazuh-response-planner",
-        "trigger": "plan-request"
-      },
-      {
-        "path": "/webhook/policy-check",
-        "target": "wazuh-policy-guard",
-        "trigger": "policy-check"
-      },
-      {
-        "path": "/webhook/execute-action",
-        "target": "wazuh-responder",
-        "trigger": "execute-action"
+        "match": { "path": "/webhook/execute-action" },
+        "action": "agent",
+        "agentId": "wazuh-responder"
       }
     ]
   },
 
-  // =============================================================================
-  // MEMORY CONFIGURATION
-  // =============================================================================
-  "memory": {
-    "enabled": true,
-    "search": {
-      "provider": "openai",
-      "model": "text-embedding-3-small",
-      "hybrid": true,
-      "bm25Weight": 0.3,
-      "vectorWeight": 0.7
-    },
-    "compaction": {
-      "enabled": true,
-      "schedule": "daily"
-    }
-  },
-
-  // =============================================================================
+  // ---------------------------------------------------------------------------
   // ENVIRONMENT VARIABLES
-  // =============================================================================
-  // Configure API keys for your preferred providers
-  // Only configure keys for providers you intend to use
-  // =============================================================================
+  // ---------------------------------------------------------------------------
+  // API keys for LLM providers. Only configure keys for providers you use.
+  // These can also be set as system environment variables.
+  // ---------------------------------------------------------------------------
   "env": {
-    // OpenClaw Gateway
-    "OPENCLAW_TOKEN": "${OPENCLAW_TOKEN}",
-
-    // Wazuh MCP Server
-    "WAZUH_MCP_URL": "${MCP_URL}",
-    "WAZUH_MCP_TOKEN": "${AUTOPILOT_MCP_AUTH}",
-
-    // ==========================================================================
-    // LLM Provider API Keys
-    // ==========================================================================
-
-    // Anthropic (Claude) - https://console.anthropic.com/
     "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
-
-    // OpenAI - https://platform.openai.com/api-keys
     "OPENAI_API_KEY": "${OPENAI_API_KEY}",
-
-    // Google AI (Gemini) - https://aistudio.google.com/app/apikey
     "GOOGLE_API_KEY": "${GOOGLE_API_KEY}",
-
-    // Groq (fast inference) - https://console.groq.com/keys
     "GROQ_API_KEY": "${GROQ_API_KEY}",
-
-    // Mistral - https://console.mistral.ai/api-keys
     "MISTRAL_API_KEY": "${MISTRAL_API_KEY}",
-
-    // xAI (Grok) - https://console.x.ai/
     "XAI_API_KEY": "${XAI_API_KEY}",
-
-    // OpenRouter (300+ models) - https://openrouter.ai/keys
     "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
-
-    // Together AI - https://api.together.xyz/settings/api-keys
     "TOGETHER_API_KEY": "${TOGETHER_API_KEY}",
-
-    // Cerebras - https://cloud.cerebras.ai/
-    "CEREBRAS_API_KEY": "${CEREBRAS_API_KEY}"
-  },
-
-  // =============================================================================
-  // DEFAULT PROVIDER (used when no specific provider configured)
-  // =============================================================================
-  "provider": {
-    "type": "anthropic",
-    "apiKey": "${ANTHROPIC_API_KEY}",
-    "timeout": 120000
+    "CEREBRAS_API_KEY": "${CEREBRAS_API_KEY}",
+    "WAZUH_MCP_URL": "${MCP_URL}",
+    "WAZUH_MCP_TOKEN": "${AUTOPILOT_MCP_AUTH}"
   }
 }

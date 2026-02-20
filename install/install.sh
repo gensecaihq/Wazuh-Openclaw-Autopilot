@@ -682,78 +682,48 @@ deploy_agents() {
     local OPENCLAW_TOKEN
     OPENCLAW_TOKEN=$(cat "$SECRETS_DIR/openclaw_token")
 
-    # Create security-hardened OpenClaw configuration
-    # NOTE: JSON does not support comments; metadata is in "_comment" fields
+    # Create OpenClaw configuration (JSON5 format — validated by OpenClaw's zod schema)
     cat > "$OC_DIR/openclaw.json" << EOF
 {
-  "_comment": "Wazuh OpenClaw Autopilot - Security Hardened Configuration",
-  "_security": [
-    "Gateway binds to localhost only - never exposed to internet",
-    "Pairing mode enabled - explicit device approval required"
-  ],
-
   "gateway": {
     "port": $GATEWAY_PORT,
     "bind": "loopback",
     "auth": {
+      "mode": "token",
       "token": "\${OPENCLAW_TOKEN}"
-    },
-    "logging": {
-      "redactSensitive": true
-    },
-    "security": {
-      "cors": {
-        "enabled": false
-      },
-      "rateLimit": {
-        "enabled": true,
-        "maxRequests": 100,
-        "windowMs": 60000
-      }
     }
+  },
+
+  "logging": {
+    "redactSensitive": "tools"
   },
 
   "agents": {
     "defaults": {
       "workspace": "~/.openclaw/wazuh-autopilot/workspace",
-      "agentDir": "~/.openclaw/wazuh-autopilot/agents",
-
       "model": {
         "primary": "anthropic/claude-sonnet-4-5",
-        "fallback": "anthropic/claude-haiku-4-5"
+        "fallbacks": ["openai/gpt-4o", "groq/llama-3.3-70b-versatile"]
       },
-
+      "models": {
+        "anthropic/claude-sonnet-4-5": {"alias": "sonnet"},
+        "anthropic/claude-haiku-4-5": {"alias": "haiku"}
+      },
       "sandbox": {
         "mode": "all",
-        "scope": "session",
-        "workspaceAccess": "rw"
+        "scope": "session"
       },
-
-      "tools": {
-        "profile": "minimal",
-        "deny": [
-          "browser",
-          "canvas",
-          "nodes",
-          "exec",
-          "delete"
-        ]
-      },
-
       "heartbeat": {
         "every": "30m",
-        "target": "last",
         "model": "anthropic/claude-haiku-4-5"
       },
-
-      "memory": {
-        "enabled": true,
-        "search": {
-          "provider": "openai",
-          "model": "text-embedding-3-small",
-          "hybrid": true
-        }
-      }
+      "memorySearch": {
+        "sources": ["memory", "sessions"],
+        "provider": "openai",
+        "model": "text-embedding-3-small"
+      },
+      "maxConcurrent": 3,
+      "timeoutSeconds": 600
     },
 
     "list": [
@@ -761,75 +731,83 @@ deploy_agents() {
         "id": "wazuh-triage",
         "default": true,
         "workspace": "~/.openclaw/wazuh-autopilot/agents/triage",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/triage",
         "tools": {
           "profile": "minimal",
           "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["write", "edit", "exec", "delete", "browser", "canvas"]
-        }
+          "deny": ["write", "edit", "exec", "delete", "browser"]
+        },
+        "heartbeat": {"every": "10m"}
       },
       {
         "id": "wazuh-correlation",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/correlation",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/correlation",
         "tools": {
           "profile": "minimal",
           "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["write", "edit", "exec", "delete", "browser", "canvas"]
-        }
+          "deny": ["write", "edit", "exec", "delete", "browser"]
+        },
+        "heartbeat": {"every": "5m"}
       },
       {
         "id": "wazuh-investigation",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/investigation",
-        "model": {"primary": "anthropic/claude-sonnet-4-5"},
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/investigation",
         "tools": {
           "profile": "minimal",
           "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["write", "edit", "exec", "delete", "browser", "canvas"]
+          "deny": ["write", "edit", "exec", "delete", "browser"]
         }
       },
       {
         "id": "wazuh-response-planner",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/response-planner",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/response-planner",
         "tools": {
           "profile": "minimal",
           "allow": ["read", "write", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["exec", "delete", "browser", "canvas"]
+          "deny": ["exec", "delete", "browser"]
         }
       },
       {
         "id": "wazuh-policy-guard",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/policy-guard",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/policy-guard",
         "tools": {
           "profile": "minimal",
           "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["write", "edit", "exec", "delete", "browser", "canvas"]
+          "deny": ["write", "edit", "exec", "delete", "browser"]
         }
       },
       {
         "id": "wazuh-responder",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/responder",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/responder",
+        "model": {
+          "primary": "anthropic/claude-sonnet-4-5",
+          "fallbacks": ["openai/gpt-4o"]
+        },
         "tools": {
           "profile": "coding",
           "allow": ["read", "write", "exec", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["browser", "canvas", "delete"],
-          "elevated": {
-            "enabled": true,
-            "allowFrom": ["slack"]
-          }
+          "deny": ["browser", "delete"],
+          "elevated": {"enabled": true}
         },
         "sandbox": {
           "mode": "all",
-          "scope": "agent",
-          "workspaceAccess": "rw"
+          "scope": "agent"
         }
       },
       {
         "id": "wazuh-reporting",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/reporting",
-        "model": {"primary": "anthropic/claude-haiku-4-5"},
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/reporting",
+        "model": "anthropic/claude-haiku-4-5",
         "tools": {
           "profile": "minimal",
           "allow": ["read", "write", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["exec", "delete", "browser", "canvas"]
+          "deny": ["exec", "delete", "browser"]
         }
       }
     ]
@@ -838,90 +816,58 @@ deploy_agents() {
   "channels": {
     "slack": {
       "enabled": true,
+      "botToken": "\${SLACK_BOT_TOKEN}",
+      "appToken": "\${SLACK_APP_TOKEN}",
       "dmPolicy": "allowlist",
       "allowFrom": [],
-      "groupPolicy": "mention",
-      "mentionGating": true,
-      "pairing": {
-        "enabled": true,
-        "requireApproval": true
-      }
+      "groupPolicy": "allowlist"
     }
   },
+
+  "bindings": [
+    {
+      "agentId": "wazuh-triage",
+      "match": {"channel": "slack", "peer": {"kind": "group"}}
+    },
+    {
+      "agentId": "wazuh-responder",
+      "match": {"channel": "slack", "peer": {"id": "approvals"}}
+    }
+  ],
 
   "tools": {
     "profile": "minimal",
-    "allow": [
-      "read",
-      "sessions_list",
-      "sessions_history"
-    ],
-    "deny": [
-      "browser",
-      "canvas",
-      "nodes",
-      "cron",
-      "exec",
-      "delete"
-    ],
-    "webSearch": {
-      "enabled": false
-    },
-    "sandbox": {
-      "allowlist": [
-        "read",
-        "sessions_list",
-        "sessions_history",
-        "sessions_send"
-      ],
-      "denylist": [
-        "browser",
-        "canvas",
-        "exec",
-        "delete"
-      ]
+    "allow": ["read", "sessions_list", "sessions_history"],
+    "deny": ["browser", "canvas"],
+    "web": {
+      "search": {"enabled": false},
+      "fetch": {"enabled": false}
     }
   },
 
-  "automation": {
-    "cron": [
-      {"id": "hourly-snapshot", "schedule": "0 * * * *", "agentId": "wazuh-reporting"},
-      {"id": "daily-digest", "schedule": "0 8 * * *", "agentId": "wazuh-reporting"},
-      {"id": "shift-handoff", "schedule": "0 6,14,22 * * *", "agentId": "wazuh-reporting"},
-      {"id": "weekly-summary", "schedule": "0 9 * * 1", "agentId": "wazuh-reporting"},
-      {"id": "correlation-sweep", "schedule": "*/5 * * * *", "agentId": "wazuh-correlation"},
-      {"id": "untriaged-sweep", "schedule": "*/10 * * * *", "agentId": "wazuh-triage"}
-    ],
-    "webhooks": [
-      {"path": "/webhook/wazuh-alert", "target": "wazuh-triage"},
-      {"path": "/webhook/case-created", "target": "wazuh-correlation"},
-      {"path": "/webhook/investigation-request", "target": "wazuh-investigation"},
-      {"path": "/webhook/plan-request", "target": "wazuh-response-planner"},
-      {"path": "/webhook/policy-check", "target": "wazuh-policy-guard"},
-      {"path": "/webhook/execute-action", "target": "wazuh-responder"}
+  "cron": {
+    "enabled": true,
+    "maxConcurrentRuns": 3
+  },
+
+  "hooks": {
+    "enabled": true,
+    "token": "\${OPENCLAW_TOKEN}",
+    "mappings": [
+      {"match": {"path": "/webhook/wazuh-alert"}, "action": "agent", "agentId": "wazuh-triage"},
+      {"match": {"path": "/webhook/case-created"}, "action": "agent", "agentId": "wazuh-correlation"},
+      {"match": {"path": "/webhook/investigation-request"}, "action": "agent", "agentId": "wazuh-investigation"},
+      {"match": {"path": "/webhook/plan-request"}, "action": "agent", "agentId": "wazuh-response-planner"},
+      {"match": {"path": "/webhook/policy-check"}, "action": "agent", "agentId": "wazuh-policy-guard"},
+      {"match": {"path": "/webhook/execute-action"}, "action": "agent", "agentId": "wazuh-responder"}
     ]
   },
 
-  "memory": {
-    "enabled": true,
-    "search": {
-      "provider": "openai",
-      "model": "text-embedding-3-small",
-      "hybrid": true
-    }
-  },
-
   "env": {
-    "OPENCLAW_TOKEN": "\${OPENCLAW_TOKEN}",
     "ANTHROPIC_API_KEY": "\${ANTHROPIC_API_KEY}",
+    "OPENAI_API_KEY": "\${OPENAI_API_KEY}",
     "WAZUH_MCP_URL": "\${MCP_URL}",
     "WAZUH_MCP_TOKEN": "\${AUTOPILOT_MCP_AUTH}"
-  },
-
-  "provider": {
-    "type": "anthropic",
-    "apiKey": "\${ANTHROPIC_API_KEY}",
-    "timeout": 120000
   }
 }
 EOF
@@ -1335,19 +1281,24 @@ validate_configuration() {
         ((issues++))
     fi
 
-    # Check at least one LLM API key
-    local has_llm_key=false
-    for key in ANTHROPIC_API_KEY OPENAI_API_KEY GROQ_API_KEY MISTRAL_API_KEY XAI_API_KEY GOOGLE_API_KEY; do
+    # Check at least one LLM provider (cloud API key OR local Ollama)
+    local has_llm_provider=false
+    for key in ANTHROPIC_API_KEY OPENAI_API_KEY GROQ_API_KEY MISTRAL_API_KEY XAI_API_KEY GOOGLE_API_KEY OPENROUTER_API_KEY TOGETHER_API_KEY CEREBRAS_API_KEY; do
         if grep -q "^${key}=.\+" "$CONFIG_DIR/.env" 2>/dev/null; then
-            has_llm_key=true
+            has_llm_provider=true
             break
         fi
     done
-    if $has_llm_key; then
-        echo -e "  ${GREEN}✓${NC} LLM API key configured"
+    # Also check for Ollama (air-gapped deployments)
+    if ! $has_llm_provider && command -v ollama &>/dev/null; then
+        has_llm_provider=true
+    fi
+    if $has_llm_provider; then
+        echo -e "  ${GREEN}✓${NC} LLM provider available"
     else
-        echo -e "  ${RED}✗${NC} No LLM API key found (need at least one provider)"
-        ((issues++))
+        echo -e "  ${YELLOW}!${NC} No LLM API key or local Ollama found"
+        echo -e "        Set at least one provider key in .env, or install Ollama for air-gapped mode"
+        ((warnings++))
     fi
 
     # Check policy file exists

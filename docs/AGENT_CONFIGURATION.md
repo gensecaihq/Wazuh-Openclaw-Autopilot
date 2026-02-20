@@ -93,16 +93,22 @@ Tool permissions are enforced by the OpenClaw gateway via `tools.allow` and `too
 
 ### Triggers
 
-Agents are triggered via webhooks or cron schedules, configured in the `automations` section of `openclaw.json`:
+Agents are triggered via **heartbeats** (configured per-agent in `openclaw.json`) and **hooks** (webhook endpoints):
 
-| Schedule | Agent | Task |
-|----------|-------|------|
-| Every 10 min | wazuh-triage | Sweep untriaged alerts |
-| Every 5 min | wazuh-correlation | Recorrelate active cases |
-| Hourly | wazuh-reporting | Operational snapshot |
-| 8 AM daily | wazuh-reporting | Daily digest |
-| Shift changes | wazuh-reporting | Shift handoff report |
-| Monday 9 AM | wazuh-reporting | Weekly summary |
+**Heartbeats** (periodic sweeps):
+
+| Agent | Interval | Task |
+|-------|----------|------|
+| wazuh-triage | Every 10 min | Sweep untriaged alerts |
+| wazuh-correlation | Every 5 min | Recorrelate active cases |
+| All agents | Every 30 min (default) | Health check and maintenance |
+
+**Cron jobs** (reports) can be added via CLI:
+
+```bash
+openclaw cron add --schedule "0 8 * * *" --agent wazuh-reporting --name "daily-digest"
+openclaw cron add --schedule "0 9 * * 1" --agent wazuh-reporting --name "weekly-summary"
+```
 
 ---
 
@@ -165,16 +171,9 @@ Each agent's domain knowledge is defined in its `AGENTS.md` file. Here's what ea
 
 ## Enabling/Disabling Agents
 
-To disable an agent, set `"enabled": false` in its `openclaw.json` entry:
+To disable an agent, remove it from the `agents.list` array in `openclaw.json`, or remove its heartbeat and hook mappings.
 
-```json
-{
-  "id": "wazuh-responder",
-  "enabled": false
-}
-```
-
-The responder is disabled by default. Enable it with:
+The responder capability is disabled by default. Enable it with:
 ```bash
 export AUTOPILOT_RESPONDER_ENABLED=true
 ```
@@ -213,12 +212,12 @@ Add the agent to the `agents.list` array in `openclaw.json`.
 
 ### 5. Add Trigger
 
-Add a webhook path or cron schedule in the `automations` section.
+Add a webhook mapping in the `hooks.mappings` array of `openclaw.json`, or configure a heartbeat on the agent.
 
 ### 6. Restart OpenClaw
 
 ```bash
-docker restart openclaw
+openclaw gateway restart
 ```
 
 ---

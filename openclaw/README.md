@@ -120,13 +120,17 @@ OpenClaw supports multiple LLM providers. Configure in `openclaw.json`:
 
 ### Model Configuration
 
-```json
-// In openclaw.json - model format: "provider/model-name"
+```json5
+// In openclaw.json agents.defaults.model — format: "provider/model-name"
 "model": {
   "primary": "anthropic/claude-sonnet-4-5",
-  "fallback": "openai/gpt-4o",
-  "fast": "groq/llama-3.3-70b-versatile"
+  "fallbacks": ["openai/gpt-4o", "groq/llama-3.3-70b-versatile"]
 }
+
+// Per-agent override (agents.list[].model)
+"model": "anthropic/claude-haiku-4-5"
+// or with fallbacks:
+"model": { "primary": "anthropic/claude-sonnet-4-5", "fallbacks": ["openai/gpt-4o"] }
 ```
 
 ### Cost Optimization
@@ -221,16 +225,22 @@ curl -X POST http://localhost:18789/webhook/wazuh-alert \
   }'
 ```
 
-## Cron Jobs
+## Scheduled Tasks
 
-| Schedule | Agent | Task |
-|----------|-------|------|
-| Every 10 min | wazuh-triage | Sweep untriaged alerts |
-| Every 5 min | wazuh-correlation | Recorrelate active cases |
-| Hourly | wazuh-reporting | Operational snapshot |
-| 8 AM daily | wazuh-reporting | Daily digest |
-| Shift changes | wazuh-reporting | Shift handoff report |
-| Monday 9 AM | wazuh-reporting | Weekly summary |
+Periodic tasks are handled by agent **heartbeats** (configured per-agent in `openclaw.json`):
+
+| Agent | Heartbeat | Task |
+|-------|-----------|------|
+| wazuh-triage | Every 10 min | Sweep untriaged alerts |
+| wazuh-correlation | Every 5 min | Recorrelate active cases |
+| All agents | Every 30 min (default) | Health check and maintenance |
+
+Additional cron jobs (reports, digests) can be added via the CLI:
+
+```bash
+openclaw cron add --schedule "0 8 * * *" --agent wazuh-reporting --name "daily-digest"
+openclaw cron add --schedule "0 9 * * 1" --agent wazuh-reporting --name "weekly-summary"
+```
 
 ## Integration with Runtime Service
 
@@ -262,9 +272,9 @@ POST /api/plans/{plan_id}/execute
 
 | Feature | Setting | Description |
 |---------|---------|-------------|
-| DM Policy | `allowlist` | No public messages accepted |
-| Pairing Mode | `enabled` | Devices must pair before connecting |
-| Mention Gating | `enabled` | Agents respond only when mentioned |
+| DM Policy | `allowlist` | Only approved users can DM |
+| Group Policy | `allowlist` | Only approved channels |
+| Sandbox Mode | `all` | All agents run sandboxed |
 
 ### Directory Permissions
 

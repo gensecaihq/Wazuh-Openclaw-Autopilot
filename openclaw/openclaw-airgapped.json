@@ -1,113 +1,99 @@
 {
-  "_comment": "Wazuh OpenClaw Autopilot - Air-Gapped Configuration (Ollama Only)",
-  "_security": [
-    "Gateway binds to localhost only - never exposed to internet",
-    "All cloud LLM providers disabled",
-    "Memory uses local GGUF embeddings (no cloud API needed)",
-    "No external network calls required"
-  ],
+  // =============================================================================
+  // WAZUH OPENCLAW AUTOPILOT — Air-Gapped Configuration (Ollama Only)
+  // =============================================================================
+  // JSON5 format: comments and trailing commas are allowed.
+  //
+  // This configuration runs entirely on local Ollama models with NO external
+  // network calls. Suitable for air-gapped, classified, or offline environments.
+  //
+  // Prerequisites:
+  //   1. Install Ollama: https://ollama.com/download
+  //   2. Pull models: ollama pull llama3.3 && ollama pull mistral
+  //   3. Ensure Ollama is running: ollama serve (default http://127.0.0.1:11434)
+  //
+  // To use different models, update the models.providers.ollama.models array
+  // and the agents.defaults.model.primary/fallbacks to match.
+  // =============================================================================
 
+  // ---------------------------------------------------------------------------
+  // GATEWAY
+  // ---------------------------------------------------------------------------
   "gateway": {
     "port": 18789,
     "bind": "loopback",
     "auth": {
+      "mode": "token",
       "token": "${OPENCLAW_TOKEN}"
-    },
-    "logging": {
-      "redactSensitive": true
-    },
-    "security": {
-      "cors": {
-        "enabled": false
-      },
-      "rateLimit": {
-        "enabled": true,
-        "maxRequests": 100,
-        "windowMs": 60000
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // LOGGING
+  // ---------------------------------------------------------------------------
+  "logging": {
+    "redactSensitive": "tools"
+  },
+
+  // ---------------------------------------------------------------------------
+  // CUSTOM MODEL PROVIDERS — Ollama via OpenAI-compatible API
+  // ---------------------------------------------------------------------------
+  // Ollama is not a built-in provider; register it here as a custom provider.
+  // The baseUrl points to Ollama's OpenAI-compatible endpoint.
+  // ---------------------------------------------------------------------------
+  "models": {
+    "providers": {
+      "ollama": {
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "apiKey": "ollama",
+        "api": "openai-completions",
+        "models": [
+          { "id": "llama3.3", "contextWindow": 131072 },
+          { "id": "mistral", "contextWindow": 32768 },
+          { "id": "codellama", "contextWindow": 16384 },
+          { "id": "llama3.1", "contextWindow": 131072 },
+          { "id": "qwen2.5", "contextWindow": 131072 }
+        ]
       }
     }
   },
 
-  "models": {
-    "default": "ollama/llama3.3",
-
-    "allowlist": [
-      "ollama/llama3.3",
-      "ollama/mistral",
-      "ollama/codellama",
-      "ollama/llama3.1",
-      "ollama/qwen2.5"
-    ],
-
-    "fallbackChain": [
-      "ollama/llama3.3",
-      "ollama/mistral"
-    ],
-
-    "providers": {
-      "ollama": {
-        "enabled": true,
-        "baseUrl": "http://127.0.0.1:11434/v1",
-        "timeout": 300000
-      },
-      "anthropic": { "enabled": false },
-      "openai": { "enabled": false },
-      "google": { "enabled": false },
-      "groq": { "enabled": false },
-      "mistral": { "enabled": false },
-      "xai": { "enabled": false },
-      "openrouter": { "enabled": false },
-      "together": { "enabled": false },
-      "cerebras": { "enabled": false }
-    }
-  },
-
+  // ---------------------------------------------------------------------------
+  // AGENT CONFIGURATION
+  // ---------------------------------------------------------------------------
   "agents": {
     "defaults": {
       "workspace": "~/.openclaw/wazuh-autopilot/workspace",
-      "agentDir": "~/.openclaw/wazuh-autopilot/agents",
 
       "model": {
         "primary": "ollama/llama3.3",
-        "fallback": "ollama/mistral",
-        "fast": "ollama/mistral"
+        "fallbacks": ["ollama/mistral"]
+      },
+
+      "models": {
+        "ollama/llama3.3": { "alias": "llama" },
+        "ollama/mistral": { "alias": "mistral" }
       },
 
       "sandbox": {
         "mode": "all",
-        "scope": "session",
-        "workspaceAccess": "rw"
-      },
-
-      "tools": {
-        "profile": "minimal",
-        "deny": [
-          "browser",
-          "canvas",
-          "nodes",
-          "exec",
-          "delete"
-        ]
+        "scope": "session"
       },
 
       "heartbeat": {
         "every": "30m",
-        "target": "last",
         "model": "ollama/mistral"
       },
 
-      "memory": {
-        "enabled": true,
-        "search": {
-          "provider": "local",
-          "local": {
-            "modelPath": "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M.gguf"
-          },
-          "hybrid": true,
-          "bm25Weight": 0.4,
-          "vectorWeight": 0.6
-        }
-      }
+      // Local embeddings — no cloud API needed
+      "memorySearch": {
+        "sources": ["memory", "sessions"],
+        "provider": "local",
+        "model": "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M.gguf"
+      },
+
+      "maxConcurrent": 2,
+      "timeoutSeconds": 900
     },
 
     "list": [
@@ -115,179 +101,188 @@
         "id": "wazuh-triage",
         "default": true,
         "workspace": "~/.openclaw/wazuh-autopilot/agents/triage",
-        "model": { "primary": "ollama/llama3.3" },
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/triage",
         "tools": {
           "profile": "minimal",
           "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["write", "edit", "exec", "delete", "browser", "canvas"]
+          "deny": ["write", "edit", "exec", "delete", "browser"]
         },
         "heartbeat": { "every": "10m" }
       },
       {
         "id": "wazuh-correlation",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/correlation",
-        "model": { "primary": "ollama/llama3.3" },
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/correlation",
         "tools": {
           "profile": "minimal",
           "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["write", "edit", "exec", "delete", "browser", "canvas"]
-        }
+          "deny": ["write", "edit", "exec", "delete", "browser"]
+        },
+        "heartbeat": { "every": "5m" }
       },
       {
         "id": "wazuh-investigation",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/investigation",
-        "model": { "primary": "ollama/llama3.3" },
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/investigation",
         "tools": {
           "profile": "minimal",
           "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["write", "edit", "exec", "delete", "browser", "canvas"]
+          "deny": ["write", "edit", "exec", "delete", "browser"]
         }
       },
       {
         "id": "wazuh-response-planner",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/response-planner",
-        "model": { "primary": "ollama/llama3.3" },
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/response-planner",
         "tools": {
           "profile": "minimal",
           "allow": ["read", "write", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["exec", "delete", "browser", "canvas"]
+          "deny": ["exec", "delete", "browser"]
         }
       },
       {
         "id": "wazuh-policy-guard",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/policy-guard",
-        "model": { "primary": "ollama/llama3.3" },
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/policy-guard",
         "tools": {
           "profile": "minimal",
           "allow": ["read", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["write", "edit", "exec", "delete", "browser", "canvas"]
+          "deny": ["write", "edit", "exec", "delete", "browser"]
         }
       },
       {
         "id": "wazuh-responder",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/responder",
-        "model": { "primary": "ollama/llama3.3" },
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/responder",
+        "model": {
+          "primary": "ollama/llama3.3",
+          "fallbacks": ["ollama/mistral"]
+        },
         "tools": {
           "profile": "coding",
           "allow": ["read", "write", "exec", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["browser", "canvas", "delete"],
-          "elevated": {
-            "enabled": true,
-            "allowFrom": ["slack"]
-          }
+          "deny": ["browser", "delete"],
+          "elevated": { "enabled": true }
         },
         "sandbox": {
           "mode": "all",
-          "scope": "agent",
-          "workspaceAccess": "rw"
+          "scope": "agent"
         }
       },
       {
         "id": "wazuh-reporting",
         "workspace": "~/.openclaw/wazuh-autopilot/agents/reporting",
-        "model": { "primary": "ollama/mistral" },
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/reporting",
+        "model": "ollama/mistral",
         "tools": {
           "profile": "minimal",
           "allow": ["read", "write", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["exec", "delete", "browser", "canvas"]
+          "deny": ["exec", "delete", "browser"]
         }
       }
     ]
   },
 
+  // ---------------------------------------------------------------------------
+  // CHANNEL CONFIGURATION
+  // ---------------------------------------------------------------------------
   "channels": {
     "slack": {
       "enabled": true,
+      "botToken": "${SLACK_BOT_TOKEN}",
+      "appToken": "${SLACK_APP_TOKEN}",
       "dmPolicy": "allowlist",
       "allowFrom": [],
-      "groupPolicy": "mention",
-      "mentionGating": true,
-      "pairing": {
-        "enabled": true,
-        "requireApproval": true
+      "groupPolicy": "allowlist"
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // MULTI-AGENT ROUTING
+  // ---------------------------------------------------------------------------
+  "bindings": [
+    {
+      "agentId": "wazuh-triage",
+      "match": {
+        "channel": "slack",
+        "peer": { "kind": "group" }
+      }
+    },
+    {
+      "agentId": "wazuh-responder",
+      "match": {
+        "channel": "slack",
+        "peer": { "id": "approvals" }
       }
     }
-  },
+  ],
 
+  // ---------------------------------------------------------------------------
+  // GLOBAL TOOL POLICY
+  // ---------------------------------------------------------------------------
   "tools": {
     "profile": "minimal",
-    "allow": [
-      "read",
-      "sessions_list",
-      "sessions_history"
-    ],
-    "deny": [
-      "browser",
-      "canvas",
-      "nodes",
-      "cron",
-      "exec",
-      "delete"
-    ],
-    "webSearch": {
-      "enabled": false
-    },
-    "sandbox": {
-      "allowlist": [
-        "read",
-        "sessions_list",
-        "sessions_history",
-        "sessions_send"
-      ],
-      "denylist": [
-        "browser",
-        "canvas",
-        "exec",
-        "delete"
-      ]
+    "allow": ["read", "sessions_list", "sessions_history"],
+    "deny": ["browser", "canvas"],
+    "web": {
+      "search": { "enabled": false },
+      "fetch": { "enabled": false }
     }
   },
 
-  "automation": {
-    "cron": [
-      {"id": "hourly-snapshot", "schedule": "0 * * * *", "agentId": "wazuh-reporting"},
-      {"id": "daily-digest", "schedule": "0 8 * * *", "agentId": "wazuh-reporting"},
-      {"id": "shift-handoff", "schedule": "0 6,14,22 * * *", "agentId": "wazuh-reporting"},
-      {"id": "weekly-summary", "schedule": "0 9 * * 1", "agentId": "wazuh-reporting"},
-      {"id": "correlation-sweep", "schedule": "*/5 * * * *", "agentId": "wazuh-correlation"},
-      {"id": "untriaged-sweep", "schedule": "*/10 * * * *", "agentId": "wazuh-triage"}
-    ],
-    "webhooks": [
-      {"path": "/webhook/wazuh-alert", "target": "wazuh-triage"},
-      {"path": "/webhook/case-created", "target": "wazuh-correlation"},
-      {"path": "/webhook/investigation-request", "target": "wazuh-investigation"},
-      {"path": "/webhook/plan-request", "target": "wazuh-response-planner"},
-      {"path": "/webhook/policy-check", "target": "wazuh-policy-guard"},
-      {"path": "/webhook/execute-action", "target": "wazuh-responder"}
+  // ---------------------------------------------------------------------------
+  // CRON
+  // ---------------------------------------------------------------------------
+  "cron": {
+    "enabled": true,
+    "maxConcurrentRuns": 2
+  },
+
+  // ---------------------------------------------------------------------------
+  // HOOKS — Webhook endpoints for Wazuh alert routing
+  // ---------------------------------------------------------------------------
+  "hooks": {
+    "enabled": true,
+    "token": "${OPENCLAW_TOKEN}",
+    "mappings": [
+      {
+        "match": { "path": "/webhook/wazuh-alert" },
+        "action": "agent",
+        "agentId": "wazuh-triage"
+      },
+      {
+        "match": { "path": "/webhook/case-created" },
+        "action": "agent",
+        "agentId": "wazuh-correlation"
+      },
+      {
+        "match": { "path": "/webhook/investigation-request" },
+        "action": "agent",
+        "agentId": "wazuh-investigation"
+      },
+      {
+        "match": { "path": "/webhook/plan-request" },
+        "action": "agent",
+        "agentId": "wazuh-response-planner"
+      },
+      {
+        "match": { "path": "/webhook/policy-check" },
+        "action": "agent",
+        "agentId": "wazuh-policy-guard"
+      },
+      {
+        "match": { "path": "/webhook/execute-action" },
+        "action": "agent",
+        "agentId": "wazuh-responder"
+      }
     ]
   },
 
-  "memory": {
-    "enabled": true,
-    "search": {
-      "provider": "local",
-      "local": {
-        "modelPath": "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M.gguf"
-      },
-      "hybrid": true,
-      "bm25Weight": 0.4,
-      "vectorWeight": 0.6
-    },
-    "compaction": {
-      "enabled": true,
-      "schedule": "daily"
-    }
-  },
-
+  // ---------------------------------------------------------------------------
+  // ENVIRONMENT VARIABLES
+  // ---------------------------------------------------------------------------
   "env": {
-    "OPENCLAW_TOKEN": "${OPENCLAW_TOKEN}",
     "WAZUH_MCP_URL": "${MCP_URL}",
     "WAZUH_MCP_TOKEN": "${AUTOPILOT_MCP_AUTH}"
-  },
-
-  "provider": {
-    "type": "ollama",
-    "baseUrl": "http://127.0.0.1:11434/v1",
-    "timeout": 300000
   }
 }
