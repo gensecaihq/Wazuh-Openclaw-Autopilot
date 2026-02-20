@@ -16,10 +16,17 @@ const crypto = require("crypto");
 // HELPERS
 // =============================================================================
 
+// Validate Slack user ID format (U or W prefix followed by alphanumeric)
+function isValidSlackUserId(id) {
+  return typeof id === "string" && /^[UW][A-Z0-9]+$/.test(id);
+}
+
 // Escape Slack mrkdwn special characters in user-controlled text
 function escapeMrkdwn(text) {
   if (!text) return text;
-  return String(text).replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]));
+  return String(text)
+    .replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]))
+    .replace(/[*_~`]/g, (ch) => `\u200B${ch}`);
 }
 
 // =============================================================================
@@ -99,6 +106,18 @@ async function initSlack(runtimeService) {
       socketMode: true,
     });
 
+    // Warn about invalid channel ID formats
+    const channelIdPattern = /^C[A-Z0-9]+$/;
+    for (const [name, id] of Object.entries({
+      alertsChannel: config.alertsChannel,
+      approvalsChannel: config.approvalsChannel,
+      reportsChannel: config.reportsChannel,
+    })) {
+      if (id && !channelIdPattern.test(id)) {
+        log("warn", "init", `${name} value "${id}" does not match Slack channel ID format (C[A-Z0-9]+)`);
+      }
+    }
+
     // Register handlers
     registerSlashCommands(runtimeService);
     registerInteractiveButtons(runtimeService);
@@ -137,6 +156,11 @@ function registerSlashCommands(runtime) {
     const args = command.text.split(" ");
     const subcommand = args[0]?.toLowerCase();
     const userId = command.user_id;
+
+    if (!isValidSlackUserId(userId)) {
+      await respond({ text: "Error: Invalid user ID in request", response_type: "ephemeral" });
+      return;
+    }
 
     try {
       switch (subcommand) {
@@ -245,6 +269,11 @@ function registerInteractiveButtons(runtime) {
     const planId = body.actions[0].value;
     const userId = body.user.id;
 
+    if (!isValidSlackUserId(userId)) {
+      await respond({ text: "Error: Invalid user ID", response_type: "ephemeral" });
+      return;
+    }
+
     try {
       const plan = runtime.approvePlan(planId, userId, "Approved via Slack button");
 
@@ -273,6 +302,11 @@ function registerInteractiveButtons(runtime) {
 
     const planId = body.actions[0].value;
     const userId = body.user.id;
+
+    if (!isValidSlackUserId(userId)) {
+      await respond({ text: "Error: Invalid user ID", response_type: "ephemeral" });
+      return;
+    }
 
     try {
       // Show executing status
@@ -315,6 +349,11 @@ function registerInteractiveButtons(runtime) {
 
     const planId = body.actions[0].value;
     const userId = body.user.id;
+
+    if (!isValidSlackUserId(userId)) {
+      await respond({ text: "Error: Invalid user ID", response_type: "ephemeral" });
+      return;
+    }
 
     try {
       const plan = runtime.rejectPlan(planId, userId, "Rejected via Slack button");

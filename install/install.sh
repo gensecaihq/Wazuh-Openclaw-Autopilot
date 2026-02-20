@@ -1514,7 +1514,7 @@ run_security_audit() {
 
     # Check directory permissions
     local config_perms
-    config_perms=$(stat -c %a 2>/dev/null || stat -f %OLp "$CONFIG_DIR" 2>/dev/null || echo "000")
+    config_perms=$(stat -f %Lp "$CONFIG_DIR" 2>/dev/null || stat -c %a "$CONFIG_DIR" 2>/dev/null || echo "000")
     if [[ "$config_perms" == "700" ]]; then
         echo -e "  ${GREEN}✓${NC} Config directory permissions (700)"
     else
@@ -1524,7 +1524,7 @@ run_security_audit() {
 
     # Check secrets permissions
     local secrets_perms
-    secrets_perms=$(stat -c %a 2>/dev/null || stat -f %OLp "$SECRETS_DIR" 2>/dev/null || echo "000")
+    secrets_perms=$(stat -f %Lp "$SECRETS_DIR" 2>/dev/null || stat -c %a "$SECRETS_DIR" 2>/dev/null || echo "000")
     if [[ "$secrets_perms" == "700" ]]; then
         echo -e "  ${GREEN}✓${NC} Secrets directory permissions (700)"
     else
@@ -1534,7 +1534,7 @@ run_security_audit() {
 
     # Check env file permissions
     local env_perms
-    env_perms=$(stat -c %a 2>/dev/null || stat -f %OLp "$CONFIG_DIR/.env" 2>/dev/null || echo "000")
+    env_perms=$(stat -f %Lp "$CONFIG_DIR/.env" 2>/dev/null || stat -c %a "$CONFIG_DIR/.env" 2>/dev/null || echo "000")
     if [[ "$env_perms" == "600" ]]; then
         echo -e "  ${GREEN}✓${NC} Environment file permissions (600)"
     else

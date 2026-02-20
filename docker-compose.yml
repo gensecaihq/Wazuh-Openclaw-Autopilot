@@ -4,8 +4,6 @@
 # Development and production deployment configuration
 # =============================================================================
 
-version: "3.8"
-
 services:
   # ---------------------------------------------------------------------------
   # Autopilot Runtime Service
@@ -43,7 +41,7 @@ services:
       # Metrics (0.0.0.0 required inside container for Docker port forwarding;
       # host access restricted to localhost via ports mapping above)
       - METRICS_ENABLED=true
-      - METRICS_PORT=${RUNTIME_PORT:-9090}
+      - RUNTIME_PORT=${RUNTIME_PORT:-9090}
       - METRICS_HOST=0.0.0.0
 
       # Logging
@@ -59,6 +57,7 @@ services:
 
       # Security
       - AUTOPILOT_REQUIRE_TAILSCALE=${AUTOPILOT_REQUIRE_TAILSCALE:-false}
+      - AUTOPILOT_SERVICE_TOKEN=${AUTOPILOT_SERVICE_TOKEN:-}
 
     volumes:
       # Persistent data

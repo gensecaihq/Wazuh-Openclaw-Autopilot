@@ -268,7 +268,11 @@ check_wazuh_api() {
     # Authentication test
     if [[ -n "$wazuh_user" ]] && [[ -n "$wazuh_pass" ]]; then
         local auth_response
-        auth_response=$(curl -sf --connect-timeout 10 -k -u "$wazuh_user:$wazuh_pass" \
+        local curl_ssl_flag=""
+        if [[ "${WAZUH_ALLOW_SELF_SIGNED:-false}" == "true" ]]; then
+            curl_ssl_flag="-k"
+        fi
+        auth_response=$(curl -sf --connect-timeout 10 $curl_ssl_flag -u "$wazuh_user:$wazuh_pass" \
             "https://$wazuh_host:$wazuh_port/security/user/authenticate" 2>/dev/null)
         if [[ $? -eq 0 ]] && echo "$auth_response" | grep -q "token"; then
             check_pass "Wazuh API Auth" "Authentication successful"

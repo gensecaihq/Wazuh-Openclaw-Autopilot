@@ -157,6 +157,10 @@ function recordLatency(name, seconds, labels = {}) {
   metrics[name][key].push(seconds);
 }
 
+function sanitizeMetricLabelName(name) {
+  return String(name).replace(/[^a-zA-Z0-9_]/g, "_");
+}
+
 function formatMetrics() {
   const lines = [];
 
@@ -181,7 +185,7 @@ function formatMetrics() {
     Object.entries(data).forEach(([labelJson, value]) => {
       const labels = JSON.parse(labelJson);
       const labelStr = Object.entries(labels)
-        .map(([k, v]) => `${k}="${String(v).replace(/[\\"]/g, "\\$&").replace(/\n/g, "\\n")}"`)
+        .map(([k, v]) => `${sanitizeMetricLabelName(k)}="${String(v).replace(/[\\"]/g, "\\$&").replace(/\n/g, "\\n")}"`)
         .join(",");
       lines.push(`autopilot_${name}{${labelStr}} ${value}`);
     });
@@ -199,7 +203,7 @@ function formatMetrics() {
       if (labelJson !== "default") {
         const labels = JSON.parse(labelJson);
         labelStr = Object.entries(labels)
-          .map(([k, v]) => `${k}="${v}"`)
+          .map(([k, v]) => `${sanitizeMetricLabelName(k)}="${v}"`)
           .join(",");
         labelStr = `{${labelStr}}`;
       }
@@ -207,6 +211,10 @@ function formatMetrics() {
       lines.push(`autopilot_${name}_count${labelStr} ${count}`);
     });
   });
+
+  // Gauges
+  lines.push("# TYPE autopilot_plans_executing gauge");
+  lines.push(`autopilot_plans_executing ${executingPlans.size}`);
 
   return lines.join("\n");
 }
@@ -520,6 +528,7 @@ function consumeApprovalToken(token, approverId, decision, reason = "") {
 
 const responsePlans = new Map();
 const MAX_PLANS = 10000;
+const MAX_ACTIONS_PER_PLAN = 100;
 // Bug #7 fix: Track plans currently being executed to prevent race conditions
 const executingPlans = new Set();
 
@@ -547,6 +556,10 @@ function validatePlanAction(action, index) {
 }
 
 function createResponsePlan(planData) {
+  // Enforce max actions per plan to prevent OOM
+  if (planData.actions && Array.isArray(planData.actions) && planData.actions.length > MAX_ACTIONS_PER_PLAN) {
+    throw new Error(`Too many actions: ${planData.actions.length} exceeds maximum of ${MAX_ACTIONS_PER_PLAN}`);
+  }
   // Issue #6 fix: Validate all actions at creation time
   if (planData.actions && Array.isArray(planData.actions)) {
     const validationErrors = [];
@@ -1114,7 +1127,7 @@ async function callMcpTool(toolName, params, correlationId) {
     const response = await fetch(`${config.mcpUrl}/tools/${mcpToolName}`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": JSON_CONTENT_TYPE,
         ...(config.mcpAuth && { Authorization: `Bearer ${config.mcpAuth}` }),
         ...(correlationId && { "X-Correlation-ID": correlationId }),
       },
@@ -1305,19 +1318,26 @@ function generateRequestId() {
 // HTTP SERVER
 // =============================================================================
 
-const SERVICE_VERSION = "2.1.0"; // Bumped for security fixes
+const SERVICE_VERSION = "2.2.0";
+const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
 const startTime = Date.now();
 
 // Auth error response helper
 function sendAuthError(res, authResult, requestId) {
   if (authResult.locked) {
     res.setHeader("Retry-After", authResult.retryAfter);
-    res.writeHead(429, { "Content-Type": "application/json" });
+    res.writeHead(429, { "Content-Type": JSON_CONTENT_TYPE });
     res.end(JSON.stringify({ error: authResult.reason, retry_after: authResult.retryAfter, request_id: requestId }));
   } else {
-    res.writeHead(401, { "Content-Type": "application/json" });
+    res.writeHead(401, { "Content-Type": JSON_CONTENT_TYPE });
     res.end(JSON.stringify({ error: authResult.reason, request_id: requestId }));
   }
+}
+
+// Standard JSON error response helper (consistent format with request_id)
+function sendJsonError(res, statusCode, error, requestId) {
+  res.writeHead(statusCode, { "Content-Type": JSON_CONTENT_TYPE });
+  res.end(JSON.stringify({ error, request_id: requestId }));
 }
 
 // Input validation
@@ -1406,6 +1426,15 @@ function parseJsonBody(req) {
     let totalSize = 0;
     let rejected = false;
 
+    // Body timeout to prevent slow-loris attacks
+    const bodyTimeout = setTimeout(() => {
+      if (!rejected) {
+        rejected = true;
+        req.destroy();
+        reject(new Error("Request body timeout"));
+      }
+    }, 30000);
+
     req.on("data", (chunk) => {
       if (rejected) return;
 
@@ -1413,6 +1442,7 @@ function parseJsonBody(req) {
       totalSize += chunk.length;
       if (totalSize > MAX_BODY_SIZE) {
         rejected = true;
+        clearTimeout(bodyTimeout);
         req.destroy(); // Stop receiving data
         reject(new Error("Request body too large"));
         return;
@@ -1421,6 +1451,7 @@ function parseJsonBody(req) {
     });
 
     req.on("end", () => {
+      clearTimeout(bodyTimeout);
       if (rejected) return;
       try {
         const body = Buffer.concat(chunks).toString("utf8");
@@ -1431,6 +1462,7 @@ function parseJsonBody(req) {
     });
 
     req.on("error", (err) => {
+      clearTimeout(bodyTimeout);
       if (!rejected) reject(err);
     });
   });
@@ -1479,12 +1511,7 @@ function createServer() {
 
       if (!rateLimit.allowed) {
         res.setHeader("Retry-After", rateLimit.retryAfter);
-        res.writeHead(429, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({
-          error: "Too Many Requests",
-          retry_after: rateLimit.retryAfter,
-          request_id: requestId,
-        }));
+        sendJsonError(res, 429, "Too Many Requests", requestId);
         return;
       }
     }
@@ -1493,8 +1520,7 @@ function createServer() {
       // Reject new requests during shutdown (except health checks)
       if (isShuttingDown && url.pathname !== "/health" && url.pathname !== "/ready") {
         res.setHeader("Connection", "close");
-        res.writeHead(503, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Service is shutting down" }));
+        sendJsonError(res, 503, "Service is shutting down", requestId);
         return;
       }
 
@@ -1532,7 +1558,7 @@ function createServer() {
           },
           timestamp: new Date().toISOString(),
         };
-        res.writeHead(statusCode, { "Content-Type": "application/json" });
+        res.writeHead(statusCode, { "Content-Type": JSON_CONTENT_TYPE });
         res.end(JSON.stringify(health));
         return;
       }
@@ -1540,7 +1566,7 @@ function createServer() {
       // Readiness endpoint
       if (url.pathname === "/ready" && req.method === "GET") {
         if (isShuttingDown) {
-          res.writeHead(503, { "Content-Type": "application/json" });
+          res.writeHead(503, { "Content-Type": JSON_CONTENT_TYPE });
           res.end(JSON.stringify({ ready: false, reason: "shutting_down" }));
           return;
         }
@@ -1552,14 +1578,14 @@ function createServer() {
           // data dir not accessible
         }
         const ready = dataDirReady;
-        res.writeHead(ready ? 200 : 503, { "Content-Type": "application/json" });
+        res.writeHead(ready ? 200 : 503, { "Content-Type": JSON_CONTENT_TYPE });
         res.end(JSON.stringify({ ready, checks: { data_dir: dataDirReady } }));
         return;
       }
 
       // Version endpoint
       if (url.pathname === "/version" && req.method === "GET") {
-        res.writeHead(200, { "Content-Type": "application/json" });
+        res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
         res.end(JSON.stringify({
           service: "wazuh-openclaw-autopilot",
           version: SERVICE_VERSION,
@@ -1577,7 +1603,7 @@ function createServer() {
         }
 
         const cases = await listCases({ limit: 100 });
-        res.writeHead(200, { "Content-Type": "application/json" });
+        res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
         res.end(JSON.stringify(cases));
         return;
       }
@@ -1594,13 +1620,12 @@ function createServer() {
         const body = await parseJsonBody(req);
 
         if (!body.case_id || !isValidCaseId(body.case_id)) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Invalid or missing case_id" }));
+          sendJsonError(res, 400, "Invalid or missing case_id", requestId);
           return;
         }
 
         const newCase = await createCase(body.case_id, body);
-        res.writeHead(201, { "Content-Type": "application/json" });
+        res.writeHead(201, { "Content-Type": JSON_CONTENT_TYPE });
         res.end(JSON.stringify(newCase));
         return;
       }
@@ -1617,18 +1642,16 @@ function createServer() {
 
         // Input validation
         if (!caseId || !isValidCaseId(caseId)) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Invalid case ID format" }));
+          sendJsonError(res, 400, "Invalid case ID format", requestId);
           return;
         }
 
         try {
           const caseData = await getCase(caseId);
-          res.writeHead(200, { "Content-Type": "application/json" });
+          res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
           res.end(JSON.stringify(caseData));
         } catch (err) {
-          res.writeHead(404, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Case not found" }));
+          sendJsonError(res, 404, "Case not found", requestId);
         }
         return;
       }
@@ -1645,20 +1668,18 @@ function createServer() {
         const caseId = url.pathname.split("/")[3];
 
         if (!caseId || !isValidCaseId(caseId)) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Invalid case ID format" }));
+          sendJsonError(res, 400, "Invalid case ID format", requestId);
           return;
         }
 
         try {
           const body = await parseJsonBody(req);
           const updatedCase = await updateCase(caseId, body);
-          res.writeHead(200, { "Content-Type": "application/json" });
+          res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
           res.end(JSON.stringify(updatedCase));
         } catch (err) {
           if (err.message.includes("not found")) {
-            res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Case not found" }));
+            sendJsonError(res, 404, "Case not found", requestId);
           } else {
             throw err;
           }
@@ -1683,8 +1704,7 @@ function createServer() {
 
         // Validate alert has minimum required fields
         if (!alert.alert_id && !alert._id && !alert.id) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Alert must have alert_id, _id, or id field" }));
+          sendJsonError(res, 400, "Alert must have alert_id, _id, or id field", requestId);
           return;
         }
 
@@ -1832,7 +1852,7 @@ function createServer() {
         const triageLatency = (Date.now() - triageStart) / 1000;
         recordLatency("triage_latency_seconds", triageLatency);
 
-        res.writeHead(existingCase ? 200 : 201, { "Content-Type": "application/json" });
+        res.writeHead(existingCase ? 200 : 201, { "Content-Type": JSON_CONTENT_TYPE });
         res.end(JSON.stringify({
           case_id: caseId,
           status: existingCase ? "updated" : "created",
@@ -1855,7 +1875,7 @@ function createServer() {
         }
 
         const status = getResponderStatus();
-        res.writeHead(200, { "Content-Type": "application/json" });
+        res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
         res.end(JSON.stringify(status));
         return;
       }
@@ -1875,7 +1895,7 @@ function createServer() {
         const state = url.searchParams.get("state");
         const case_id = url.searchParams.get("case_id");
         const plans = listPlans({ state, case_id });
-        res.writeHead(200, { "Content-Type": "application/json" });
+        res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
         res.end(JSON.stringify(plans));
         return;
       }
@@ -1891,14 +1911,12 @@ function createServer() {
         const body = await parseJsonBody(req);
 
         if (!body.case_id || !isValidCaseId(body.case_id)) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Invalid or missing case_id" }));
+          sendJsonError(res, 400, "Invalid or missing case_id", requestId);
           return;
         }
 
         if (!body.actions || !Array.isArray(body.actions) || body.actions.length === 0) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "actions array is required and must not be empty" }));
+          sendJsonError(res, 400, "actions array is required and must not be empty", requestId);
           return;
         }
 
@@ -1925,15 +1943,14 @@ function createServer() {
             });
           }
 
-          res.writeHead(201, { "Content-Type": "application/json" });
+          res.writeHead(201, { "Content-Type": JSON_CONTENT_TYPE });
           res.end(JSON.stringify({
             ...plan,
             message: "Plan created in PROPOSED state. Requires Tier 1 approval before execution.",
             next_step: `POST /api/plans/${plan.plan_id}/approve`,
           }));
         } catch (err) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: err.message }));
+          sendJsonError(res, 400, err.message, requestId);
         }
         return;
       }
@@ -1949,11 +1966,10 @@ function createServer() {
         const planId = url.pathname.split("/")[3];
         try {
           const plan = getPlan(planId);
-          res.writeHead(200, { "Content-Type": "application/json" });
+          res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
           res.end(JSON.stringify(plan));
         } catch (err) {
-          res.writeHead(404, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: err.message }));
+          sendJsonError(res, 404, err.message, requestId);
         }
         return;
       }
@@ -1970,14 +1986,13 @@ function createServer() {
         const body = await parseJsonBody(req);
 
         if (!body.approver_id) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "approver_id is required" }));
+          sendJsonError(res, 400, "approver_id is required", requestId);
           return;
         }
 
         try {
           const plan = approvePlan(planId, body.approver_id, body.reason || "");
-          res.writeHead(200, { "Content-Type": "application/json" });
+          res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
           res.end(JSON.stringify({
             ...plan,
             message: "Plan APPROVED (Tier 1 complete). Ready for execution.",
@@ -1985,9 +2000,7 @@ function createServer() {
             responder_status: getResponderStatus(),
           }));
         } catch (err) {
-          const statusCode = err.message.includes("not found") ? 404 : 400;
-          res.writeHead(statusCode, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: err.message }));
+          sendJsonError(res, err.message.includes("not found") ? 404 : 400, err.message, requestId);
         }
         return;
       }
@@ -2004,22 +2017,19 @@ function createServer() {
         const body = await parseJsonBody(req);
 
         if (!body.rejector_id) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "rejector_id is required" }));
+          sendJsonError(res, 400, "rejector_id is required", requestId);
           return;
         }
 
         try {
           const plan = rejectPlan(planId, body.rejector_id, body.reason || "");
-          res.writeHead(200, { "Content-Type": "application/json" });
+          res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
           res.end(JSON.stringify({
             ...plan,
             message: "Plan REJECTED. No actions will be executed.",
           }));
         } catch (err) {
-          const statusCode = err.message.includes("not found") ? 404 : 400;
-          res.writeHead(statusCode, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: err.message }));
+          sendJsonError(res, err.message.includes("not found") ? 404 : 400, err.message, requestId);
         }
         return;
       }
@@ -2036,8 +2046,7 @@ function createServer() {
         const body = await parseJsonBody(req);
 
         if (!body.executor_id) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "executor_id is required" }));
+          sendJsonError(res, 400, "executor_id is required", requestId);
           return;
         }
 
@@ -2045,7 +2054,7 @@ function createServer() {
           const plan = await executePlan(planId, body.executor_id);
           // Bug #2 fix: Return 200 for success, 207 (Multi-Status) for partial failure
           const statusCode = plan.state === PLAN_STATES.COMPLETED ? 200 : 207;
-          res.writeHead(statusCode, { "Content-Type": "application/json" });
+          res.writeHead(statusCode, { "Content-Type": JSON_CONTENT_TYPE });
           res.end(JSON.stringify({
             ...plan,
             message: plan.state === PLAN_STATES.COMPLETED
@@ -2055,7 +2064,7 @@ function createServer() {
         } catch (err) {
           // Bug #1 fix: Match the actual error message from executePlan
           if (err.message.includes("Responder capability is DISABLED")) {
-            res.writeHead(403, { "Content-Type": "application/json" });
+            res.writeHead(403, { "Content-Type": JSON_CONTENT_TYPE });
             res.end(JSON.stringify({
               error: err.message,
               responder_status: getResponderStatus(),
@@ -2064,20 +2073,16 @@ function createServer() {
             return;
           }
 
-          const statusCode = err.message.includes("not found") ? 404 : 400;
-          res.writeHead(statusCode, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: err.message }));
+          sendJsonError(res, err.message.includes("not found") ? 404 : 400, err.message, requestId);
         }
         return;
       }
 
       // 404 for unknown routes
-      res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Not found" }));
+      sendJsonError(res, 404, "Not found", requestId);
     } catch (err) {
       log("error", "http", "Request error", { error: err.message });
-      res.writeHead(500, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Internal server error" }));
+      sendJsonError(res, 500, "Internal server error", requestId);
     }
   });
 
@@ -2172,6 +2177,22 @@ async function validateStartup() {
   for (const [name, value] of numericConfigs) {
     if (isNaN(value) || value < 0) {
       log("error", "startup", `Invalid configuration: ${name} = ${value}`);
+      process.exit(1);
+    }
+  }
+
+  // Port range validation
+  if (config.metricsPort < 1 || config.metricsPort > 65535) {
+    log("error", "startup", `Invalid port: RUNTIME_PORT = ${config.metricsPort} (must be 1-65535)`);
+    process.exit(1);
+  }
+
+  // MCP URL format validation
+  if (config.mcpUrl) {
+    try {
+      new URL(config.mcpUrl);
+    } catch (err) {
+      log("error", "startup", `Invalid MCP_URL: ${config.mcpUrl}`, { error: err.message });
       process.exit(1);
     }
   }
@@ -2380,7 +2401,7 @@ function setupCleanupIntervals() {
 // Issue #12 fix: Add configurable shutdown timeout with force kill
 let isShuttingDown = false;
 
-function gracefulShutdown(signal) {
+async function gracefulShutdown(signal) {
   if (isShuttingDown) {
     log("warn", "shutdown", "Shutdown already in progress, forcing exit");
     process.exit(1);
@@ -2395,6 +2416,16 @@ function gracefulShutdown(signal) {
     process.exit(1);
   }, config.shutdownTimeoutMs);
   forceKillTimer.unref(); // Don't keep process alive just for this timer
+
+  // Stop Slack WebSocket connection
+  if (slack && slack.isInitialized()) {
+    try {
+      await slack.stopSlack();
+      log("info", "shutdown", "Slack connection closed");
+    } catch (err) {
+      log("warn", "shutdown", "Error stopping Slack", { error: err.message });
+    }
+  }
 
   // Stop accepting new requests and close idle connections
   if (server) {

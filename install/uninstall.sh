@@ -100,27 +100,50 @@ main() {
 
     echo ""
 
-    # Stop service
-    log_info "Stopping service..."
+    # Stop autopilot service
+    log_info "Stopping wazuh-autopilot service..."
     if systemctl is-active --quiet wazuh-autopilot 2>/dev/null; then
         systemctl stop wazuh-autopilot
-        log_success "Service stopped"
+        log_success "wazuh-autopilot service stopped"
     else
-        log_info "Service not running"
+        log_info "wazuh-autopilot service not running"
     fi
 
-    # Disable service
+    # Disable autopilot service
     if systemctl is-enabled --quiet wazuh-autopilot 2>/dev/null; then
         systemctl disable wazuh-autopilot
-        log_success "Service disabled"
+        log_success "wazuh-autopilot service disabled"
     fi
 
-    # Remove systemd service file
+    # Remove autopilot systemd service file
     if [[ -f /etc/systemd/system/wazuh-autopilot.service ]]; then
         rm /etc/systemd/system/wazuh-autopilot.service
-        systemctl daemon-reload
-        log_success "Systemd service removed"
+        log_success "wazuh-autopilot systemd service removed"
     fi
+
+    # Stop MCP server service
+    log_info "Stopping wazuh-mcp-server service..."
+    if systemctl is-active --quiet wazuh-mcp-server 2>/dev/null; then
+        systemctl stop wazuh-mcp-server
+        log_success "wazuh-mcp-server service stopped"
+    else
+        log_info "wazuh-mcp-server service not running"
+    fi
+
+    # Disable MCP server service
+    if systemctl is-enabled --quiet wazuh-mcp-server 2>/dev/null; then
+        systemctl disable wazuh-mcp-server
+        log_success "wazuh-mcp-server service disabled"
+    fi
+
+    # Remove MCP server systemd service file
+    if [[ -f /etc/systemd/system/wazuh-mcp-server.service ]]; then
+        rm /etc/systemd/system/wazuh-mcp-server.service
+        log_success "wazuh-mcp-server systemd service removed"
+    fi
+
+    # Reload systemd after removing service files
+    systemctl daemon-reload 2>/dev/null || true
 
     # Remove configuration
     if [[ -d "$CONFIG_DIR" ]]; then
@@ -141,6 +164,19 @@ main() {
     if [[ -L "$openclaw_home/agents" ]]; then
         rm "$openclaw_home/agents"
         log_success "Removed agent link from OpenClaw"
+    fi
+
+    # Offer to remove OpenClaw workspace for Wazuh Autopilot
+    local openclaw_workspace="$HOME/.openclaw/wazuh-autopilot"
+    if [[ -d "$openclaw_workspace" ]]; then
+        echo ""
+        read -rp "Remove OpenClaw workspace ($openclaw_workspace)? [y/N]: " remove_workspace
+        if [[ "$remove_workspace" =~ ^[Yy]$ ]]; then
+            rm -rf "$openclaw_workspace"
+            log_success "OpenClaw workspace removed: $openclaw_workspace"
+        else
+            log_info "OpenClaw workspace preserved: $openclaw_workspace"
+        fi
     fi
 
     echo ""
