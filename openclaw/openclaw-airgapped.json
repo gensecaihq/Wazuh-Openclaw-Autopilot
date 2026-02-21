@@ -48,11 +48,11 @@
         "apiKey": "ollama",
         "api": "openai-completions",
         "models": [
-          { "id": "llama3.3", "contextWindow": 131072 },
-          { "id": "mistral", "contextWindow": 32768 },
-          { "id": "codellama", "contextWindow": 16384 },
-          { "id": "llama3.1", "contextWindow": 131072 },
-          { "id": "qwen2.5", "contextWindow": 131072 }
+          { "id": "llama3.3", "name": "Llama 3.3 70B", "reasoning": true, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 },
+          { "id": "mistral", "name": "Mistral 7B", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 32768, "maxTokens": 4096 },
+          { "id": "codellama", "name": "Code Llama 13B", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 16384, "maxTokens": 4096 },
+          { "id": "llama3.1", "name": "Llama 3.1", "reasoning": true, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 },
+          { "id": "qwen2.5", "name": "Qwen 2.5", "reasoning": true, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 }
         ]
       }
     }
@@ -200,19 +200,21 @@
   // ---------------------------------------------------------------------------
   // MULTI-AGENT ROUTING
   // ---------------------------------------------------------------------------
+  // Bindings route Slack messages to agents. Remove this section if Slack is
+  // not used — agents will still operate via REST API and heartbeats.
   "bindings": [
     {
       "agentId": "wazuh-triage",
       "match": {
         "channel": "slack",
-        "peer": { "kind": "group" }
+        "peer": { "kind": "group", "id": "*" }
       }
     },
     {
       "agentId": "wazuh-responder",
       "match": {
         "channel": "slack",
-        "peer": { "id": "approvals" }
+        "peer": { "kind": "group", "id": "approvals" }
       }
     }
   ],

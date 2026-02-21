@@ -827,11 +827,11 @@ deploy_agents() {
   "bindings": [
     {
       "agentId": "wazuh-triage",
-      "match": {"channel": "slack", "peer": {"kind": "group"}}
+      "match": {"channel": "slack", "peer": {"kind": "group", "id": "*"}}
     },
     {
       "agentId": "wazuh-responder",
-      "match": {"channel": "slack", "peer": {"id": "approvals"}}
+      "match": {"channel": "slack", "peer": {"kind": "group", "id": "approvals"}}
     }
   ],
 

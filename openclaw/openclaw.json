@@ -214,19 +214,21 @@
   // ---------------------------------------------------------------------------
   // MULTI-AGENT ROUTING
   // ---------------------------------------------------------------------------
+  // Bindings route Slack messages to agents. Remove this section if Slack is
+  // not used — agents will still operate via REST API and heartbeats.
   "bindings": [
     {
       "agentId": "wazuh-triage",
       "match": {
         "channel": "slack",
-        "peer": { "kind": "group" }
+        "peer": { "kind": "group", "id": "*" }
       }
     },
     {
       "agentId": "wazuh-responder",
       "match": {
         "channel": "slack",
-        "peer": { "id": "approvals" }
+        "peer": { "kind": "group", "id": "approvals" }
       }
     }
   ],
