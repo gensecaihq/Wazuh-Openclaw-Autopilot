@@ -71,15 +71,16 @@ Every plan must include: `case_id`, `title`, `description`, `risk_level`, and `a
 | Action | Wazuh Command | Target | Reversible | Duration |
 |--------|--------------|--------|------------|----------|
 | block_ip | firewall-drop | IP | Yes | 24 hours |
-| host_deny | host-deny | IP | Yes | 24 hours |
+| quarantine_file | quarantine-file | File | Yes | - |
 
 ### Medium Risk Actions
 
 | Action | Wazuh Command | Target | Reversible |
 |--------|--------------|--------|------------|
+| firewall_drop | firewall-drop | IP | Yes |
+| host_deny | host-deny | IP | Yes |
 | isolate_host | isolate-endpoint | Host | Yes |
 | kill_process | kill-process | Process | No |
-| quarantine_file | quarantine-file | File | Yes |
 
 ### High Risk Actions
 
@@ -154,7 +155,6 @@ Every plan must include: `case_id`, `title`, `description`, `risk_level`, and `a
 - evidence_collection BEFORE eradication
 - containment BEFORE eradication
 - host_isolation BEFORE process_kill
-- credential_reset AFTER user_disable
 
 ## Plan Expiration
 

@@ -40,18 +40,18 @@ On any error, DEFAULT TO DENY. Never allow actions when validation state is unce
 
 ### Low Risk (Standard Approver)
 
-Actions: firewall-drop, host-deny
-Characteristics: Reversible, single IP blast radius, no service impact
+Actions: block_ip, quarantine_file
+Characteristics: Reversible, single IP/file blast radius, no service impact
 Default duration: 24 hours
 
 ### Medium Risk (Elevated Approver)
 
-Actions: isolate_host, kill_process, quarantine_file
+Actions: firewall_drop, host_deny, isolate_host, kill_process
 Characteristics: Varies on reversibility, single host blast radius, possible service impact
 
 ### High Risk (Admin Approver)
 
-Actions: disable_user
+Actions: disable_user, active_response
 Characteristics: Reversible, user/host blast radius, definite service impact
 
 ### Critical Risk (Executive + Dual Approval)
