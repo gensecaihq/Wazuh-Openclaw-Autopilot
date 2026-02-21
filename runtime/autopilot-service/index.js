@@ -142,16 +142,26 @@ function incrementMetric(name, labels = {}) {
   } else {
     const key = JSON.stringify(labels);
     if (!metrics[name]) metrics[name] = {};
+    // Cap unique label combinations to prevent unbounded memory growth
+    if (!(key in metrics[name]) && Object.keys(metrics[name]).length >= MAX_METRIC_KEYS) {
+      return; // Silently drop — metric cardinality limit reached
+    }
     metrics[name][key] = (metrics[name][key] || 0) + 1;
   }
 }
 
 // Maximum samples to retain per metric key (prevents memory leak)
 const MAX_LATENCY_SAMPLES = 1000;
+// Maximum unique label combinations per metric (prevents OOM from dynamic labels)
+const MAX_METRIC_KEYS = 200;
 
 function recordLatency(name, seconds, labels = {}) {
   const key = Object.keys(labels).length > 0 ? JSON.stringify(labels) : "default";
   if (!metrics[name]) metrics[name] = {};
+  // Cap unique label combinations to prevent unbounded memory growth
+  if (!(key in metrics[name]) && Object.keys(metrics[name]).length >= MAX_METRIC_KEYS) {
+    return; // Silently drop — metric cardinality limit reached
+  }
   if (!metrics[name][key]) metrics[name][key] = [];
 
   // Prevent unbounded array growth - keep only recent samples
@@ -509,6 +519,9 @@ function consumeApprovalToken(token, approverId, decision, reason = "") {
   const tokenData = approvalTokens.get(token);
   if (!tokenData) return null;
 
+  // Prevent double-use: check before setting (atomic in single-threaded Node.js)
+  if (tokenData.used) return null;
+
   tokenData.used = true;
   tokenData.approver_id = approverId;
   tokenData.decision = decision;
@@ -743,7 +756,10 @@ function rejectPlan(planId, rejectorId, reason = "") {
   // Bug #4 fix: Don't auto-update expiry in getPlan
   const plan = getPlan(planId, { updateExpiry: false });
 
-  // Can reject from proposed or approved state
+  // Can reject from proposed or approved state (but not if currently executing)
+  if (executingPlans.has(planId)) {
+    throw new Error("Cannot reject plan that is currently executing");
+  }
   if (!["proposed", "approved"].includes(plan.state)) {
     throw new Error(`Cannot reject plan in state: ${plan.state}`);
   }
@@ -1449,8 +1465,14 @@ function validateAuthorization(req, requiredScope = "write") {
 
   const token = authHeader.substring(7);
 
+  // Reject empty or too-short tokens before comparison
+  if (!token || token.length < 8) {
+    recordAuthFailure(clientIp);
+    return { valid: false, reason: "Invalid token" };
+  }
+
   // Validate against configured MCP auth token using timing-safe comparison
-  if (config.mcpAuth && secureCompare(token, config.mcpAuth)) {
+  if (config.mcpAuth && config.mcpAuth.length >= 8 && secureCompare(token, config.mcpAuth)) {
     clearAuthFailures(clientIp); // Clear on success
     return { valid: true, source: "api_token", scope: "write" };
   }
@@ -1458,7 +1480,7 @@ function validateAuthorization(req, requiredScope = "write") {
   // Also check for internal service token (environment variable)
   // Service tokens have read-only scope; MCP auth tokens have full write access
   const serviceToken = process.env.AUTOPILOT_SERVICE_TOKEN;
-  if (serviceToken && secureCompare(token, serviceToken)) {
+  if (serviceToken && serviceToken.length >= 8 && secureCompare(token, serviceToken)) {
     clearAuthFailures(clientIp); // Clear on success
     const tokenScope = "read";
     if (requiredScope === "write" && tokenScope !== "write") {

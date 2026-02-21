@@ -102,6 +102,12 @@ describe("isValidSlackUserId", () => {
     assert.equal(isValidSlackUserId("u12345abc"), false);
   });
 
+  it("returns false for too-short ID (less than 9 chars)", () => {
+    assert.equal(isValidSlackUserId("U1"), false);
+    assert.equal(isValidSlackUserId("UA"), false);
+    assert.equal(isValidSlackUserId("U1234"), false);
+  });
+
   it("returns false for number input", () => {
     assert.equal(isValidSlackUserId(12345), false);
   });
@@ -251,16 +257,35 @@ describe("getApprovedPlanBlocks", () => {
 
 describe("getExecutingPlanBlocks", () => {
   it("contains plan ID and executor mention", () => {
-    const blocks = getExecutingPlanBlocks("plan-100", "U99999ZZZ");
-    const sectionBlock = blocks.find((b) => b.type === "section");
-    assert.ok(sectionBlock.text.text.includes("plan-100"));
-    assert.ok(sectionBlock.text.text.includes("<@U99999ZZZ>"));
+    const blocks = getExecutingPlanBlocks("plan-100", "U99999ZZZZ", []);
+    const sectionBlock = blocks.find((b) => b.type === "section" && b.text.text.includes("plan-100"));
+    assert.ok(sectionBlock);
+    assert.ok(sectionBlock.text.text.includes("<@U99999ZZZZ>"));
   });
 
   it("has Executing header", () => {
-    const blocks = getExecutingPlanBlocks("plan-100", "U99999ZZZ");
+    const blocks = getExecutingPlanBlocks("plan-100", "U99999ZZZZ", []);
     const header = blocks.find((b) => b.type === "header");
     assert.ok(header.text.text.includes("Executing"));
+  });
+
+  it("includes action context when actions provided", () => {
+    const actions = [
+      { type: "block_ip", target: "10.0.0.1" },
+      { type: "isolate_host", target: "srv-web-01" },
+    ];
+    const blocks = getExecutingPlanBlocks("plan-100", "U99999ZZZZ", actions);
+    const actionBlock = blocks.find((b) => b.type === "section" && b.text.text.includes("Actions"));
+    assert.ok(actionBlock);
+    assert.ok(actionBlock.text.text.includes("block_ip"));
+    assert.ok(actionBlock.text.text.includes("isolate_host"));
+    assert.ok(actionBlock.text.text.includes("10.0.0.1"));
+  });
+
+  it("works without actions (backward compatible)", () => {
+    const blocks = getExecutingPlanBlocks("plan-100", "U99999ZZZZ");
+    assert.ok(Array.isArray(blocks));
+    assert.ok(blocks.length >= 2);
   });
 });
 

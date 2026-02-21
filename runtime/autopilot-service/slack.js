@@ -16,9 +16,9 @@ const crypto = require("crypto");
 // HELPERS
 // =============================================================================
 
-// Validate Slack user ID format (U or W prefix followed by alphanumeric)
+// Validate Slack user ID format (U or W prefix followed by 8+ alphanumeric chars)
 function isValidSlackUserId(id) {
-  return typeof id === "string" && /^[UW][A-Z0-9]+$/.test(id);
+  return typeof id === "string" && /^[UW][A-Z0-9]{8,}$/.test(id);
 }
 
 // Escape Slack mrkdwn special characters in user-controlled text
@@ -309,11 +309,15 @@ function registerInteractiveButtons(runtime) {
     }
 
     try {
-      // Show executing status
+      // Get plan details to show action context during execution
+      const planDetails = runtime.getPlan(planId);
+      const planActions = planDetails ? planDetails.actions : [];
+
+      // Show executing status with action context
       await client.chat.update({
         channel: body.channel.id,
         ts: body.message.ts,
-        blocks: getExecutingPlanBlocks(planId, userId),
+        blocks: getExecutingPlanBlocks(planId, userId, planActions),
         text: `Plan ${planId} executing...`,
       });
 
@@ -549,8 +553,8 @@ function getApprovedPlanBlocks(plan, approverId) {
   ];
 }
 
-function getExecutingPlanBlocks(planId, executorId) {
-  return [
+function getExecutingPlanBlocks(planId, executorId, actions) {
+  const blocks = [
     {
       type: "header",
       text: { type: "plain_text", text: "Executing Plan..." },
@@ -559,13 +563,28 @@ function getExecutingPlanBlocks(planId, executorId) {
       type: "section",
       text: { type: "mrkdwn", text: `Plan \`${planId}\` is being executed by <@${executorId}>...` },
     },
-    {
-      type: "context",
-      elements: [
-        { type: "mrkdwn", text: "Please wait while actions are being executed." },
-      ],
-    },
   ];
+
+  // Preserve action context so the user can see what's being executed
+  if (Array.isArray(actions) && actions.length > 0) {
+    const actionList = actions
+      .map((a) => `:hourglass_flowing_sand: \`${a.type}\` → ${a.target}`)
+      .slice(0, 20) // Cap display at 20 actions
+      .join("\n");
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: `*Actions (${actions.length}):*\n${actionList}` },
+    });
+  }
+
+  blocks.push({
+    type: "context",
+    elements: [
+      { type: "mrkdwn", text: "Please wait while actions are being executed." },
+    ],
+  });
+
+  return blocks;
 }
 
 function getExecutedPlanBlocks(plan, executorId) {

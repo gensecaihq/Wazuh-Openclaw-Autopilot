@@ -537,7 +537,7 @@ setup_credentials() {
     # Generate all secrets
     local MCP_AUTH_TOKEN OPENCLAW_TOKEN PAIRING_SECRET APPROVAL_SECRET
 
-    MCP_AUTH_TOKEN=$(generate_secret 32)
+    MCP_AUTH_TOKEN="wazuh_$(generate_secret 32)"
     OPENCLAW_TOKEN=$(generate_secret 32)
     PAIRING_SECRET=$(generate_secret 16)
     APPROVAL_SECRET=$(generate_secret 32)
@@ -616,7 +616,7 @@ ${_ts_requires}
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$MCP_SERVER_DIR
+WorkingDirectory=$MCP_SERVER_DIR/src
 ExecStart=$MCP_SERVER_DIR/.venv/bin/python -m wazuh_mcp_server
 Restart=always
 RestartSec=10
@@ -691,7 +691,7 @@ deploy_agents() {
     "bind": "loopback",
     "auth": {
       "mode": "token",
-      "token": "\${OPENCLAW_TOKEN}"
+      "token": "$OPENCLAW_TOKEN"
     }
   },
 
@@ -817,8 +817,8 @@ deploy_agents() {
   "channels": {
     "slack": {
       "enabled": true,
-      "botToken": "\${SLACK_BOT_TOKEN}",
-      "appToken": "\${SLACK_APP_TOKEN}",
+      "botToken": "__SLACK_BOT_TOKEN__",
+      "appToken": "__SLACK_APP_TOKEN__",
       "dmPolicy": "allowlist",
       "allowFrom": [],
       "groupPolicy": "allowlist"
@@ -853,7 +853,7 @@ deploy_agents() {
 
   "hooks": {
     "enabled": true,
-    "token": "\${OPENCLAW_TOKEN}",
+    "token": "$OPENCLAW_TOKEN",
     "mappings": [
       {"match": {"path": "/webhook/wazuh-alert"}, "action": "agent", "agentId": "wazuh-triage"},
       {"match": {"path": "/webhook/case-created"}, "action": "agent", "agentId": "wazuh-correlation"},
@@ -865,10 +865,9 @@ deploy_agents() {
   },
 
   "env": {
-    "ANTHROPIC_API_KEY": "\${ANTHROPIC_API_KEY}",
-    "OPENAI_API_KEY": "\${OPENAI_API_KEY}",
-    "WAZUH_MCP_URL": "\${MCP_URL}",
-    "WAZUH_MCP_TOKEN": "\${AUTOPILOT_MCP_AUTH}"
+    "ANTHROPIC_API_KEY": "__ANTHROPIC_API_KEY__",
+    "WAZUH_MCP_URL": "__WAZUH_MCP_URL__",
+    "WAZUH_MCP_TOKEN": "__MCP_AUTH_TOKEN__"
   }
 }
 EOF
@@ -1017,6 +1016,31 @@ configure_system() {
         exit 1
     fi
 
+    # Validate Wazuh API connectivity
+    log_info "Testing Wazuh API connectivity..."
+    local _wazuh_test_response
+    _wazuh_test_response=$(curl -sk -o /dev/null -w "%{http_code}" \
+        -u "$WAZUH_USER:$WAZUH_PASS" \
+        "$WAZUH_API_URL/security/user/authenticate" 2>/dev/null || echo "000")
+    if [[ "$_wazuh_test_response" == "000" ]]; then
+        log_warn "Cannot reach Wazuh API at $WAZUH_API_URL — verify URL and that Wazuh is running"
+        if ! confirm "  Continue anyway?" "n"; then
+            exit 1
+        fi
+    elif [[ "$_wazuh_test_response" == "401" ]]; then
+        log_error "Wazuh API authentication failed (HTTP 401) — check username/password"
+        if ! confirm "  Continue anyway?" "n"; then
+            exit 1
+        fi
+    elif [[ "$_wazuh_test_response" =~ ^2 ]]; then
+        log_success "Wazuh API connection verified (HTTP $_wazuh_test_response)"
+    else
+        log_warn "Wazuh API returned HTTP $_wazuh_test_response — may indicate a configuration issue"
+        if ! confirm "  Continue anyway?" "n"; then
+            exit 1
+        fi
+    fi
+
     echo ""
     echo -e "${CYAN}${BOLD}API Keys Configuration${NC}"
     echo ""
@@ -1027,6 +1051,15 @@ configure_system() {
     local ANTHROPIC_API_KEY
     read -rsp "  Anthropic API Key (sk-ant-...): " ANTHROPIC_API_KEY
     echo ""
+
+    # Validate API key format
+    if [[ -n "$ANTHROPIC_API_KEY" && ! "$ANTHROPIC_API_KEY" =~ ^sk-ant- ]]; then
+        log_warn "Anthropic API key doesn't start with 'sk-ant-' — please verify it's correct"
+    fi
+    if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+        log_error "Anthropic API key is required for the AI agents"
+        exit 1
+    fi
 
     echo ""
     echo -e "${CYAN}${BOLD}Slack Integration (Optional)${NC}"
@@ -1048,6 +1081,17 @@ configure_system() {
         read -rp "  Slack Bot Token (xoxb-...): " SLACK_BOT_TOKEN
         read -rp "  Alerts Channel ID (C...): " SLACK_ALERTS_CHANNEL
         read -rp "  Approvals Channel ID (C...): " SLACK_APPROVALS_CHANNEL
+
+        # Validate Slack token formats
+        if [[ -n "$SLACK_APP_TOKEN" && ! "$SLACK_APP_TOKEN" =~ ^xapp- ]]; then
+            log_warn "Slack App Token doesn't start with 'xapp-' — please verify it's correct"
+        fi
+        if [[ -n "$SLACK_BOT_TOKEN" && ! "$SLACK_BOT_TOKEN" =~ ^xoxb- ]]; then
+            log_warn "Slack Bot Token doesn't start with 'xoxb-' — please verify it's correct"
+        fi
+        if [[ -n "$SLACK_ALERTS_CHANNEL" && ! "$SLACK_ALERTS_CHANNEL" =~ ^C ]]; then
+            log_warn "Slack channel ID should start with 'C' — please verify it's correct"
+        fi
     fi
 
     # Create configuration file
@@ -1160,6 +1204,24 @@ ENVEOF
     awk -v val="$SLACK_APPROVALS_CHANNEL" '{gsub(/__SLACK_APPROVALS_CHANNEL__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
 
     chmod 600 "$CONFIG_DIR/.env"
+
+    # Substitute placeholders in openclaw.json (generated earlier with placeholder values)
+    local _ocjson="$HOME/.openclaw/openclaw.json"
+    if [[ -f "$_ocjson" ]]; then
+        local _tmpoc
+        _tmpoc=$(mktemp "${_ocjson}.XXXXXX")
+        awk -v val="$ANTHROPIC_API_KEY" '{gsub(/__ANTHROPIC_API_KEY__/, val)}1' "$_ocjson" > "$_tmpoc" && mv "$_tmpoc" "$_ocjson"
+        _tmpoc=$(mktemp "${_ocjson}.XXXXXX")
+        awk -v val="http://$TAILSCALE_IP:$MCP_PORT" '{gsub(/__WAZUH_MCP_URL__/, val)}1' "$_ocjson" > "$_tmpoc" && mv "$_tmpoc" "$_ocjson"
+        _tmpoc=$(mktemp "${_ocjson}.XXXXXX")
+        awk -v val="$MCP_AUTH_TOKEN" '{gsub(/__MCP_AUTH_TOKEN__/, val)}1' "$_ocjson" > "$_tmpoc" && mv "$_tmpoc" "$_ocjson"
+        _tmpoc=$(mktemp "${_ocjson}.XXXXXX")
+        awk -v val="$SLACK_BOT_TOKEN" '{gsub(/__SLACK_BOT_TOKEN__/, val)}1' "$_ocjson" > "$_tmpoc" && mv "$_tmpoc" "$_ocjson"
+        _tmpoc=$(mktemp "${_ocjson}.XXXXXX")
+        awk -v val="$SLACK_APP_TOKEN" '{gsub(/__SLACK_APP_TOKEN__/, val)}1' "$_ocjson" > "$_tmpoc" && mv "$_tmpoc" "$_ocjson"
+        chmod 600 "$_ocjson"
+        log_success "OpenClaw config updated with credentials"
+    fi
 
     # Copy policies
     if [[ -d "$PROJECT_ROOT/policies" ]]; then
@@ -1632,6 +1694,22 @@ print_summary() {
 
 main() {
     parse_args "$@"
+
+    # Cleanup handler: remove orphaned temp files containing secrets on failure
+    trap '_cleanup_on_exit' EXIT INT TERM
+    _cleanup_on_exit() {
+        local _exit_code=$?
+        # Remove any orphaned .env temp files (pattern: .env.XXXXXX)
+        if [[ -n "${CONFIG_DIR:-}" ]]; then
+            rm -f "${CONFIG_DIR}/.env."?????? 2>/dev/null || true
+        fi
+        if [[ $_exit_code -ne 0 ]]; then
+            echo ""
+            echo -e "${RED}Installation failed (exit code $_exit_code). Partial state may remain.${NC}"
+            echo -e "${YELLOW}To clean up: sudo bash $0 --uninstall${NC}"
+        fi
+        exit "$_exit_code"
+    }
 
     show_security_banner
 

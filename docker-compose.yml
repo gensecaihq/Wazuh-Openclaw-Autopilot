@@ -36,7 +36,14 @@ services:
 
       # MCP Configuration
       - MCP_URL=${MCP_URL}
+      - MCP_BOOTSTRAP_URL=${MCP_BOOTSTRAP_URL:-}
       - AUTOPILOT_MCP_AUTH=${AUTOPILOT_MCP_AUTH}
+      - MCP_TIMEOUT_MS=${MCP_TIMEOUT_MS:-30000}
+      - MCP_MAX_RETRIES=${MCP_MAX_RETRIES:-2}
+      - MCP_RETRY_BASE_MS=${MCP_RETRY_BASE_MS:-1000}
+
+      # Execution limits
+      - MAX_CONCURRENT_EXECUTIONS=${MAX_CONCURRENT_EXECUTIONS:-5}
 
       # Metrics (0.0.0.0 required inside container for Docker port forwarding;
       # host access restricted to localhost via ports mapping above)
