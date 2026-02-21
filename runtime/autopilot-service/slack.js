@@ -325,12 +325,16 @@ function registerInteractiveButtons(runtime) {
 
       // Update the original message (only if we have channel context)
       if (payload.channelId && payload.messageTs) {
-        await client.chat.update({
-          channel: payload.channelId,
-          ts: payload.messageTs,
-          blocks: getApprovedPlanBlocks(plan, payload.userId),
-          text: `Plan ${payload.planId} approved by <@${payload.userId}>`,
-        });
+        try {
+          await client.chat.update({
+            channel: payload.channelId,
+            ts: payload.messageTs,
+            blocks: getApprovedPlanBlocks(plan, payload.userId),
+            text: `Plan ${payload.planId} approved by <@${payload.userId}>`,
+          });
+        } catch (updateErr) {
+          log("warn", "button", "Failed to update message after approval", { error: updateErr.message });
+        }
       }
 
       // Post notification
@@ -357,28 +361,60 @@ function registerInteractiveButtons(runtime) {
     try {
       // Get plan details to show action context during execution
       const planDetails = runtime.getPlan(payload.planId);
-      const planActions = planDetails ? planDetails.actions : [];
+      const planActions = planDetails && Array.isArray(planDetails.actions) ? planDetails.actions : [];
 
       // Show executing status with action context (only if we have channel context)
       if (payload.channelId && payload.messageTs) {
-        await client.chat.update({
-          channel: payload.channelId,
-          ts: payload.messageTs,
-          blocks: getExecutingPlanBlocks(payload.planId, payload.userId, planActions),
-          text: `Plan ${payload.planId} executing...`,
-        });
+        try {
+          await client.chat.update({
+            channel: payload.channelId,
+            ts: payload.messageTs,
+            blocks: getExecutingPlanBlocks(payload.planId, payload.userId, planActions),
+            text: `Plan ${payload.planId} executing...`,
+          });
+        } catch (updateErr) {
+          log("warn", "button", "Failed to update message to executing state", { error: updateErr.message });
+        }
       }
 
-      const plan = await runtime.executePlan(payload.planId, payload.userId);
+      let plan;
+      try {
+        plan = await runtime.executePlan(payload.planId, payload.userId);
+      } catch (execErr) {
+        // Execution failed — update message to show failure instead of leaving "Executing" stuck
+        if (payload.channelId && payload.messageTs) {
+          try {
+            await client.chat.update({
+              channel: payload.channelId,
+              ts: payload.messageTs,
+              blocks: [{
+                type: "header",
+                text: { type: "plain_text", text: ":x: Plan Execution Failed" },
+              }, {
+                type: "section",
+                text: { type: "mrkdwn", text: `Plan \`${payload.planId}\` failed: ${escapeMrkdwn(safeErrorMessage(execErr))}` },
+              }],
+              text: `Plan ${payload.planId} execution failed`,
+            });
+          } catch (msgErr) {
+            log("warn", "button", "Failed to update message after execution failure", { error: msgErr.message });
+          }
+        }
+        throw execErr;
+      }
 
       // Update with result
       if (payload.channelId && payload.messageTs) {
-        await client.chat.update({
-          channel: payload.channelId,
-          ts: payload.messageTs,
-          blocks: getExecutedPlanBlocks(plan, payload.userId),
-          text: `Plan ${payload.planId} executed by <@${payload.userId}>`,
-        });
+        try {
+          await client.chat.update({
+            channel: payload.channelId,
+            ts: payload.messageTs,
+            blocks: getExecutedPlanBlocks(plan, payload.userId),
+            text: `Plan ${payload.planId} executed by <@${payload.userId}>`,
+          });
+        } catch (updateErr) {
+          log("warn", "button", "Failed to update message with execution result", { error: updateErr.message });
+        }
       }
 
       // Post notification
@@ -386,10 +422,11 @@ function registerInteractiveButtons(runtime) {
         await postExecutionNotification(client, plan, payload.userId);
       }
 
+      const execResult = plan.execution_result || {};
       log("info", "button", "Plan executed via button", {
         plan_id: payload.planId,
         user_id: payload.userId,
-        success: plan.execution_result.success,
+        success: execResult.success,
       });
     } catch (err) {
       await respond({ text: `Error: ${safeErrorMessage(err)}`, response_type: "ephemeral" });
@@ -410,12 +447,16 @@ function registerInteractiveButtons(runtime) {
       const plan = runtime.rejectPlan(payload.planId, payload.userId, "Rejected via Slack button");
 
       if (payload.channelId && payload.messageTs) {
-        await client.chat.update({
-          channel: payload.channelId,
-          ts: payload.messageTs,
-          blocks: getRejectedPlanBlocks(plan, payload.userId),
-          text: `Plan ${payload.planId} rejected by <@${payload.userId}>`,
-        });
+        try {
+          await client.chat.update({
+            channel: payload.channelId,
+            ts: payload.messageTs,
+            blocks: getRejectedPlanBlocks(plan, payload.userId),
+            text: `Plan ${payload.planId} rejected by <@${payload.userId}>`,
+          });
+        } catch (updateErr) {
+          log("warn", "button", "Failed to update message after rejection", { error: updateErr.message });
+        }
       }
 
       log("info", "button", "Plan rejected via button", { plan_id: payload.planId, user_id: payload.userId });
@@ -516,7 +557,8 @@ function formatPlansMessage(plans, state) {
  * Generate Slack blocks for a new plan requiring approval
  */
 function getProposedPlanBlocks(plan) {
-  const actionsText = truncateActionsText(plan.actions, (a) => `• ${escapeMrkdwn(a.type)}: ${escapeMrkdwn(a.target)}`);
+  const actions = Array.isArray(plan.actions) ? plan.actions : [];
+  const actionsText = truncateActionsText(actions, (a) => `• ${escapeMrkdwn(a.type)}: ${escapeMrkdwn(a.target)}`);
 
   return [
     {
@@ -529,7 +571,7 @@ function getProposedPlanBlocks(plan) {
         { type: "mrkdwn", text: `*Plan ID:*\n\`${plan.plan_id}\`` },
         { type: "mrkdwn", text: `*Case:*\n${escapeMrkdwn(plan.case_id)}` },
         { type: "mrkdwn", text: `*Risk Level:*\n${(plan.risk_level || "unknown").toUpperCase()}` },
-        { type: "mrkdwn", text: `*Actions:*\n${plan.actions.length}` },
+        { type: "mrkdwn", text: `*Actions:*\n${actions.length}` },
       ],
     },
     {
@@ -569,7 +611,8 @@ function getProposedPlanBlocks(plan) {
 }
 
 function getApprovedPlanBlocks(plan, approverId) {
-  const actionsText = truncateActionsText(plan.actions, (a) => `• ${escapeMrkdwn(a.type)}: ${escapeMrkdwn(a.target)}`);
+  const actions = Array.isArray(plan.actions) ? plan.actions : [];
+  const actionsText = truncateActionsText(actions, (a) => `• ${escapeMrkdwn(a.type)}: ${escapeMrkdwn(a.target)}`);
 
   return [
     {
@@ -606,7 +649,7 @@ function getApprovedPlanBlocks(plan, approverId) {
           value: plan.plan_id,
           confirm: {
             title: { type: "plain_text", text: "Confirm Execution" },
-            text: { type: "mrkdwn", text: `This will execute ${plan.actions.length} response action(s). This action cannot be undone.` },
+            text: { type: "mrkdwn", text: `This will execute ${actions.length} response action(s). This action cannot be undone.` },
             confirm: { type: "plain_text", text: "Execute" },
             deny: { type: "plain_text", text: "Cancel" },
           },
@@ -768,7 +811,7 @@ async function postApprovalNotification(client, plan, userId, action) {
 async function postExecutionNotification(client, plan, userId) {
   if (!config.approvalsChannel) return;
 
-  const result = plan.execution_result;
+  const result = plan.execution_result || {};
   const emoji = result.success ? ":rocket:" : ":warning:";
   const status = result.success ? "completed successfully" : "completed with failures";
 
@@ -783,7 +826,7 @@ async function postExecutionNotification(client, plan, userId) {
             text: `${emoji} *Plan Executed*\n` +
               `Plan \`${plan.plan_id}\` ${status}\n` +
               `Executed by <@${userId}>\n` +
-              `Result: ${result.actions_success}/${result.actions_total} actions succeeded`,
+              `Result: ${result.actions_success || 0}/${result.actions_total || 0} actions succeeded`,
           },
         },
       ],

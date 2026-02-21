@@ -992,7 +992,13 @@ install_runtime_service() {
 
     cd "$RUNTIME_DST"
     log_info "Installing dependencies..."
-    npm install --production 2>/dev/null || npm install
+    if ! npm install --production 2>&1; then
+        log_warn "npm install --production failed, retrying without --production flag..."
+        if ! npm install 2>&1; then
+            log_error "npm install failed — runtime service dependencies not installed"
+            exit 1
+        fi
+    fi
 
     # Create systemd service with security hardening
     cat > /etc/systemd/system/wazuh-autopilot.service << EOF
@@ -1082,8 +1088,7 @@ configure_system() {
     log_info "Testing Wazuh API connectivity..."
     local _wazuh_test_response
     local _curl_netrc
-    _curl_netrc=$(mktemp)
-    chmod 600 "$_curl_netrc"
+    _curl_netrc=$(umask 0077; mktemp)
     printf 'machine %s\nlogin %s\npassword %s\n' "$WAZUH_HOST" "$WAZUH_USER" "$WAZUH_PASS" > "$_curl_netrc"
     _wazuh_test_response=$(curl -sk -o /dev/null -w "%{http_code}" \
         --netrc-file "$_curl_netrc" \

@@ -1466,6 +1466,7 @@ function sendAuthError(res, authResult, requestId) {
 
 // Standard JSON error response helper (consistent format with request_id)
 function sendJsonError(res, statusCode, error, requestId) {
+  if (res.headersSent) return;
   res.writeHead(statusCode, { "Content-Type": JSON_CONTENT_TYPE });
   res.end(JSON.stringify({ error, request_id: requestId }));
 }
@@ -1885,11 +1886,15 @@ function createServer() {
 
         // Extract IPs
         const ipFields = ["srcip", "dstip", "src_ip", "dst_ip"];
-        // Bug #9 fix: Proper IPv4 validation (each octet 0-255)
+        // Bug #9 fix: Proper IPv4 validation (each octet 0-255, no leading zeros)
         const isValidIPv4 = (ip) => {
           if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) return false;
-          const octets = ip.split(".").map(Number);
-          return octets.every(o => o >= 0 && o <= 255);
+          const octets = ip.split(".");
+          return octets.every(o => {
+            if (o.length > 1 && o[0] === "0") return false;
+            const n = Number(o);
+            return n >= 0 && n <= 255;
+          });
         };
         for (const field of ipFields) {
           const ip = alert.data?.[field] || alert[field];
