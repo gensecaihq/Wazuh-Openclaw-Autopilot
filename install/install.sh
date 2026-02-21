@@ -341,8 +341,9 @@ install_dependencies() {
     local py_ver
     py_ver=$(python3 -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo "0")
     if [[ "$py_ver" -lt 11 ]]; then
-        log_warn "Python 3.11+ recommended for Wazuh MCP Server. Found: $(python3 --version)"
-        log_warn "MCP Server may still work but is untested on older versions"
+        log_error "Python 3.11+ required for Wazuh MCP Server. Found: $(python3 --version)"
+        log_error "Install Python 3.11+: https://www.python.org/downloads/"
+        exit 1
     else
         log_success "Python $(python3 --version 2>&1 | awk '{print $2}')"
     fi

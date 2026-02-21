@@ -569,11 +569,11 @@ function getExecutingPlanBlocks(planId, executorId) {
 }
 
 function getExecutedPlanBlocks(plan, executorId) {
-  const result = plan.execution_result;
+  const result = plan.execution_result || {};
   const statusEmoji = result.success ? ":white_check_mark:" : ":warning:";
   const statusText = result.success ? "All Actions Completed Successfully" : "Execution Completed with Failures";
 
-  const resultsText = result.results.map((r) => {
+  const resultsText = (result.results || []).map((r) => {
     const emoji = r.status === "success" ? ":white_check_mark:" : ":x:";
     return `${emoji} ${r.action_type}: ${r.target} - ${r.status}`;
   }).join("\n");
@@ -589,7 +589,7 @@ function getExecutedPlanBlocks(plan, executorId) {
         { type: "mrkdwn", text: `*Plan ID:*\n\`${plan.plan_id}\`` },
         { type: "mrkdwn", text: `*Case:*\n${plan.case_id}` },
         { type: "mrkdwn", text: `*Executed by:*\n<@${executorId}>` },
-        { type: "mrkdwn", text: `*Result:*\n${result.actions_success}/${result.actions_total} succeeded` },
+        { type: "mrkdwn", text: `*Result:*\n${result.actions_success || 0}/${result.actions_total || 0} succeeded` },
       ],
     },
     {

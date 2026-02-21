@@ -57,14 +57,18 @@ const config = {
   authFailureWindowMs: parseInt(process.env.AUTH_FAILURE_WINDOW_MS || "900000", 10), // 15 minutes
   authFailureMaxAttempts: parseInt(process.env.AUTH_FAILURE_MAX_ATTEMPTS || "5", 10),
   authLockoutDurationMs: parseInt(process.env.AUTH_LOCKOUT_DURATION_MS || "1800000", 10), // 30 minutes
-  // MCP timeout
+  // MCP timeout and retry
   mcpTimeoutMs: parseInt(process.env.MCP_TIMEOUT_MS || "30000", 10),
+  mcpMaxRetries: parseInt(process.env.MCP_MAX_RETRIES || "2", 10),
+  mcpRetryBaseMs: parseInt(process.env.MCP_RETRY_BASE_MS || "1000", 10),
   // Responder capability toggle - DISABLED by default
   // When enabled, humans can execute approved plans via the two-tier approval workflow
   // This does NOT enable autonomous execution - human approval is ALWAYS required
   responderEnabled: process.env.AUTOPILOT_RESPONDER_ENABLED === "true",
   // Plan expiry
   planExpiryMinutes: parseInt(process.env.PLAN_EXPIRY_MINUTES || "60", 10),
+  // Maximum concurrent plan executions
+  maxConcurrentExecutions: parseInt(process.env.MAX_CONCURRENT_EXECUTIONS || "5", 10),
   // CORS configuration (Issue #7 fix)
   corsOrigin: process.env.CORS_ORIGIN || "http://localhost:3000",
   corsEnabled: process.env.CORS_ENABLED !== "false",
@@ -234,6 +238,9 @@ async function ensureDir(dirPath) {
 }
 
 async function createCase(caseId, data) {
+  if (!isValidCaseId(caseId)) {
+    throw new Error(`Invalid case ID: ${caseId}`);
+  }
   const caseDir = path.join(config.dataDir, "cases", caseId);
   await ensureDir(caseDir);
 
@@ -299,6 +306,9 @@ async function createCase(caseId, data) {
 }
 
 async function updateCase(caseId, updates) {
+  if (!isValidCaseId(caseId)) {
+    throw new Error(`Invalid case ID: ${caseId}`);
+  }
   const caseDir = path.join(config.dataDir, "cases", caseId);
   const packPath = path.join(caseDir, "evidence-pack.json");
 
@@ -374,6 +384,9 @@ async function updateCase(caseId, updates) {
 }
 
 async function getCase(caseId) {
+  if (!isValidCaseId(caseId)) {
+    throw new Error(`Invalid case ID: ${caseId}`);
+  }
   const packPath = path.join(
     config.dataDir,
     "cases",
@@ -795,6 +808,12 @@ async function executePlan(planId, executorId) {
   if (executingPlans.has(planId)) {
     throw new Error("Plan is already being executed");
   }
+
+  // Enforce concurrent execution limit
+  if (executingPlans.size >= config.maxConcurrentExecutions) {
+    throw new Error(`Concurrent execution limit reached (${config.maxConcurrentExecutions} plans executing)`);
+  }
+
   executingPlans.add(planId);
 
   const now = new Date(nowTs).toISOString();
@@ -1119,77 +1138,114 @@ async function callMcpTool(toolName, params, correlationId) {
     .digest("hex")
     .substring(0, 16);
 
-  try {
-    // Create abort controller for timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), config.mcpTimeoutMs);
+  let lastError;
 
-    const response = await fetch(`${config.mcpUrl}/tools/${mcpToolName}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": JSON_CONTENT_TYPE,
-        ...(config.mcpAuth && { Authorization: `Bearer ${config.mcpAuth}` }),
-        ...(correlationId && { "X-Correlation-ID": correlationId }),
-      },
-      body: JSON.stringify(params),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
-    const latencySeconds = (Date.now() - startTime) / 1000;
-    const status = response.ok ? "success" : "error";
-
-    incrementMetric("mcp_tool_calls_total", { tool: toolName, status });
-    recordLatency("mcp_tool_call_latency_seconds", latencySeconds, { tool: toolName });
-
-    let responseData;
-    const contentType = response.headers.get("content-type") || "";
-    if (contentType.includes("application/json")) {
-      responseData = await response.json();
-    } else {
-      const text = await response.text();
-      responseData = { raw_response: text.substring(0, 1000), content_type: contentType };
+  for (let attempt = 0; attempt <= config.mcpMaxRetries; attempt++) {
+    // Exponential backoff between retries
+    if (attempt > 0) {
+      const delay = config.mcpRetryBaseMs * Math.pow(2, attempt - 1);
+      log("info", "mcp", `Retrying tool call (attempt ${attempt + 1}/${config.mcpMaxRetries + 1})`, {
+        tool: toolName,
+        delay_ms: delay,
+        correlation_id: correlationId,
+      });
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
-    const responseHash = crypto
-      .createHash("sha256")
-      .update(JSON.stringify(responseData))
-      .digest("hex")
-      .substring(0, 16);
 
-    log("info", "mcp", "Tool call completed", {
-      tool: toolName,
-      status,
-      latency_ms: Math.round(latencySeconds * 1000),
-      correlation_id: correlationId,
-    });
+    try {
+      // Create abort controller for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), config.mcpTimeoutMs);
 
-    return {
-      success: response.ok,
-      data: responseData,
-      metadata: {
-        tool_name: toolName,
-        request_hash: requestHash,
-        response_hash: responseHash,
+      const response = await fetch(`${config.mcpUrl}/tools/${mcpToolName}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": JSON_CONTENT_TYPE,
+          ...(config.mcpAuth && { Authorization: `Bearer ${config.mcpAuth}` }),
+          ...(correlationId && { "X-Correlation-ID": correlationId }),
+        },
+        body: JSON.stringify(params),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      // Retry on 5xx server errors (transient)
+      if (!response.ok && response.status >= 500 && attempt < config.mcpMaxRetries) {
+        await response.text().catch(() => ""); // drain body
+        lastError = new Error(`MCP server error: ${response.status}`);
+        continue;
+      }
+
+      const latencySeconds = (Date.now() - startTime) / 1000;
+      const status = response.ok ? "success" : "error";
+
+      incrementMetric("mcp_tool_calls_total", { tool: toolName, status });
+      recordLatency("mcp_tool_call_latency_seconds", latencySeconds, { tool: toolName });
+
+      let responseData;
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        responseData = await response.json();
+      } else {
+        const text = await response.text();
+        responseData = { raw_response: text.substring(0, 1000), content_type: contentType };
+      }
+      const responseHash = crypto
+        .createHash("sha256")
+        .update(JSON.stringify(responseData))
+        .digest("hex")
+        .substring(0, 16);
+
+      log("info", "mcp", "Tool call completed", {
+        tool: toolName,
         status,
         latency_ms: Math.round(latencySeconds * 1000),
-        timestamp: new Date().toISOString(),
-      },
-    };
-  } catch (err) {
-    const latencySeconds = (Date.now() - startTime) / 1000;
-    incrementMetric("mcp_tool_calls_total", { tool: toolName, status: "error" });
-    incrementMetric("errors_total", { component: "mcp" });
-    recordLatency("mcp_tool_call_latency_seconds", latencySeconds, { tool: toolName });
+        correlation_id: correlationId,
+        ...(attempt > 0 && { attempts: attempt + 1 }),
+      });
 
-    log("error", "mcp", "Tool call failed", {
-      tool: toolName,
-      error: err.message,
-      correlation_id: correlationId,
-    });
+      return {
+        success: response.ok,
+        data: responseData,
+        metadata: {
+          tool_name: toolName,
+          request_hash: requestHash,
+          response_hash: responseHash,
+          status,
+          latency_ms: Math.round(latencySeconds * 1000),
+          timestamp: new Date().toISOString(),
+        },
+      };
+    } catch (err) {
+      lastError = err;
 
-    throw err;
+      // Only retry on transient network errors (timeout, connection refused/reset)
+      const isRetryable = err.name === "AbortError" ||
+        (err.cause && ["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EPIPE"].includes(err.cause.code));
+
+      if (attempt < config.mcpMaxRetries && isRetryable) {
+        continue;
+      }
+
+      break;
+    }
   }
+
+  // All attempts exhausted
+  const latencySeconds = (Date.now() - startTime) / 1000;
+  incrementMetric("mcp_tool_calls_total", { tool: toolName, status: "error" });
+  incrementMetric("errors_total", { component: "mcp" });
+  recordLatency("mcp_tool_call_latency_seconds", latencySeconds, { tool: toolName });
+
+  log("error", "mcp", "Tool call failed after retries", {
+    tool: toolName,
+    error: lastError.message,
+    correlation_id: correlationId,
+    attempts: config.mcpMaxRetries + 1,
+  });
+
+  throw lastError;
 }
 
 // =============================================================================
@@ -1422,6 +1478,13 @@ const MAX_BODY_SIZE = 1024 * 1024; // 1MB
 
 function parseJsonBody(req) {
   return new Promise((resolve, reject) => {
+    // Pre-check Content-Length header to reject oversized requests early
+    const contentLength = parseInt(req.headers?.["content-length"], 10);
+    if (contentLength > 0 && contentLength > MAX_BODY_SIZE) {
+      reject(new Error("Request body too large"));
+      return;
+    }
+
     const chunks = [];
     let totalSize = 0;
     let rejected = false;
