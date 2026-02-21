@@ -38,7 +38,7 @@ RUN apk add --no-cache \
     && rm -rf /var/cache/apk/*
 
 # Copy dependencies from deps stage
-COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps --chown=autopilot:autopilot /app/node_modules ./node_modules
 
 # Copy application code
 COPY --chown=autopilot:autopilot . .

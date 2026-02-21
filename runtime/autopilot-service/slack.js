@@ -50,12 +50,16 @@ const config = {
 
 function log(level, component, msg, extra = {}) {
   const entry = {
+    ...extra,
     ts: new Date().toISOString(),
     level,
     component: `slack:${component}`,
     msg,
-    ...extra,
   };
+  delete entry.auth;
+  delete entry.token;
+  delete entry.password;
+  delete entry.secret;
   console.log(JSON.stringify(entry));
 }
 
@@ -72,14 +76,15 @@ let isInitialized = false;
  */
 async function stopSlack() {
   if (slackApp) {
-    try {
-      await slackApp.stop();
-      log("info", "cleanup", "Slack app stopped");
-    } catch (err) {
-      log("warn", "cleanup", "Error stopping Slack app", { error: err.message });
-    }
+    const app = slackApp;
     slackApp = null;
     isInitialized = false;
+    try {
+      await app.stop();
+      log("info", "cleanup", "Slack app stopped");
+    } catch (err) {
+      log("warn", "cleanup", "Error stopping Slack app (connection may linger)", { error: err.message });
+    }
   }
 }
 
@@ -602,7 +607,7 @@ function getProposedPlanBlocks(plan) {
     {
       type: "context",
       elements: [
-        { type: "mrkdwn", text: `Expires: <!date^${Math.floor(new Date(plan.expires_at).getTime() / 1000)}^{date_short_pretty} at {time}|${plan.expires_at}>` },
+        { type: "mrkdwn", text: (() => { const ts = Math.floor(new Date(plan.expires_at).getTime() / 1000); return isNaN(ts) ? `Expires: ${plan.expires_at || "unknown"}` : `Expires: <!date^${ts}^{date_short_pretty} at {time}|${plan.expires_at}>`; })() },
       ],
     },
     {
@@ -745,7 +750,7 @@ function getExecutedPlanBlocks(plan, executorId) {
     {
       type: "context",
       elements: [
-        { type: "mrkdwn", text: `Executed at <!date^${Math.floor(new Date(plan.executed_at).getTime() / 1000)}^{date_short_pretty} at {time}|${plan.executed_at}>` },
+        { type: "mrkdwn", text: (() => { const ts = Math.floor(new Date(plan.executed_at).getTime() / 1000); return isNaN(ts) ? `Executed at ${plan.executed_at || "unknown"}` : `Executed at <!date^${ts}^{date_short_pretty} at {time}|${plan.executed_at}>`; })() },
       ],
     },
   ];

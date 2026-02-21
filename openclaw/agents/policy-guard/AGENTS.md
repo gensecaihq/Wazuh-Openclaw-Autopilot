@@ -56,7 +56,7 @@ Characteristics: Reversible, user/host blast radius, definite service impact
 
 ### Critical Risk (Executive + Dual Approval)
 
-Actions: restart_wazuh, mass_isolation, domain_wide_disable
+Actions: restart_wazuh
 Characteristics: Enterprise blast radius, severe service impact
 
 ## Asset Criticality Rules
