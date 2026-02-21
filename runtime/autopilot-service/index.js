@@ -997,8 +997,10 @@ function getResponderStatus() {
 
 // Simple YAML parser for toolmap (handles basic key-value and nested structures)
 // Bug #5 and #6 fixes: Improved list and multi-colon handling
+const PROTO_POISON_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 function parseSimpleYaml(content) {
-  const result = {};
+  const result = Object.create(null);
   const lines = content.split("\n");
   const stack = [{ indent: -1, obj: result, pendingListKey: null }];
 
@@ -1047,12 +1049,14 @@ function parseSimpleYaml(content) {
     const colonIndex = trimmed.indexOf(":");
     if (colonIndex > 0) {
       const key = trimmed.substring(0, colonIndex).trim();
+      // Reject prototype pollution keys
+      if (PROTO_POISON_KEYS.has(key)) continue;
       // Bug #6 fix: Get everything after first colon
       let value = trimmed.substring(colonIndex + 1).trim();
 
       if (value === "" || value === "|" || value === ">") {
         // Nested object or list - set as pending list key
-        parent[key] = {};
+        parent[key] = Object.create(null);
         stack.push({ indent, obj: parent[key], pendingListKey: null });
         // Mark current level as expecting list items for this key
         current.pendingListKey = key;
@@ -1505,8 +1509,9 @@ function validateAuthorization(req, requiredScope = "write") {
   const directIp = req.socket.remoteAddress || "unknown";
   const isDirectLocalhost = directIp === "127.0.0.1" || directIp === "::1" ||
                             directIp === "::ffff:127.0.0.1";
-  const clientIp = (isDirectLocalhost && req.headers["x-forwarded-for"])
-    ? req.headers["x-forwarded-for"].split(",")[0].trim()
+  const forwardedFor = req.headers["x-forwarded-for"];
+  const clientIp = (isDirectLocalhost && forwardedFor)
+    ? forwardedFor.split(",").pop().trim()
     : directIp;
   const isLocalhost = clientIp === "127.0.0.1" || clientIp === "::1" ||
                       clientIp === "::ffff:127.0.0.1";
@@ -1643,8 +1648,9 @@ function createServer() {
     const directIpRL = req.socket.remoteAddress || "unknown";
     const isDirectLocalRL = directIpRL === "127.0.0.1" || directIpRL === "::1" ||
                             directIpRL === "::ffff:127.0.0.1";
-    const clientIp = (isDirectLocalRL && req.headers["x-forwarded-for"])
-      ? req.headers["x-forwarded-for"].split(",")[0].trim()
+    const forwardedForRL = req.headers["x-forwarded-for"];
+    const clientIp = (isDirectLocalRL && forwardedForRL)
+      ? forwardedForRL.split(",").pop().trim()
       : directIpRL;
 
     // Security headers
@@ -1873,10 +1879,11 @@ function createServer() {
 
         // Generate case ID from alert
         // Bug #15 fix: Use hash of full alert ID to prevent collisions
-        const alertId = alert.alert_id || alert._id || alert.id;
+        const rawAlertId = alert.alert_id || alert._id || alert.id;
+        const alertId = typeof rawAlertId === "object" ? JSON.stringify(rawAlertId) : String(rawAlertId);
         const timestamp = new Date().toISOString().split("T")[0].replace(/-/g, "");
         const alertIdHash = crypto.createHash("sha256")
-          .update(alertId.toString())
+          .update(alertId)
           .digest("hex")
           .substring(0, 12);
         const caseId = `CASE-${timestamp}-${alertIdHash}`;
@@ -2250,6 +2257,7 @@ function createServer() {
             res.writeHead(403, { "Content-Type": JSON_CONTENT_TYPE });
             res.end(JSON.stringify({
               error: err.message,
+              request_id: requestId,
               responder_status: getResponderStatus(),
               resolution: "Contact an administrator to enable AUTOPILOT_RESPONDER_ENABLED=true",
             }));
@@ -2288,6 +2296,16 @@ async function validateStartup() {
   if (config.mcpAuth && KNOWN_PLACEHOLDERS.includes(config.mcpAuth)) {
     log("error", "startup", "AUTOPILOT_MCP_AUTH is set to a known placeholder value — change it before running");
     process.exit(1);
+  }
+
+  // Warn if no auth tokens configured
+  if (!config.mcpAuth && !process.env.AUTOPILOT_SERVICE_TOKEN) {
+    if (config.mode === "production") {
+      log("error", "startup", "Production mode requires at least one auth token (AUTOPILOT_MCP_AUTH or AUTOPILOT_SERVICE_TOKEN)");
+      process.exit(1);
+    } else {
+      log("warn", "startup", "No auth tokens configured — write operations will only work from localhost in bootstrap mode");
+    }
   }
 
   // Check mode

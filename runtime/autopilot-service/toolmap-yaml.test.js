@@ -125,8 +125,10 @@ describe("parseSimpleYaml", () => {
   });
 
   it("handles empty content and returns empty object", () => {
-    assert.deepStrictEqual(parseSimpleYaml(""), {});
-    assert.deepStrictEqual(parseSimpleYaml("   \n\n  "), {});
+    const result1 = parseSimpleYaml("");
+    assert.strictEqual(Object.keys(result1).length, 0);
+    const result2 = parseSimpleYaml("   \n\n  ");
+    assert.strictEqual(Object.keys(result2).length, 0);
   });
 
   it("handles quoted string values by stripping quotes", () => {

@@ -205,8 +205,7 @@
       "enabled": true,
       "botToken": "${SLACK_BOT_TOKEN}",
       "appToken": "${SLACK_APP_TOKEN}",
-      "dmPolicy": "allowlist",
-      "allowFrom": [],
+      "dmPolicy": "open",
       "groupPolicy": "allowlist"
     }
   },
@@ -313,7 +312,7 @@
     "OPENROUTER_API_KEY": "${OPENROUTER_API_KEY}",
     "TOGETHER_API_KEY": "${TOGETHER_API_KEY}",
     "CEREBRAS_API_KEY": "${CEREBRAS_API_KEY}",
-    "WAZUH_MCP_URL": "${MCP_URL}",
-    "WAZUH_MCP_TOKEN": "${AUTOPILOT_MCP_AUTH}"
+    "MCP_URL": "${MCP_URL}",
+    "AUTOPILOT_MCP_AUTH": "${AUTOPILOT_MCP_AUTH}"
   }
 }

@@ -255,7 +255,7 @@
   // ENVIRONMENT VARIABLES
   // ---------------------------------------------------------------------------
   "env": {
-    "WAZUH_MCP_URL": "${MCP_URL}",
-    "WAZUH_MCP_TOKEN": "${AUTOPILOT_MCP_AUTH}"
+    "MCP_URL": "${MCP_URL}",
+    "AUTOPILOT_MCP_AUTH": "${AUTOPILOT_MCP_AUTH}"
   }
 }

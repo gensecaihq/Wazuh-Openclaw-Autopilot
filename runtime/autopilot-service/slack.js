@@ -261,7 +261,11 @@ function registerSlashCommands(runtime) {
       }
     } catch (err) {
       log("error", "command", "Slash command error", { error: err.message, subcommand });
-      await respond({ text: `Error: ${err.message}` });
+      try {
+        await respond({ text: `Error: ${safeErrorMessage(err)}` });
+      } catch (respondErr) {
+        log("error", "command", "Failed to send error response", { error: respondErr.message });
+      }
     }
   });
 }
@@ -344,7 +348,11 @@ function registerInteractiveButtons(runtime) {
 
       log("info", "button", "Plan approved via button", { plan_id: payload.planId, user_id: payload.userId });
     } catch (err) {
-      await respond({ text: `Error: ${safeErrorMessage(err)}`, response_type: "ephemeral" });
+      try {
+        await respond({ text: `Error: ${safeErrorMessage(err)}`, response_type: "ephemeral" });
+      } catch (respondErr) {
+        log("error", "button", "Failed to send error response", { error: respondErr.message, originalError: err.message });
+      }
     }
   });
 
@@ -429,7 +437,11 @@ function registerInteractiveButtons(runtime) {
         success: execResult.success,
       });
     } catch (err) {
-      await respond({ text: `Error: ${safeErrorMessage(err)}`, response_type: "ephemeral" });
+      try {
+        await respond({ text: `Error: ${safeErrorMessage(err)}`, response_type: "ephemeral" });
+      } catch (respondErr) {
+        log("error", "button", "Failed to send error response", { error: respondErr.message, originalError: err.message });
+      }
     }
   });
 
@@ -461,7 +473,11 @@ function registerInteractiveButtons(runtime) {
 
       log("info", "button", "Plan rejected via button", { plan_id: payload.planId, user_id: payload.userId });
     } catch (err) {
-      await respond({ text: `Error: ${safeErrorMessage(err)}`, response_type: "ephemeral" });
+      try {
+        await respond({ text: `Error: ${safeErrorMessage(err)}`, response_type: "ephemeral" });
+      } catch (respondErr) {
+        log("error", "button", "Failed to send error response", { error: respondErr.message, originalError: err.message });
+      }
     }
   });
 }
@@ -532,7 +548,8 @@ function formatPlansMessage(plans, state) {
   }
 
   const planList = plans.map((p) => {
-    return `• \`${p.plan_id}\` - ${p.title} (${p.risk_level} risk) - ${p.actions.length} actions`;
+    const actionCount = Array.isArray(p.actions) ? p.actions.length : 0;
+    return `• \`${p.plan_id}\` - ${p.title} (${p.risk_level} risk) - ${actionCount} actions`;
   }).join("\n");
 
   return {
@@ -744,7 +761,7 @@ function getRejectedPlanBlocks(plan, rejectorId) {
       type: "section",
       fields: [
         { type: "mrkdwn", text: `*Plan ID:*\n\`${plan.plan_id}\`` },
-        { type: "mrkdwn", text: `*Case:*\n${plan.case_id}` },
+        { type: "mrkdwn", text: `*Case:*\n${escapeMrkdwn(plan.case_id)}` },
         { type: "mrkdwn", text: `*Rejected by:*\n<@${rejectorId}>` },
         { type: "mrkdwn", text: `*Reason:*\n${escapeMrkdwn(plan.rejection_reason) || "_No reason provided_"}` },
       ],
@@ -852,7 +869,8 @@ async function postCaseAlert(caseData) {
   };
 
   const emoji = severityEmoji[caseData.severity] || ":bell:";
-  const entitiesText = caseData.entities.slice(0, 5).map((e) => `• ${escapeMrkdwn(e.type)}: ${escapeMrkdwn(e.value)}`).join("\n");
+  const entities = Array.isArray(caseData.entities) ? caseData.entities : [];
+  const entitiesText = entities.slice(0, 5).map((e) => `• ${escapeMrkdwn(e.type)}: ${escapeMrkdwn(e.value)}`).join("\n");
 
   try {
     const result = await slackApp.client.chat.postMessage({

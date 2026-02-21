@@ -324,7 +324,14 @@ install_dependencies() {
     # Node.js
     if ! command -v node &>/dev/null; then
         log_info "Installing Node.js 22 LTS..."
-        curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null 2>&1
+        case "$ID" in
+            centos|rhel|rocky|almalinux|fedora)
+                curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - >/dev/null 2>&1
+                ;;
+            *)
+                curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null 2>&1
+                ;;
+        esac
         $PKG_INSTALL nodejs
     fi
 
@@ -520,7 +527,8 @@ setup_secure_directories() {
     # OpenClaw directories — resolve the invoking user's home even under sudo
     local _real_user="${SUDO_USER:-$(whoami)}"
     local _real_home
-    _real_home=$(eval echo "~${_real_user}")
+    _real_home=$(getent passwd "${_real_user}" | cut -d: -f6)
+    if [[ -z "$_real_home" ]]; then _real_home="/root"; fi
     local OC_DIR="$_real_home/.openclaw"
     mkdir -p "$OC_DIR/wazuh-autopilot/agents"
     mkdir -p "$OC_DIR/wazuh-autopilot/workspace"
@@ -728,7 +736,8 @@ deploy_agents() {
     # Resolve the invoking user's home even under sudo
     local _real_user="${SUDO_USER:-$(whoami)}"
     local _real_home
-    _real_home=$(eval echo "~${_real_user}")
+    _real_home=$(getent passwd "${_real_user}" | cut -d: -f6)
+    if [[ -z "$_real_home" ]]; then _real_home="/root"; fi
     local OC_DIR="$_real_home/.openclaw"
     local AGENTS_SRC="$PROJECT_ROOT/openclaw"
 
@@ -1261,12 +1270,18 @@ ENVEOF
 
     _safe_subst() {
         # Usage: _safe_subst PLACEHOLDER ENV_VAR_NAME FILE
-        # Uses ENVIRON[] to avoid awk -v backslash interpretation
+        # Uses index()+substr() for literal replacement — gsub treats & and \ as special
         local placeholder="$1" envvar="$2" file="$3"
         local tmpf
         tmpf=$(mktemp "${file}.XXXXXX")
-        export "$envvar"
-        awk -v ph="$placeholder" 'BEGIN{val=ENVIRON[ARGV[2]]; delete ARGV[2]} {gsub(ph, val)}1' "$file" "$envvar" > "$tmpf" && mv "$tmpf" "$file"
+        env "_SUBST_VAL=${!envvar}" awk -v ph="$placeholder" '
+        BEGIN { val = ENVIRON["_SUBST_VAL"] }
+        {
+            while ((idx = index($0, ph)) > 0) {
+                $0 = substr($0, 1, idx-1) val substr($0, idx+length(ph))
+            }
+            print
+        }' "$file" > "$tmpf" && mv "$tmpf" "$file"
     }
 
     _safe_subst "__WAZUH_USER__" "WAZUH_USER" "$_envfile"
@@ -1289,7 +1304,8 @@ ENVEOF
     # Substitute placeholders in openclaw.json (generated earlier with placeholder values)
     local _oc_real_user="${SUDO_USER:-$(whoami)}"
     local _oc_real_home
-    _oc_real_home=$(eval echo "~${_oc_real_user}")
+    _oc_real_home=$(getent passwd "${_oc_real_user}" | cut -d: -f6)
+    if [[ -z "$_oc_real_home" ]]; then _oc_real_home="/root"; fi
     local _ocjson="$_oc_real_home/.openclaw/openclaw.json"
     if [[ -f "$_ocjson" ]]; then
         local _old_umask2
@@ -1402,9 +1418,13 @@ SCRIPT
   </integration>
 "
         # Use awk for safe multi-line insertion (avoids sed injection with special chars)
-        # Preserve original ownership/permissions by copying attributes first
-        cp -p "$OSSEC_CONF" "${OSSEC_CONF}.tmp"
-        awk -v config="$INTEGRATOR_CONFIG" '/<\/ossec_config>/{print config}1' "$OSSEC_CONF" > "${OSSEC_CONF}.tmp" && mv "${OSSEC_CONF}.tmp" "$OSSEC_CONF"
+        # Preserve original ownership/permissions via chown/chmod --reference
+        local _ossec_tmp
+        _ossec_tmp=$(mktemp "${OSSEC_CONF}.XXXXXX")
+        awk -v config="$INTEGRATOR_CONFIG" '/<\/ossec_config>/{print config}1' "$OSSEC_CONF" > "$_ossec_tmp" && \
+            chown --reference="$OSSEC_CONF" "$_ossec_tmp" && \
+            chmod --reference="$OSSEC_CONF" "$_ossec_tmp" && \
+            mv "$_ossec_tmp" "$OSSEC_CONF" || { rm -f "$_ossec_tmp"; log_error "Failed to update ossec.conf"; }
 
         log_success "Alert forwarding configured (level 10+)"
         log_security "Alerts sent to localhost only"
@@ -1632,11 +1652,14 @@ start_services() {
 
     sleep 3
 
+    local _services_ok=true
+
     if systemctl is-active --quiet wazuh-mcp-server; then
         log_success "Wazuh MCP Server running (Tailscale only)"
     else
         log_error "MCP Server failed to start"
         echo "  Check: journalctl -u wazuh-mcp-server -n 50"
+        _services_ok=false
     fi
 
     # Start Runtime Service
@@ -1651,6 +1674,13 @@ start_services() {
     else
         log_error "Runtime Service failed to start"
         echo "  Check: journalctl -u wazuh-autopilot -n 50"
+        _services_ok=false
+    fi
+
+    if [[ "$_services_ok" == "false" ]]; then
+        log_warn "One or more services failed to start — skipping Wazuh Manager restart"
+        log_warn "Fix the failed services, then restart Wazuh Manager manually"
+        return 1
     fi
 
     # Restart Wazuh if integrator configured
@@ -1677,7 +1707,8 @@ run_security_audit() {
     # Check gateway binding
     local _audit_real_user="${SUDO_USER:-$(whoami)}"
     local _audit_real_home
-    _audit_real_home=$(eval echo "~${_audit_real_user}")
+    _audit_real_home=$(getent passwd "${_audit_real_user}" | cut -d: -f6)
+    if [[ -z "$_audit_real_home" ]]; then _audit_real_home="/root"; fi
     if grep -q "bind.*loopback\|bind.*127.0.0.1" "$_audit_real_home/.openclaw/openclaw.json" 2>/dev/null; then
         echo -e "  ${GREEN}✓${NC} Gateway binds to localhost"
     else
@@ -1816,7 +1847,7 @@ main() {
         # Also clean up openclaw.json temp files
         local _cleanup_user="${SUDO_USER:-$(whoami)}"
         local _oc_dir
-        _oc_dir=$(eval echo "~${_cleanup_user}")/.openclaw
+        _oc_dir=$(getent passwd "${_cleanup_user}" | cut -d: -f6)/.openclaw
         if [[ -d "$_oc_dir" ]]; then
             rm -f "${_oc_dir}/openclaw.json."?????? 2>/dev/null || true
         fi
