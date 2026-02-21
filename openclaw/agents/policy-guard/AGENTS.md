@@ -46,17 +46,17 @@ Default duration: 24 hours
 
 ### Medium Risk (Elevated Approver)
 
-Actions: restart-wazuh, kill_process, quarantine_file
+Actions: isolate_host, kill_process, quarantine_file
 Characteristics: Varies on reversibility, single host blast radius, possible service impact
 
 ### High Risk (Admin Approver)
 
-Actions: isolate_host, disable_user
+Actions: disable_user
 Characteristics: Reversible, user/host blast radius, definite service impact
 
 ### Critical Risk (Executive + Dual Approval)
 
-Actions: mass_isolation, domain_wide_disable
+Actions: restart_wazuh, mass_isolation, domain_wide_disable
 Characteristics: Enterprise blast radius, severe service impact
 
 ## Asset Criticality Rules
@@ -97,8 +97,10 @@ Evaluate each check in order. If any check fails, immediately deny with the corr
 
 ## Confidence Thresholds by Action Risk
 
-| Risk Level | Minimum Confidence |
-|------------|-------------------|
+Read confidence thresholds from the per-action `min_confidence` values in policy.yaml -- they override these defaults.
+
+| Risk Level | Default Minimum Confidence |
+|------------|---------------------------|
 | Low | 0.5 |
 | Medium | 0.7 |
 | High | 0.85 |

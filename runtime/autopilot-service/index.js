@@ -217,7 +217,7 @@ function formatMetrics() {
       if (labelJson !== "default") {
         const labels = JSON.parse(labelJson);
         labelStr = Object.entries(labels)
-          .map(([k, v]) => `${sanitizeMetricLabelName(k)}="${v}"`)
+          .map(([k, v]) => `${sanitizeMetricLabelName(k)}="${String(v).replace(/[\\"]/g, "\\$&").replace(/\n/g, "\\n")}"`)
           .join(",");
         labelStr = `{${labelStr}}`;
       }
@@ -238,6 +238,30 @@ function formatMetrics() {
 // =============================================================================
 
 const EVIDENCE_PACK_SCHEMA_VERSION = "1.0";
+
+// Atomic file write: write to temp then rename (prevents corruption on crash)
+async function atomicWriteFile(filePath, content) {
+  const tmpPath = `${filePath}.tmp.${process.pid}`;
+  await fs.writeFile(tmpPath, content);
+  await fs.rename(tmpPath, filePath);
+}
+
+// Per-case file lock to prevent lost-update on concurrent updateCase calls
+const caseLocks = new Map();
+async function withCaseLock(caseId, fn) {
+  while (caseLocks.has(caseId)) {
+    await caseLocks.get(caseId);
+  }
+  let resolve;
+  const promise = new Promise((r) => { resolve = r; });
+  caseLocks.set(caseId, promise);
+  try {
+    return await fn();
+  } finally {
+    caseLocks.delete(caseId);
+    resolve();
+  }
+}
 
 async function ensureDir(dirPath) {
   try {
@@ -275,7 +299,7 @@ async function createCase(caseId, data) {
     actions: [],
   };
 
-  await fs.writeFile(
+  await atomicWriteFile(
     path.join(caseDir, "evidence-pack.json"),
     JSON.stringify(evidencePack, null, 2),
   );
@@ -290,7 +314,7 @@ async function createCase(caseId, data) {
     status: "open",
   };
 
-  await fs.writeFile(
+  await atomicWriteFile(
     path.join(caseDir, "case.json"),
     JSON.stringify(caseSummary, null, 2),
   );
@@ -319,78 +343,82 @@ async function updateCase(caseId, updates) {
   if (!isValidCaseId(caseId)) {
     throw new Error(`Invalid case ID: ${caseId}`);
   }
-  const caseDir = path.join(config.dataDir, "cases", caseId);
-  const packPath = path.join(caseDir, "evidence-pack.json");
 
-  let evidencePack;
-  try {
-    const content = await fs.readFile(packPath, "utf8");
-    evidencePack = JSON.parse(content);
-  } catch (err) {
-    throw new Error(`Case not found: ${caseId}`);
-  }
+  // Use per-case lock to prevent lost-update on concurrent updateCase calls
+  return withCaseLock(caseId, async () => {
+    const caseDir = path.join(config.dataDir, "cases", caseId);
+    const packPath = path.join(caseDir, "evidence-pack.json");
 
-  // Apply updates
-  const now = new Date().toISOString();
-  evidencePack.updated_at = now;
+    let evidencePack;
+    try {
+      const content = await fs.readFile(packPath, "utf8");
+      evidencePack = JSON.parse(content);
+    } catch (err) {
+      throw new Error(`Case not found: ${caseId}`);
+    }
 
-  // Bug #14 fix: Use hasOwnProperty to allow falsy values (0, "", etc.)
-  if (Object.prototype.hasOwnProperty.call(updates, "title")) evidencePack.title = updates.title;
-  if (Object.prototype.hasOwnProperty.call(updates, "summary")) evidencePack.summary = updates.summary;
-  if (Object.prototype.hasOwnProperty.call(updates, "severity")) evidencePack.severity = updates.severity;
-  if (Object.prototype.hasOwnProperty.call(updates, "confidence")) evidencePack.confidence = updates.confidence;
-  // Bug #11 fix: Sync status field to evidence pack
-  if (Object.prototype.hasOwnProperty.call(updates, "status")) evidencePack.status = updates.status;
+    // Apply updates
+    const now = new Date().toISOString();
+    evidencePack.updated_at = now;
 
-  // Append arrays with size cap to prevent unbounded growth
-  const MAX_ARRAY_ITEMS = 10000;
-  const appendCapped = (existing, incoming) => {
-    const merged = [...existing, ...incoming];
-    return merged.length > MAX_ARRAY_ITEMS ? merged.slice(-MAX_ARRAY_ITEMS) : merged;
-  };
+    // Bug #14 fix: Use hasOwnProperty to allow falsy values (0, "", etc.)
+    if (Object.prototype.hasOwnProperty.call(updates, "title")) evidencePack.title = updates.title;
+    if (Object.prototype.hasOwnProperty.call(updates, "summary")) evidencePack.summary = updates.summary;
+    if (Object.prototype.hasOwnProperty.call(updates, "severity")) evidencePack.severity = updates.severity;
+    if (Object.prototype.hasOwnProperty.call(updates, "confidence")) evidencePack.confidence = updates.confidence;
+    // Bug #11 fix: Sync status field to evidence pack
+    if (Object.prototype.hasOwnProperty.call(updates, "status")) evidencePack.status = updates.status;
 
-  if (updates.entities) {
-    evidencePack.entities = appendCapped(evidencePack.entities, updates.entities);
-  }
-  if (updates.timeline) {
-    evidencePack.timeline = appendCapped(evidencePack.timeline, updates.timeline);
-  }
-  if (updates.mcp_calls) {
-    evidencePack.mcp_calls = appendCapped(evidencePack.mcp_calls, updates.mcp_calls);
-  }
-  if (updates.evidence_refs) {
-    evidencePack.evidence_refs = appendCapped(evidencePack.evidence_refs, updates.evidence_refs);
-  }
-  if (updates.plans) {
-    evidencePack.plans = appendCapped(evidencePack.plans, updates.plans);
-  }
-  if (updates.approvals) {
-    evidencePack.approvals = appendCapped(evidencePack.approvals, updates.approvals);
-  }
-  if (updates.actions) {
-    evidencePack.actions = appendCapped(evidencePack.actions, updates.actions);
-  }
+    // Append arrays with size cap to prevent unbounded growth
+    const MAX_ARRAY_ITEMS = 10000;
+    const appendCapped = (existing, incoming) => {
+      const merged = [...existing, ...incoming];
+      return merged.length > MAX_ARRAY_ITEMS ? merged.slice(-MAX_ARRAY_ITEMS) : merged;
+    };
 
-  await fs.writeFile(packPath, JSON.stringify(evidencePack, null, 2));
+    if (updates.entities) {
+      evidencePack.entities = appendCapped(evidencePack.entities, updates.entities);
+    }
+    if (updates.timeline) {
+      evidencePack.timeline = appendCapped(evidencePack.timeline, updates.timeline);
+    }
+    if (updates.mcp_calls) {
+      evidencePack.mcp_calls = appendCapped(evidencePack.mcp_calls, updates.mcp_calls);
+    }
+    if (updates.evidence_refs) {
+      evidencePack.evidence_refs = appendCapped(evidencePack.evidence_refs, updates.evidence_refs);
+    }
+    if (updates.plans) {
+      evidencePack.plans = appendCapped(evidencePack.plans, updates.plans);
+    }
+    if (updates.approvals) {
+      evidencePack.approvals = appendCapped(evidencePack.approvals, updates.approvals);
+    }
+    if (updates.actions) {
+      evidencePack.actions = appendCapped(evidencePack.actions, updates.actions);
+    }
 
-  // Update summary
-  const summaryPath = path.join(caseDir, "case.json");
-  try {
-    const summaryContent = await fs.readFile(summaryPath, "utf8");
-    const summary = JSON.parse(summaryContent);
-    summary.updated_at = now;
-    if (Object.prototype.hasOwnProperty.call(updates, "title")) summary.title = updates.title;
-    if (Object.prototype.hasOwnProperty.call(updates, "severity")) summary.severity = updates.severity;
-    if (Object.prototype.hasOwnProperty.call(updates, "status")) summary.status = updates.status;
-    await fs.writeFile(summaryPath, JSON.stringify(summary, null, 2));
-  } catch (err) {
-    // Summary file might not exist, that's ok
-  }
+    await atomicWriteFile(packPath, JSON.stringify(evidencePack, null, 2));
 
-  incrementMetric("cases_updated_total");
-  log("info", "evidence-pack", "Case updated", { case_id: caseId });
+    // Update summary
+    const summaryPath = path.join(caseDir, "case.json");
+    try {
+      const summaryContent = await fs.readFile(summaryPath, "utf8");
+      const summary = JSON.parse(summaryContent);
+      summary.updated_at = now;
+      if (Object.prototype.hasOwnProperty.call(updates, "title")) summary.title = updates.title;
+      if (Object.prototype.hasOwnProperty.call(updates, "severity")) summary.severity = updates.severity;
+      if (Object.prototype.hasOwnProperty.call(updates, "status")) summary.status = updates.status;
+      await atomicWriteFile(summaryPath, JSON.stringify(summary, null, 2));
+    } catch (err) {
+      // Summary file might not exist, that's ok
+    }
 
-  return evidencePack;
+    incrementMetric("cases_updated_total");
+    log("info", "evidence-pack", "Case updated", { case_id: caseId });
+
+    return evidencePack;
+  }); // end withCaseLock
 }
 
 async function getCase(caseId) {
@@ -554,7 +582,7 @@ function consumeApprovalToken(token, approverId, decision, reason = "") {
 
 const responsePlans = new Map();
 const MAX_PLANS = 10000;
-const MAX_ACTIONS_PER_PLAN = 100;
+const MAX_ACTIONS_PER_PLAN = 10;
 // Bug #7 fix: Track plans currently being executed to prevent race conditions
 const executingPlans = new Set();
 
@@ -818,6 +846,11 @@ async function executePlan(planId, executorId) {
       throw new Error("Plan must be approved before execution (Tier 1 required)");
     }
     throw new Error(`Cannot execute plan in state: ${plan.state}`);
+  }
+
+  // Separation of duties: executor must differ from approver
+  if (plan.approver_id && plan.approver_id === executorId) {
+    throw new Error("Executor must be different from approver (separation of duties)");
   }
 
   // Bug #7 fix: Prevent concurrent execution of the same plan
@@ -1443,6 +1476,23 @@ function isValidCaseId(caseId) {
   return /^[a-zA-Z0-9-]{1,64}$/.test(caseId);
 }
 
+function isValidPlanId(planId) {
+  return typeof planId === "string" && /^PLAN-\d+-[a-f0-9]{8}$/.test(planId);
+}
+
+function isValidIdentityId(id) {
+  // Identity IDs: alphanumeric, @, ., -, _ — 1-128 chars
+  return typeof id === "string" && id.trim().length > 0 && id.length <= 128 && /^[\w@.\-]+$/.test(id);
+}
+
+function sanitizeRequestId(rawId) {
+  // Only allow alphanumeric, hyphens, underscores — max 128 chars
+  if (typeof rawId === "string" && /^[a-zA-Z0-9_\-]{1,128}$/.test(rawId)) {
+    return rawId;
+  }
+  return generateRequestId();
+}
+
 // Authorization validation for sensitive endpoints
 // Issue #1 fix: Uses timing-safe comparison
 // Issue #3 fix: Includes auth failure rate limiting
@@ -1583,8 +1633,8 @@ function createServer() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
-    // Issue #15 fix: Generate unique request ID for tracing
-    const requestId = req.headers["x-request-id"] || generateRequestId();
+    // Issue #15 fix: Generate unique request ID for tracing (sanitized to prevent log injection)
+    const requestId = sanitizeRequestId(req.headers["x-request-id"]) || generateRequestId();
     res.setHeader("X-Request-ID", requestId);
 
     // Get client IP for rate limiting
@@ -1607,6 +1657,7 @@ function createServer() {
       res.setHeader("Access-Control-Allow-Origin", config.corsOrigin);
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
       res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID");
+      res.setHeader("Vary", "Origin");
     }
 
     if (req.method === "OPTIONS") {
@@ -2075,6 +2126,10 @@ function createServer() {
         }
 
         const planId = url.pathname.split("/")[3];
+        if (!isValidPlanId(planId)) {
+          sendJsonError(res, 400, "Invalid plan ID format", requestId);
+          return;
+        }
         try {
           const plan = getPlan(planId);
           res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
@@ -2094,10 +2149,14 @@ function createServer() {
         }
 
         const planId = url.pathname.split("/")[3];
+        if (!isValidPlanId(planId)) {
+          sendJsonError(res, 400, "Invalid plan ID format", requestId);
+          return;
+        }
         const body = await parseJsonBody(req);
 
-        if (!body.approver_id) {
-          sendJsonError(res, 400, "approver_id is required", requestId);
+        if (!body.approver_id || !isValidIdentityId(body.approver_id)) {
+          sendJsonError(res, 400, "Valid approver_id is required (alphanumeric, 1-128 chars)", requestId);
           return;
         }
 
@@ -2125,10 +2184,14 @@ function createServer() {
         }
 
         const planId = url.pathname.split("/")[3];
+        if (!isValidPlanId(planId)) {
+          sendJsonError(res, 400, "Invalid plan ID format", requestId);
+          return;
+        }
         const body = await parseJsonBody(req);
 
-        if (!body.rejector_id) {
-          sendJsonError(res, 400, "rejector_id is required", requestId);
+        if (!body.rejector_id || !isValidIdentityId(body.rejector_id)) {
+          sendJsonError(res, 400, "Valid rejector_id is required (alphanumeric, 1-128 chars)", requestId);
           return;
         }
 
@@ -2154,10 +2217,14 @@ function createServer() {
         }
 
         const planId = url.pathname.split("/")[3];
+        if (!isValidPlanId(planId)) {
+          sendJsonError(res, 400, "Invalid plan ID format", requestId);
+          return;
+        }
         const body = await parseJsonBody(req);
 
-        if (!body.executor_id) {
-          sendJsonError(res, 400, "executor_id is required", requestId);
+        if (!body.executor_id || !isValidIdentityId(body.executor_id)) {
+          sendJsonError(res, 400, "Valid executor_id is required (alphanumeric, 1-128 chars)", requestId);
           return;
         }
 
@@ -2222,12 +2289,15 @@ async function validateStartup() {
   if (config.mode === "production") {
     // Check Tailscale requirement
     if (config.requireTailscale) {
-      // In a real implementation, we'd check if Tailscale is running
-      // For now, just check if MCP_URL looks like a Tailnet URL
       if (config.mcpUrl && !config.mcpUrl.includes(".ts.net") && !config.mcpUrl.match(/^https?:\/\/100\./)) {
         log("error", "startup", "Production mode requires Tailnet MCP URL");
         process.exit(1);
       }
+    }
+
+    // Validate CORS origin in production
+    if (config.corsEnabled && (config.corsOrigin === "*" || config.corsOrigin === "http://localhost:3000")) {
+      log("warn", "startup", "Production mode: CORS_ORIGIN should be set to a specific origin, not wildcard or localhost");
     }
   }
 
@@ -2411,9 +2481,12 @@ module.exports = {
   incrementMetric,
   recordLatency,
   formatMetrics,
-  // Auth (exported for testing)
+  // Auth & validation (exported for testing)
   validateAuthorization,
   isValidCaseId,
+  isValidPlanId,
+  isValidIdentityId,
+  sanitizeRequestId,
   // Rate limiting & auth lockout
   checkRateLimit,
   recordAuthFailure,

@@ -706,9 +706,15 @@ describe("Validation and edge cases", () => {
   });
 
   it("GET /api/plans/:id for non-existent plan returns 404", async () => {
-    const res = await request(server, "GET", "/api/plans/PLAN-does-not-exist");
+    const res = await request(server, "GET", "/api/plans/PLAN-9999999999999-deadbeef");
     assert.equal(res.status, 404);
     assert.ok(res.body.error);
+  });
+
+  it("GET /api/plans/:id with invalid format returns 400", async () => {
+    const res = await request(server, "GET", "/api/plans/PLAN-does-not-exist");
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("Invalid plan ID"));
   });
 
   it("POST /api/plans with invalid action structure returns 400", async () => {

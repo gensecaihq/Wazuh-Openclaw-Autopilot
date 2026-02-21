@@ -25,7 +25,7 @@ GET http://localhost:9090/metrics
 
 ## MCP Alert Aggregation Queries
 
-Use `get_wazuh_alerts` to aggregate alert data for report sections.
+Use `search_alerts` to aggregate alert data for report sections.
 
 **Alert volume by severity** (last 24h):
 ```json
@@ -60,7 +60,7 @@ Use `get_wazuh_alerts` to aggregate alert data for report sections.
 }
 ```
 
-**Agent status**: Use `get_wazuh_agents` with the agent ID to check online/offline/disconnected status for the agent health section.
+**Agent status**: Use `get_agent` with the agent ID to check online/offline/disconnected status for the agent health section.
 
 ## Slack Block Formatting
 

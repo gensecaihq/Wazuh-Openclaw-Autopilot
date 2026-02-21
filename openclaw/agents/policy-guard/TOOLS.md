@@ -78,10 +78,10 @@ If not met, deny with `DUAL_APPROVAL_REQUIRED`.
 
 ## Confidence Threshold Check
 
-Look up the action's risk level and compare the plan's confidence score against the minimum:
+Read confidence thresholds from the per-action `min_confidence` values in policy.yaml -- they override these defaults.
 
-| Risk Level | Minimum Confidence |
-|------------|-------------------|
+| Risk Level | Default Minimum Confidence |
+|------------|---------------------------|
 | Low | 0.5 |
 | Medium | 0.7 |
 | High | 0.85 |

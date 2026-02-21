@@ -218,17 +218,17 @@
   // not used — agents will still operate via REST API and heartbeats.
   "bindings": [
     {
-      "agentId": "wazuh-triage",
-      "match": {
-        "channel": "slack",
-        "peer": { "kind": "group", "id": "*" }
-      }
-    },
-    {
       "agentId": "wazuh-responder",
       "match": {
         "channel": "slack",
         "peer": { "kind": "group", "id": "approvals" }
+      }
+    },
+    {
+      "agentId": "wazuh-triage",
+      "match": {
+        "channel": "slack",
+        "peer": { "kind": "group", "id": "*" }
       }
     }
   ],

@@ -87,7 +87,9 @@ confirm() {
     [[ "$response" =~ ^[Yy]$ ]]
 }
 
-# Generate cryptographically secure random string
+# Generate cryptographically secure random hex string.
+# NOTE: openssl rand -hex N outputs N random *bytes* encoded as hex, which
+# produces 2*N hex characters. So generate_secret 32 returns a 64-char string.
 generate_secret() {
     local length="${1:-32}"
     openssl rand -hex "$length"
@@ -509,8 +511,11 @@ setup_secure_directories() {
     chmod 750 "$LOG_DIR"
     chmod 700 "$SECRETS_DIR"       # Most restrictive for secrets
 
-    # OpenClaw directories
-    local OC_DIR="$HOME/.openclaw"
+    # OpenClaw directories — resolve the invoking user's home even under sudo
+    local _real_user="${SUDO_USER:-$(whoami)}"
+    local _real_home
+    _real_home=$(eval echo "~${_real_user}")
+    local OC_DIR="$_real_home/.openclaw"
     mkdir -p "$OC_DIR/wazuh-autopilot/agents"
     mkdir -p "$OC_DIR/wazuh-autopilot/workspace"
     chmod -R 700 "$OC_DIR"         # Full restriction on OpenClaw dir
@@ -608,7 +613,10 @@ install_mcp_server() {
     if [[ -d "$MCP_SERVER_DIR" ]]; then
         log_info "Updating existing MCP Server..."
         cd "$MCP_SERVER_DIR"
-        git pull origin main 2>/dev/null || git pull origin master 2>/dev/null || true
+        if ! git pull origin main 2>/dev/null && ! git pull origin master 2>/dev/null; then
+            log_warn "git pull failed — continuing with the existing local copy"
+            log_warn "You may be running an outdated version of Wazuh MCP Server"
+        fi
     else
         log_info "Cloning Wazuh MCP Server from upstream..."
         git clone "$MCP_SERVER_REPO" "$MCP_SERVER_DIR"
@@ -617,12 +625,16 @@ install_mcp_server() {
     cd "$MCP_SERVER_DIR"
 
     log_info "Installing Python dependencies..."
-    python3 -m venv "$MCP_SERVER_DIR/.venv" 2>/dev/null || true
-    if [[ -f "$MCP_SERVER_DIR/.venv/bin/pip" ]]; then
-        "$MCP_SERVER_DIR/.venv/bin/pip" install --quiet -r requirements.txt
-    else
-        pip3 install --quiet -r requirements.txt 2>/dev/null || pip install --quiet -r requirements.txt
+    if ! python3 -m venv "$MCP_SERVER_DIR/.venv" 2>/dev/null; then
+        log_error "Failed to create Python virtual environment at $MCP_SERVER_DIR/.venv"
+        log_error "Ensure the python3-venv package is installed (e.g., apt-get install python3-venv)"
+        exit 1
     fi
+    if [[ ! -f "$MCP_SERVER_DIR/.venv/bin/pip" ]]; then
+        log_error "Virtual environment was created but pip is missing at $MCP_SERVER_DIR/.venv/bin/pip"
+        exit 1
+    fi
+    "$MCP_SERVER_DIR/.venv/bin/pip" install --quiet -r requirements.txt
 
     # Get Tailscale IP for binding
     TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "127.0.0.1")
@@ -707,7 +719,11 @@ install_openclaw() {
 deploy_agents() {
     log_step "Deploying Security-Hardened Agents"
 
-    local OC_DIR="$HOME/.openclaw"
+    # Resolve the invoking user's home even under sudo
+    local _real_user="${SUDO_USER:-$(whoami)}"
+    local _real_home
+    _real_home=$(eval echo "~${_real_user}")
+    local OC_DIR="$_real_home/.openclaw"
     local AGENTS_SRC="$PROJECT_ROOT/openclaw"
 
     # Read secrets
@@ -1248,7 +1264,10 @@ ENVEOF
     chmod 600 "$CONFIG_DIR/.env"
 
     # Substitute placeholders in openclaw.json (generated earlier with placeholder values)
-    local _ocjson="$HOME/.openclaw/openclaw.json"
+    local _oc_real_user="${SUDO_USER:-$(whoami)}"
+    local _oc_real_home
+    _oc_real_home=$(eval echo "~${_oc_real_user}")
+    local _ocjson="$_oc_real_home/.openclaw/openclaw.json"
     if [[ -f "$_ocjson" ]]; then
         local _old_umask2
         _old_umask2=$(umask)
@@ -1343,6 +1362,8 @@ SCRIPT
   </integration>
 "
         # Use awk for safe multi-line insertion (avoids sed injection with special chars)
+        # Preserve original ownership/permissions by copying attributes first
+        cp -p "$OSSEC_CONF" "${OSSEC_CONF}.tmp"
         awk -v config="$INTEGRATOR_CONFIG" '/<\/ossec_config>/{print config}1' "$OSSEC_CONF" > "${OSSEC_CONF}.tmp" && mv "${OSSEC_CONF}.tmp" "$OSSEC_CONF"
 
         log_success "Alert forwarding configured (level 10+)"
@@ -1513,7 +1534,8 @@ prompt_responder_activation() {
     echo ""
 
     if confirm "  Enable Responder Agent capability?" "n"; then
-        sed -i 's/AUTOPILOT_RESPONDER_ENABLED=false/AUTOPILOT_RESPONDER_ENABLED=true/' "$CONFIG_DIR/.env"
+        sed -i.bak 's/AUTOPILOT_RESPONDER_ENABLED=false/AUTOPILOT_RESPONDER_ENABLED=true/' "$CONFIG_DIR/.env"
+        rm -f "$CONFIG_DIR/.env.bak"
         echo ""
         log_success "Responder capability ENABLED"
         echo ""
@@ -1613,7 +1635,10 @@ run_security_audit() {
     local issues=0
 
     # Check gateway binding
-    if grep -q "bind.*loopback\|bind.*127.0.0.1" "$HOME/.openclaw/openclaw.json" 2>/dev/null; then
+    local _audit_real_user="${SUDO_USER:-$(whoami)}"
+    local _audit_real_home
+    _audit_real_home=$(eval echo "~${_audit_real_user}")
+    if grep -q "bind.*loopback\|bind.*127.0.0.1" "$_audit_real_home/.openclaw/openclaw.json" 2>/dev/null; then
         echo -e "  ${GREEN}✓${NC} Gateway binds to localhost"
     else
         echo -e "  ${RED}✗${NC} Gateway binding not verified"
@@ -1749,14 +1774,19 @@ main() {
             rm -f "${CONFIG_DIR}/.env."?????? 2>/dev/null || true
         fi
         # Also clean up openclaw.json temp files
-        local _oc_dir="${HOME:-/root}/.openclaw"
+        local _cleanup_user="${SUDO_USER:-$(whoami)}"
+        local _oc_dir
+        _oc_dir=$(eval echo "~${_cleanup_user}")/.openclaw
         if [[ -d "$_oc_dir" ]]; then
             rm -f "${_oc_dir}/openclaw.json."?????? 2>/dev/null || true
         fi
         if [[ $_exit_code -ne 0 ]]; then
             echo ""
             echo -e "${RED}Installation failed (exit code $_exit_code). Partial state may remain.${NC}"
-            echo -e "${YELLOW}To clean up: sudo bash $0 --uninstall${NC}"
+            echo -e "${YELLOW}To clean up manually, remove:${NC}"
+            echo -e "${YELLOW}  rm -rf $INSTALL_DIR $CONFIG_DIR $DATA_DIR $LOG_DIR${NC}"
+            echo -e "${YELLOW}  rm -f /etc/systemd/system/wazuh-mcp-server.service /etc/systemd/system/wazuh-autopilot.service${NC}"
+            echo -e "${YELLOW}  systemctl daemon-reload${NC}"
         fi
         exit "$_exit_code"
     }

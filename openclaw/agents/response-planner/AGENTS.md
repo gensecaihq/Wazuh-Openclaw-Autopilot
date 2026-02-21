@@ -77,7 +77,7 @@ Every plan must include: `case_id`, `title`, `description`, `risk_level`, and `a
 
 | Action | Wazuh Command | Target | Reversible |
 |--------|--------------|--------|------------|
-| restart_wazuh | restart-wazuh | Agent | No |
+| isolate_host | isolate-endpoint | Host | Yes |
 | kill_process | kill-process | Process | No |
 | quarantine_file | quarantine-file | File | Yes |
 
@@ -85,14 +85,19 @@ Every plan must include: `case_id`, `title`, `description`, `risk_level`, and `a
 
 | Action | Wazuh Command | Target | Reversible |
 |--------|--------------|--------|------------|
-| isolate_host | isolate-endpoint | Host | Yes |
 | disable_user | disable-account | User | Yes |
+
+### Critical Risk Actions
+
+| Action | Wazuh Command | Target | Reversible |
+|--------|--------------|--------|------------|
+| restart_wazuh | restart-wazuh | Agent | No |
 
 ## Response Playbooks by Attack Type
 
 ### Brute Force
 - **Primary**: block_ip (source_ip, 24h) -- condition: attempts > 10 AND no successful auth
-- **Secondary**: force_password_reset (targeted_users) -- condition: any successful auth
+- **Secondary**: disable_user (targeted_users) -- condition: any successful auth
 - **Containment Priority**: 1
 
 ### Lateral Movement
