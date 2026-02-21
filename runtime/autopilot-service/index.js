@@ -2296,6 +2296,18 @@ module.exports = {
   // Auth (exported for testing)
   validateAuthorization,
   isValidCaseId,
+  // Rate limiting & auth lockout
+  checkRateLimit,
+  recordAuthFailure,
+  isAuthLocked,
+  clearAuthFailures,
+  // HTTP helpers
+  parseJsonBody,
+  createServer,
+  sendJsonError,
+  // Utilities
+  parseSimpleYaml,
+  sanitizeMetricLabelName,
 };
 
 function setupCleanupIntervals() {

@@ -778,4 +778,14 @@ module.exports = {
   postApprovalNotification,
   postExecutionNotification,
   isInitialized: () => isInitialized,
+  // Pure functions (exported for testing)
+  escapeMrkdwn,
+  isValidSlackUserId,
+  getHelpMessage,
+  formatPlansMessage,
+  getProposedPlanBlocks,
+  getApprovedPlanBlocks,
+  getExecutingPlanBlocks,
+  getExecutedPlanBlocks,
+  getRejectedPlanBlocks,
 };
