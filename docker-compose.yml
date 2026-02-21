@@ -29,42 +29,16 @@ services:
     ports:
       - "127.0.0.1:${RUNTIME_PORT:-9090}:${RUNTIME_PORT:-9090}"
 
+    # Pass all environment variables from .env file
+    env_file:
+      - path: .env
+        required: false
+
     environment:
-      # Core Configuration
-      - AUTOPILOT_MODE=${AUTOPILOT_MODE:-production}
-      - AUTOPILOT_RESPONDER_ENABLED=${AUTOPILOT_RESPONDER_ENABLED:-false}
-
-      # MCP Configuration
-      - MCP_URL=${MCP_URL}
-      - MCP_BOOTSTRAP_URL=${MCP_BOOTSTRAP_URL:-}
-      - AUTOPILOT_MCP_AUTH=${AUTOPILOT_MCP_AUTH}
-      - MCP_TIMEOUT_MS=${MCP_TIMEOUT_MS:-30000}
-      - MCP_MAX_RETRIES=${MCP_MAX_RETRIES:-2}
-      - MCP_RETRY_BASE_MS=${MCP_RETRY_BASE_MS:-1000}
-
-      # Execution limits
-      - MAX_CONCURRENT_EXECUTIONS=${MAX_CONCURRENT_EXECUTIONS:-5}
-
-      # Metrics (0.0.0.0 required inside container for Docker port forwarding;
-      # host access restricted to localhost via ports mapping above)
-      - METRICS_ENABLED=true
-      - RUNTIME_PORT=${RUNTIME_PORT:-9090}
+      # Overrides that must always be set for Docker (regardless of .env)
       - METRICS_HOST=0.0.0.0
-
-      # Logging
+      - METRICS_ENABLED=true
       - LOG_FORMAT=json
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-
-      # Slack (Optional)
-      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
-      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
-      - SLACK_ALERTS_CHANNEL=${SLACK_ALERTS_CHANNEL:-}
-      - SLACK_APPROVALS_CHANNEL=${SLACK_APPROVALS_CHANNEL:-}
-      - SLACK_REPORTS_CHANNEL=${SLACK_REPORTS_CHANNEL:-}
-
-      # Security
-      - AUTOPILOT_REQUIRE_TAILSCALE=${AUTOPILOT_REQUIRE_TAILSCALE:-false}
-      - AUTOPILOT_SERVICE_TOKEN=${AUTOPILOT_SERVICE_TOKEN:-}
 
     volumes:
       # Persistent data
@@ -80,7 +54,7 @@ services:
           size: 100M
 
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -f http://localhost:${RUNTIME_PORT:-9090}/health"]
+      test: ["CMD", "node", "-e", "const h=require('http');h.get('http://localhost:'+(process.env.RUNTIME_PORT||9090)+'/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3

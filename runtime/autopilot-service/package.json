@@ -1,6 +1,6 @@
 {
   "name": "wazuh-openclaw-autopilot-service",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Wazuh OpenClaw Autopilot Runtime Service - Evidence packs, approvals, metrics",
   "main": "index.js",
   "bin": {
@@ -31,7 +31,7 @@
   "homepage": "https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot#readme",
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "@slack/bolt": "^3.17.0",

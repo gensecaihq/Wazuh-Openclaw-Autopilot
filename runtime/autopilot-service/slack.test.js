@@ -277,8 +277,9 @@ describe("getExecutingPlanBlocks", () => {
     const blocks = getExecutingPlanBlocks("plan-100", "U99999ZZZZ", actions);
     const actionBlock = blocks.find((b) => b.type === "section" && b.text.text.includes("Actions"));
     assert.ok(actionBlock);
-    assert.ok(actionBlock.text.text.includes("block_ip"));
-    assert.ok(actionBlock.text.text.includes("isolate_host"));
+    // After escapeMrkdwn, underscores are prefixed with zero-width space (\u200B)
+    assert.ok(actionBlock.text.text.includes("block\u200B_ip"));
+    assert.ok(actionBlock.text.text.includes("isolate\u200B_host"));
     assert.ok(actionBlock.text.text.includes("10.0.0.1"));
   });
 

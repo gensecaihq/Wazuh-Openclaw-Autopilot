@@ -1148,6 +1148,12 @@ async function callMcpTool(toolName, params, correlationId) {
   // Resolve logical tool name to MCP tool name
   const mcpToolName = resolveMcpTool(toolName);
 
+  // Validate tool name to prevent path traversal (SSRF)
+  if (!/^[a-zA-Z0-9_-]+$/.test(mcpToolName)) {
+    incrementMetric("errors_total", { component: "mcp" });
+    throw new Error(`Invalid tool name: contains disallowed characters`);
+  }
+
   const requestHash = crypto
     .createHash("sha256")
     .update(JSON.stringify({ toolName: mcpToolName, params }))
@@ -1268,6 +1274,7 @@ async function callMcpTool(toolName, params, correlationId) {
 // RATE LIMITING
 // =============================================================================
 
+const MAX_RATE_LIMIT_ENTRIES = 10000;
 const rateLimitState = {
   requests: new Map(), // IP -> { count, resetTime }
 };
@@ -1277,6 +1284,16 @@ function checkRateLimit(clientIp) {
   const clientData = rateLimitState.requests.get(clientIp);
 
   if (!clientData || now > clientData.resetTime) {
+    // Evict expired entries if approaching limit
+    if (rateLimitState.requests.size >= MAX_RATE_LIMIT_ENTRIES) {
+      for (const [ip, data] of rateLimitState.requests) {
+        if (now > data.resetTime) rateLimitState.requests.delete(ip);
+      }
+      // If still at limit after eviction, reject to prevent OOM
+      if (rateLimitState.requests.size >= MAX_RATE_LIMIT_ENTRIES) {
+        return { allowed: false, remaining: 0, retryAfter: 60 };
+      }
+    }
     rateLimitState.requests.set(clientIp, {
       count: 1,
       resetTime: now + config.rateLimitWindowMs,
@@ -1311,6 +1328,14 @@ function recordAuthFailure(clientIp) {
   const data = authFailureState.attempts.get(clientIp);
 
   if (!data || now > data.firstAttempt + config.authFailureWindowMs) {
+    // Evict expired entries if approaching limit
+    if (authFailureState.attempts.size >= MAX_RATE_LIMIT_ENTRIES) {
+      for (const [ip, d] of authFailureState.attempts) {
+        if (now > d.firstAttempt + config.authFailureWindowMs || (d.lockedUntil && now >= d.lockedUntil)) {
+          authFailureState.attempts.delete(ip);
+        }
+      }
+    }
     // Start new window
     authFailureState.attempts.set(clientIp, {
       count: 1,
@@ -1390,7 +1415,7 @@ function generateRequestId() {
 // HTTP SERVER
 // =============================================================================
 
-const SERVICE_VERSION = "2.2.0";
+const SERVICE_VERSION = require("./package.json").version;
 const JSON_CONTENT_TYPE = "application/json; charset=utf-8";
 const startTime = Date.now();
 
@@ -1446,9 +1471,10 @@ function validateAuthorization(req, requiredScope = "write") {
     };
   }
 
-  // Allow requests from localhost without auth (for internal agents)
-  if (isLocalhost && !authHeader) {
-    return { valid: true, source: "localhost" };
+  // Allow requests from localhost without auth ONLY in bootstrap mode
+  // Production mode always requires token auth to prevent co-located process abuse
+  if (isLocalhost && !authHeader && config.mode === "bootstrap") {
+    return { valid: true, source: "localhost", scope: "read" };
   }
 
   // Require authorization for non-localhost requests
@@ -2185,6 +2211,13 @@ const cleanupIntervals = [];
 async function validateStartup() {
   log("info", "startup", "Validating configuration...");
 
+  // Reject known placeholder auth tokens
+  const KNOWN_PLACEHOLDERS = ["your-mcp-auth-token", "your-openclaw-gateway-token", "changeme", "test"];
+  if (config.mcpAuth && KNOWN_PLACEHOLDERS.includes(config.mcpAuth)) {
+    log("error", "startup", "AUTOPILOT_MCP_AUTH is set to a known placeholder value — change it before running");
+    process.exit(1);
+  }
+
   // Check mode
   if (config.mode === "production") {
     // Check Tailscale requirement
@@ -2543,6 +2576,18 @@ async function gracefulShutdown(signal) {
   // Clear all cleanup intervals
   for (const interval of cleanupIntervals) {
     clearInterval(interval);
+  }
+
+  // Wait for in-flight plan executions to complete (up to 10s)
+  if (executingPlans.size > 0) {
+    log("info", "shutdown", `Waiting for ${executingPlans.size} in-flight plan execution(s) to complete...`);
+    const execWaitStart = Date.now();
+    while (executingPlans.size > 0 && Date.now() - execWaitStart < 10000) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    if (executingPlans.size > 0) {
+      log("warn", "shutdown", `${executingPlans.size} plan execution(s) still in-flight at shutdown`);
+    }
   }
 
   // Allow pending operations to complete (use shorter timeout than force-kill)

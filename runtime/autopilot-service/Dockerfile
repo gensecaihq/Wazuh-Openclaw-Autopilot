@@ -2,13 +2,13 @@
 # Wazuh OpenClaw Autopilot - Production Dockerfile
 # =============================================================================
 # Multi-stage build for minimal production image
-# Base: Node.js 18 Alpine
+# Base: Node.js 22 Alpine (LTS until April 2027)
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # Stage 1: Dependencies
 # -----------------------------------------------------------------------------
-FROM node:18-alpine AS deps
+FROM node:22-alpine AS deps
 
 WORKDIR /app
 
@@ -24,7 +24,7 @@ RUN npm ci --only=production && npm cache clean --force
 # -----------------------------------------------------------------------------
 # Stage 2: Production
 # -----------------------------------------------------------------------------
-FROM node:18-alpine AS production
+FROM node:22-alpine AS production
 
 # Security: Run as non-root user
 RUN addgroup -g 1001 -S autopilot && \
@@ -32,9 +32,8 @@ RUN addgroup -g 1001 -S autopilot && \
 
 WORKDIR /app
 
-# Install runtime dependencies
+# Install runtime dependencies (curl removed - healthcheck uses node)
 RUN apk add --no-cache \
-    curl \
     tini \
     && rm -rf /var/cache/apk/*
 
@@ -51,15 +50,12 @@ RUN mkdir -p /var/lib/wazuh-autopilot/cases \
              /etc/wazuh-autopilot/policies && \
     chown -R autopilot:autopilot /var/lib/wazuh-autopilot /etc/wazuh-autopilot
 
-# Configurable runtime port (change via --build-arg or env)
-ARG RUNTIME_PORT=9090
-
 # Environment defaults
 ENV NODE_ENV=production \
     AUTOPILOT_MODE=production \
     AUTOPILOT_DATA_DIR=/var/lib/wazuh-autopilot \
     AUTOPILOT_CONFIG_DIR=/etc/wazuh-autopilot \
-    RUNTIME_PORT=${RUNTIME_PORT} \
+    RUNTIME_PORT=9090 \
     # 0.0.0.0 required inside container for Docker port forwarding;
     # host access restricted to localhost via docker-compose ports mapping
     METRICS_HOST=0.0.0.0 \
@@ -67,11 +63,11 @@ ENV NODE_ENV=production \
     LOG_LEVEL=info
 
 # Expose runtime port
-EXPOSE ${RUNTIME_PORT}
+EXPOSE 9090
 
-# Health check
+# Health check using node (works on read-only filesystem, respects runtime RUNTIME_PORT)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${RUNTIME_PORT}/health || exit 1
+    CMD node -e "const h=require('http');h.get('http://localhost:'+(process.env.RUNTIME_PORT||9090)+'/health',r=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"
 
 # Switch to non-root user
 USER autopilot

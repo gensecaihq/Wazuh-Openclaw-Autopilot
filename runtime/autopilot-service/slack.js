@@ -124,12 +124,23 @@ async function initSlack(runtimeService) {
 
     // Start the app with a timeout to prevent hanging if Slack is unreachable
     const SLACK_INIT_TIMEOUT_MS = 30000;
-    await Promise.race([
-      slackApp.start(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Slack Socket Mode connection timed out")), SLACK_INIT_TIMEOUT_MS),
-      ),
-    ]);
+    let initTimeoutId;
+    try {
+      await Promise.race([
+        slackApp.start(),
+        new Promise((_, reject) => {
+          initTimeoutId = setTimeout(() => reject(new Error("Slack Socket Mode connection timed out")), SLACK_INIT_TIMEOUT_MS);
+        }),
+      ]);
+      clearTimeout(initTimeoutId);
+    } catch (startErr) {
+      clearTimeout(initTimeoutId);
+      // If timeout won, stop the partially-connected app to prevent resource leaks
+      if (slackApp) {
+        await slackApp.stop().catch(() => {});
+      }
+      throw startErr;
+    }
     isInitialized = true;
 
     log("info", "init", "Slack Socket Mode connected successfully");
@@ -259,6 +270,43 @@ function registerSlashCommands(runtime) {
 // INTERACTIVE BUTTONS
 // =============================================================================
 
+// Validate and extract action payload fields safely
+function validateActionPayload(body) {
+  if (!Array.isArray(body.actions) || body.actions.length === 0) {
+    return { valid: false, error: "Invalid interaction payload" };
+  }
+  const planId = body.actions[0].value;
+  if (typeof planId !== "string" || !/^PLAN-\d+-[a-f0-9]{8}$/.test(planId)) {
+    return { valid: false, error: "Invalid plan ID format" };
+  }
+  const userId = body.user?.id;
+  if (!isValidSlackUserId(userId)) {
+    return { valid: false, error: "Invalid user ID" };
+  }
+  const channelId = body.channel?.id;
+  const messageTs = body.message?.ts;
+  return { valid: true, planId, userId, channelId, messageTs };
+}
+
+// Sanitize error messages before sending to Slack
+const SAFE_ERROR_PATTERNS = [
+  /^Plan not found/,
+  /^Cannot (approve|reject|execute) plan/,
+  /^Plan has expired/,
+  /^Tier 1 required/,
+  /^Plan is already being executed/,
+  /^Cannot reject plan that is currently executing/,
+  /^Responder capability is DISABLED/,
+  /^Concurrent execution limit/,
+];
+
+function safeErrorMessage(err) {
+  if (SAFE_ERROR_PATTERNS.some((re) => re.test(err.message))) {
+    return err.message;
+  }
+  return "An internal error occurred. Check logs for details.";
+}
+
 function registerInteractiveButtons(runtime) {
   if (!slackApp) return;
 
@@ -266,33 +314,33 @@ function registerInteractiveButtons(runtime) {
   slackApp.action("approve_plan", async ({ body, ack, client, respond }) => {
     await ack();
 
-    const planId = body.actions[0].value;
-    const userId = body.user.id;
-
-    if (!isValidSlackUserId(userId)) {
-      await respond({ text: "Error: Invalid user ID", response_type: "ephemeral" });
+    const payload = validateActionPayload(body);
+    if (!payload.valid) {
+      await respond({ text: `Error: ${payload.error}`, response_type: "ephemeral" });
       return;
     }
 
     try {
-      const plan = runtime.approvePlan(planId, userId, "Approved via Slack button");
+      const plan = runtime.approvePlan(payload.planId, payload.userId, "Approved via Slack button");
 
-      // Update the original message
-      await client.chat.update({
-        channel: body.channel.id,
-        ts: body.message.ts,
-        blocks: getApprovedPlanBlocks(plan, userId),
-        text: `Plan ${planId} approved by <@${userId}>`,
-      });
-
-      // Post notification
-      if (config.approvalsChannel && config.approvalsChannel !== body.channel.id) {
-        await postApprovalNotification(client, plan, userId, "approved");
+      // Update the original message (only if we have channel context)
+      if (payload.channelId && payload.messageTs) {
+        await client.chat.update({
+          channel: payload.channelId,
+          ts: payload.messageTs,
+          blocks: getApprovedPlanBlocks(plan, payload.userId),
+          text: `Plan ${payload.planId} approved by <@${payload.userId}>`,
+        });
       }
 
-      log("info", "button", "Plan approved via button", { plan_id: planId, user_id: userId });
+      // Post notification
+      if (config.approvalsChannel && config.approvalsChannel !== payload.channelId) {
+        await postApprovalNotification(client, plan, payload.userId, "approved");
+      }
+
+      log("info", "button", "Plan approved via button", { plan_id: payload.planId, user_id: payload.userId });
     } catch (err) {
-      await respond({ text: `Error approving plan: ${err.message}`, response_type: "ephemeral" });
+      await respond({ text: `Error: ${safeErrorMessage(err)}`, response_type: "ephemeral" });
     }
   });
 
@@ -300,50 +348,51 @@ function registerInteractiveButtons(runtime) {
   slackApp.action("execute_plan", async ({ body, ack, client, respond }) => {
     await ack();
 
-    const planId = body.actions[0].value;
-    const userId = body.user.id;
-
-    if (!isValidSlackUserId(userId)) {
-      await respond({ text: "Error: Invalid user ID", response_type: "ephemeral" });
+    const payload = validateActionPayload(body);
+    if (!payload.valid) {
+      await respond({ text: `Error: ${payload.error}`, response_type: "ephemeral" });
       return;
     }
 
     try {
       // Get plan details to show action context during execution
-      const planDetails = runtime.getPlan(planId);
+      const planDetails = runtime.getPlan(payload.planId);
       const planActions = planDetails ? planDetails.actions : [];
 
-      // Show executing status with action context
-      await client.chat.update({
-        channel: body.channel.id,
-        ts: body.message.ts,
-        blocks: getExecutingPlanBlocks(planId, userId, planActions),
-        text: `Plan ${planId} executing...`,
-      });
+      // Show executing status with action context (only if we have channel context)
+      if (payload.channelId && payload.messageTs) {
+        await client.chat.update({
+          channel: payload.channelId,
+          ts: payload.messageTs,
+          blocks: getExecutingPlanBlocks(payload.planId, payload.userId, planActions),
+          text: `Plan ${payload.planId} executing...`,
+        });
+      }
 
-      const plan = await runtime.executePlan(planId, userId);
+      const plan = await runtime.executePlan(payload.planId, payload.userId);
 
       // Update with result
-      await client.chat.update({
-        channel: body.channel.id,
-        ts: body.message.ts,
-        blocks: getExecutedPlanBlocks(plan, userId),
-        text: `Plan ${planId} executed by <@${userId}>`,
-      });
+      if (payload.channelId && payload.messageTs) {
+        await client.chat.update({
+          channel: payload.channelId,
+          ts: payload.messageTs,
+          blocks: getExecutedPlanBlocks(plan, payload.userId),
+          text: `Plan ${payload.planId} executed by <@${payload.userId}>`,
+        });
+      }
 
       // Post notification
-      if (config.approvalsChannel && config.approvalsChannel !== body.channel.id) {
-        await postExecutionNotification(client, plan, userId);
+      if (config.approvalsChannel && config.approvalsChannel !== payload.channelId) {
+        await postExecutionNotification(client, plan, payload.userId);
       }
 
       log("info", "button", "Plan executed via button", {
-        plan_id: planId,
-        user_id: userId,
+        plan_id: payload.planId,
+        user_id: payload.userId,
         success: plan.execution_result.success,
       });
     } catch (err) {
-      // Revert to approved state message on error
-      await respond({ text: `Error executing plan: ${err.message}`, response_type: "ephemeral" });
+      await respond({ text: `Error: ${safeErrorMessage(err)}`, response_type: "ephemeral" });
     }
   });
 
@@ -351,27 +400,27 @@ function registerInteractiveButtons(runtime) {
   slackApp.action("reject_plan", async ({ body, ack, client, respond }) => {
     await ack();
 
-    const planId = body.actions[0].value;
-    const userId = body.user.id;
-
-    if (!isValidSlackUserId(userId)) {
-      await respond({ text: "Error: Invalid user ID", response_type: "ephemeral" });
+    const payload = validateActionPayload(body);
+    if (!payload.valid) {
+      await respond({ text: `Error: ${payload.error}`, response_type: "ephemeral" });
       return;
     }
 
     try {
-      const plan = runtime.rejectPlan(planId, userId, "Rejected via Slack button");
+      const plan = runtime.rejectPlan(payload.planId, payload.userId, "Rejected via Slack button");
 
-      await client.chat.update({
-        channel: body.channel.id,
-        ts: body.message.ts,
-        blocks: getRejectedPlanBlocks(plan, userId),
-        text: `Plan ${planId} rejected by <@${userId}>`,
-      });
+      if (payload.channelId && payload.messageTs) {
+        await client.chat.update({
+          channel: payload.channelId,
+          ts: payload.messageTs,
+          blocks: getRejectedPlanBlocks(plan, payload.userId),
+          text: `Plan ${payload.planId} rejected by <@${payload.userId}>`,
+        });
+      }
 
-      log("info", "button", "Plan rejected via button", { plan_id: planId, user_id: userId });
+      log("info", "button", "Plan rejected via button", { plan_id: payload.planId, user_id: payload.userId });
     } catch (err) {
-      await respond({ text: `Error rejecting plan: ${err.message}`, response_type: "ephemeral" });
+      await respond({ text: `Error: ${safeErrorMessage(err)}`, response_type: "ephemeral" });
     }
   });
 }
@@ -415,6 +464,27 @@ function getHelpMessage() {
   };
 }
 
+// Truncate text to fit Slack's 3000-char mrkdwn limit
+const MAX_MRKDWN_LENGTH = 2900;
+const MAX_ACTIONS_DISPLAY = 20;
+const MAX_HEADER_LENGTH = 150;
+
+function truncateActionsText(actions, formatter) {
+  const displayed = actions.slice(0, MAX_ACTIONS_DISPLAY);
+  let text = displayed.map(formatter).join("\n");
+  if (actions.length > MAX_ACTIONS_DISPLAY) {
+    text += `\n_...and ${actions.length - MAX_ACTIONS_DISPLAY} more_`;
+  }
+  if (text.length > MAX_MRKDWN_LENGTH) {
+    text = text.substring(0, MAX_MRKDWN_LENGTH) + "\n_...truncated_";
+  }
+  return text;
+}
+
+function safeHeader(text) {
+  return text.substring(0, MAX_HEADER_LENGTH);
+}
+
 function formatPlansMessage(plans, state) {
   if (plans.length === 0) {
     return { text: `No plans in '${state}' state.` };
@@ -446,19 +516,19 @@ function formatPlansMessage(plans, state) {
  * Generate Slack blocks for a new plan requiring approval
  */
 function getProposedPlanBlocks(plan) {
-  const actionsText = plan.actions.map((a) => `• ${escapeMrkdwn(a.type)}: ${escapeMrkdwn(a.target)}`).join("\n");
+  const actionsText = truncateActionsText(plan.actions, (a) => `• ${escapeMrkdwn(a.type)}: ${escapeMrkdwn(a.target)}`);
 
   return [
     {
       type: "header",
-      text: { type: "plain_text", text: "Response Plan Requires Approval" },
+      text: { type: "plain_text", text: safeHeader("Response Plan Requires Approval") },
     },
     {
       type: "section",
       fields: [
         { type: "mrkdwn", text: `*Plan ID:*\n\`${plan.plan_id}\`` },
-        { type: "mrkdwn", text: `*Case:*\n${plan.case_id}` },
-        { type: "mrkdwn", text: `*Risk Level:*\n${plan.risk_level.toUpperCase()}` },
+        { type: "mrkdwn", text: `*Case:*\n${escapeMrkdwn(plan.case_id)}` },
+        { type: "mrkdwn", text: `*Risk Level:*\n${(plan.risk_level || "unknown").toUpperCase()}` },
         { type: "mrkdwn", text: `*Actions:*\n${plan.actions.length}` },
       ],
     },
@@ -499,19 +569,19 @@ function getProposedPlanBlocks(plan) {
 }
 
 function getApprovedPlanBlocks(plan, approverId) {
-  const actionsText = plan.actions.map((a) => `• ${escapeMrkdwn(a.type)}: ${escapeMrkdwn(a.target)}`).join("\n");
+  const actionsText = truncateActionsText(plan.actions, (a) => `• ${escapeMrkdwn(a.type)}: ${escapeMrkdwn(a.target)}`);
 
   return [
     {
       type: "header",
-      text: { type: "plain_text", text: "Plan Approved - Ready for Execution" },
+      text: { type: "plain_text", text: safeHeader("Plan Approved - Ready for Execution") },
     },
     {
       type: "section",
       fields: [
         { type: "mrkdwn", text: `*Plan ID:*\n\`${plan.plan_id}\`` },
-        { type: "mrkdwn", text: `*Case:*\n${plan.case_id}` },
-        { type: "mrkdwn", text: `*Risk Level:*\n${plan.risk_level.toUpperCase()}` },
+        { type: "mrkdwn", text: `*Case:*\n${escapeMrkdwn(plan.case_id)}` },
+        { type: "mrkdwn", text: `*Risk Level:*\n${(plan.risk_level || "unknown").toUpperCase()}` },
         { type: "mrkdwn", text: `*Approved by:*\n<@${approverId}>` },
       ],
     },
@@ -567,10 +637,7 @@ function getExecutingPlanBlocks(planId, executorId, actions) {
 
   // Preserve action context so the user can see what's being executed
   if (Array.isArray(actions) && actions.length > 0) {
-    const actionList = actions
-      .map((a) => `:hourglass_flowing_sand: \`${a.type}\` → ${a.target}`)
-      .slice(0, 20) // Cap display at 20 actions
-      .join("\n");
+    const actionList = truncateActionsText(actions, (a) => `:hourglass_flowing_sand: \`${escapeMrkdwn(a.type)}\` → ${escapeMrkdwn(a.target)}`);
     blocks.push({
       type: "section",
       text: { type: "mrkdwn", text: `*Actions (${actions.length}):*\n${actionList}` },
@@ -592,21 +659,21 @@ function getExecutedPlanBlocks(plan, executorId) {
   const statusEmoji = result.success ? ":white_check_mark:" : ":warning:";
   const statusText = result.success ? "All Actions Completed Successfully" : "Execution Completed with Failures";
 
-  const resultsText = (result.results || []).map((r) => {
+  const resultsText = truncateActionsText(result.results || [], (r) => {
     const emoji = r.status === "success" ? ":white_check_mark:" : ":x:";
-    return `${emoji} ${r.action_type}: ${r.target} - ${r.status}`;
-  }).join("\n");
+    return `${emoji} ${escapeMrkdwn(r.action_type)}: ${escapeMrkdwn(r.target)} - ${r.status}`;
+  });
 
   return [
     {
       type: "header",
-      text: { type: "plain_text", text: `${statusEmoji} ${statusText}` },
+      text: { type: "plain_text", text: safeHeader(`${statusEmoji} ${statusText}`) },
     },
     {
       type: "section",
       fields: [
         { type: "mrkdwn", text: `*Plan ID:*\n\`${plan.plan_id}\`` },
-        { type: "mrkdwn", text: `*Case:*\n${plan.case_id}` },
+        { type: "mrkdwn", text: `*Case:*\n${escapeMrkdwn(plan.case_id)}` },
         { type: "mrkdwn", text: `*Executed by:*\n<@${executorId}>` },
         { type: "mrkdwn", text: `*Result:*\n${result.actions_success || 0}/${result.actions_total || 0} succeeded` },
       ],
@@ -636,7 +703,7 @@ function getRejectedPlanBlocks(plan, rejectorId) {
         { type: "mrkdwn", text: `*Plan ID:*\n\`${plan.plan_id}\`` },
         { type: "mrkdwn", text: `*Case:*\n${plan.case_id}` },
         { type: "mrkdwn", text: `*Rejected by:*\n<@${rejectorId}>` },
-        { type: "mrkdwn", text: `*Reason:*\n${plan.rejection_reason || "_No reason provided_"}` },
+        { type: "mrkdwn", text: `*Reason:*\n${escapeMrkdwn(plan.rejection_reason) || "_No reason provided_"}` },
       ],
     },
     {
@@ -742,7 +809,7 @@ async function postCaseAlert(caseData) {
   };
 
   const emoji = severityEmoji[caseData.severity] || ":bell:";
-  const entitiesText = caseData.entities.slice(0, 5).map((e) => `• ${e.type}: ${e.value}`).join("\n");
+  const entitiesText = caseData.entities.slice(0, 5).map((e) => `• ${escapeMrkdwn(e.type)}: ${escapeMrkdwn(e.value)}`).join("\n");
 
   try {
     const result = await slackApp.client.chat.postMessage({
@@ -750,18 +817,18 @@ async function postCaseAlert(caseData) {
       blocks: [
         {
           type: "header",
-          text: { type: "plain_text", text: `${emoji} ${caseData.title}` },
+          text: { type: "plain_text", text: safeHeader(`${emoji} ${caseData.title}`) },
         },
         {
           type: "section",
           fields: [
             { type: "mrkdwn", text: `*Case ID:*\n\`${caseData.case_id}\`` },
-            { type: "mrkdwn", text: `*Severity:*\n${caseData.severity.toUpperCase()}` },
+            { type: "mrkdwn", text: `*Severity:*\n${(caseData.severity || "unknown").toUpperCase()}` },
           ],
         },
         {
           type: "section",
-          text: { type: "mrkdwn", text: `*Summary:*\n${caseData.summary}` },
+          text: { type: "mrkdwn", text: `*Summary:*\n${escapeMrkdwn(caseData.summary)}` },
         },
         {
           type: "section",

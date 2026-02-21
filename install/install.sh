@@ -27,7 +27,7 @@ set -euo pipefail
 # CONFIGURATION
 # =============================================================================
 
-VERSION="3.1.0"
+VERSION="3.2.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
@@ -315,8 +315,8 @@ install_dependencies() {
 
     # Node.js
     if ! command -v node &>/dev/null; then
-        log_info "Installing Node.js 20..."
-        curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
+        log_info "Installing Node.js 22 LTS..."
+        curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null 2>&1
         $PKG_INSTALL nodejs
     fi
 
@@ -326,8 +326,8 @@ install_dependencies() {
         log_error "Could not determine Node.js version"
         exit 1
     fi
-    if [[ "$node_ver" -lt 18 ]]; then
-        log_error "Node.js 18+ required. Found: $(node -v)"
+    if [[ "$node_ver" -lt 20 ]]; then
+        log_error "Node.js 20+ required. Found: $(node -v)"
         exit 1
     fi
     log_success "Node.js $(node -v)"
@@ -530,17 +530,44 @@ setup_credentials() {
     log_step "Generating Secure Credentials"
 
     echo ""
-    echo "  Generating cryptographically secure tokens..."
     echo "  These will be stored in $SECRETS_DIR with mode 600"
     echo ""
 
-    # Generate all secrets
+    # Idempotent: reuse existing secrets if present (prevents breaking running services on re-install)
     local MCP_AUTH_TOKEN OPENCLAW_TOKEN PAIRING_SECRET APPROVAL_SECRET
+    local _generated_new=false
 
-    MCP_AUTH_TOKEN="wazuh_$(generate_secret 32)"
-    OPENCLAW_TOKEN=$(generate_secret 32)
-    PAIRING_SECRET=$(generate_secret 16)
-    APPROVAL_SECRET=$(generate_secret 32)
+    if [[ -s "$SECRETS_DIR/mcp_token" ]]; then
+        MCP_AUTH_TOKEN=$(cat "$SECRETS_DIR/mcp_token")
+        log_info "Reusing existing MCP token"
+    else
+        MCP_AUTH_TOKEN="wazuh_$(generate_secret 32)"
+        _generated_new=true
+    fi
+
+    if [[ -s "$SECRETS_DIR/openclaw_token" ]]; then
+        OPENCLAW_TOKEN=$(cat "$SECRETS_DIR/openclaw_token")
+        log_info "Reusing existing OpenClaw token"
+    else
+        OPENCLAW_TOKEN=$(generate_secret 32)
+        _generated_new=true
+    fi
+
+    if [[ -s "$SECRETS_DIR/pairing_code" ]]; then
+        PAIRING_SECRET=$(cat "$SECRETS_DIR/pairing_code")
+        log_info "Reusing existing pairing code"
+    else
+        PAIRING_SECRET=$(generate_secret 16)
+        _generated_new=true
+    fi
+
+    if [[ -s "$SECRETS_DIR/approval_secret" ]]; then
+        APPROVAL_SECRET=$(cat "$SECRETS_DIR/approval_secret")
+        log_info "Reusing existing approval secret"
+    else
+        APPROVAL_SECRET=$(generate_secret 32)
+        _generated_new=true
+    fi
 
     # Store secrets in isolated files with restrictive umask
     local _old_umask
@@ -562,7 +589,11 @@ setup_credentials() {
     # Export for later use
     export MCP_AUTH_TOKEN OPENCLAW_TOKEN PAIRING_SECRET APPROVAL_SECRET
 
-    log_success "Credentials generated and isolated"
+    if [[ "$_generated_new" == "true" ]]; then
+        log_success "Credentials generated and isolated"
+    else
+        log_success "Existing credentials preserved"
+    fi
 }
 
 # =============================================================================
@@ -1017,11 +1048,17 @@ configure_system() {
     fi
 
     # Validate Wazuh API connectivity
+    # Use .netrc-style file to avoid exposing password in process table via curl -u
     log_info "Testing Wazuh API connectivity..."
     local _wazuh_test_response
+    local _curl_netrc
+    _curl_netrc=$(mktemp)
+    chmod 600 "$_curl_netrc"
+    printf 'machine %s\nlogin %s\npassword %s\n' "$WAZUH_HOST" "$WAZUH_USER" "$WAZUH_PASS" > "$_curl_netrc"
     _wazuh_test_response=$(curl -sk -o /dev/null -w "%{http_code}" \
-        -u "$WAZUH_USER:$WAZUH_PASS" \
+        --netrc-file "$_curl_netrc" \
         "$WAZUH_API_URL/security/user/authenticate" 2>/dev/null || echo "000")
+    rm -f "$_curl_netrc"
     if [[ "$_wazuh_test_response" == "000" ]]; then
         log_warn "Cannot reach Wazuh API at $WAZUH_API_URL — verify URL and that Wazuh is running"
         if ! confirm "  Continue anyway?" "n"; then
@@ -1175,50 +1212,58 @@ ENVEOF
         "$_envfile"
     rm -f "${_envfile}.bak"
 
-    # Substitute secrets separately using awk to avoid sed delimiter issues
-    # This handles passwords/tokens containing any special characters
+    # Substitute secrets using exported env vars and ENVIRON[] in awk.
+    # This avoids both: (a) sed delimiter issues with special chars in secrets,
+    # and (b) awk -v backslash interpretation that corrupts passwords with \ chars.
     local _tmpenv
-    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
-    awk -v val="$WAZUH_USER" '{gsub(/__WAZUH_USER__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
-    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
-    awk -v val="$WAZUH_PASS" '{gsub(/__WAZUH_PASS__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
-    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
-    awk -v val="$TAILSCALE_IP" '{gsub(/__TAILSCALE_IP__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
-    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
-    awk -v val="$MCP_AUTH_TOKEN" '{gsub(/__MCP_AUTH_TOKEN__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
-    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
-    awk -v val="$OPENCLAW_TOKEN" '{gsub(/__OPENCLAW_TOKEN__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
-    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
-    awk -v val="$ANTHROPIC_API_KEY" '{gsub(/__ANTHROPIC_API_KEY__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
-    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
-    awk -v val="$APPROVAL_SECRET" '{gsub(/__APPROVAL_SECRET__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
-    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
-    awk -v val="$PAIRING_SECRET" '{gsub(/__PAIRING_SECRET__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
-    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
-    awk -v val="$SLACK_APP_TOKEN" '{gsub(/__SLACK_APP_TOKEN__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
-    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
-    awk -v val="$SLACK_BOT_TOKEN" '{gsub(/__SLACK_BOT_TOKEN__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
-    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
-    awk -v val="$SLACK_ALERTS_CHANNEL" '{gsub(/__SLACK_ALERTS_CHANNEL__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
-    _tmpenv=$(mktemp "${_envfile}.XXXXXX")
-    awk -v val="$SLACK_APPROVALS_CHANNEL" '{gsub(/__SLACK_APPROVALS_CHANNEL__/, val)}1' "$_envfile" > "$_tmpenv" && mv "$_tmpenv" "$_envfile"
+    local _old_umask
+    _old_umask=$(umask)
+    umask 0077  # Ensure temp files are created with 600 permissions
+
+    _safe_subst() {
+        # Usage: _safe_subst PLACEHOLDER ENV_VAR_NAME FILE
+        # Uses ENVIRON[] to avoid awk -v backslash interpretation
+        local placeholder="$1" envvar="$2" file="$3"
+        local tmpf
+        tmpf=$(mktemp "${file}.XXXXXX")
+        export "$envvar"
+        awk -v ph="$placeholder" 'BEGIN{val=ENVIRON[ARGV[2]]; delete ARGV[2]} {gsub(ph, val)}1' "$file" "$envvar" > "$tmpf" && mv "$tmpf" "$file"
+    }
+
+    _safe_subst "__WAZUH_USER__" "WAZUH_USER" "$_envfile"
+    _safe_subst "__WAZUH_PASS__" "WAZUH_PASS" "$_envfile"
+    _safe_subst "__TAILSCALE_IP__" "TAILSCALE_IP" "$_envfile"
+    _safe_subst "__MCP_AUTH_TOKEN__" "MCP_AUTH_TOKEN" "$_envfile"
+    _safe_subst "__OPENCLAW_TOKEN__" "OPENCLAW_TOKEN" "$_envfile"
+    _safe_subst "__ANTHROPIC_API_KEY__" "ANTHROPIC_API_KEY" "$_envfile"
+    _safe_subst "__APPROVAL_SECRET__" "APPROVAL_SECRET" "$_envfile"
+    _safe_subst "__PAIRING_SECRET__" "PAIRING_SECRET" "$_envfile"
+    _safe_subst "__SLACK_APP_TOKEN__" "SLACK_APP_TOKEN" "$_envfile"
+    _safe_subst "__SLACK_BOT_TOKEN__" "SLACK_BOT_TOKEN" "$_envfile"
+    _safe_subst "__SLACK_ALERTS_CHANNEL__" "SLACK_ALERTS_CHANNEL" "$_envfile"
+    _safe_subst "__SLACK_APPROVALS_CHANNEL__" "SLACK_APPROVALS_CHANNEL" "$_envfile"
+
+    umask "$_old_umask"
 
     chmod 600 "$CONFIG_DIR/.env"
 
     # Substitute placeholders in openclaw.json (generated earlier with placeholder values)
     local _ocjson="$HOME/.openclaw/openclaw.json"
     if [[ -f "$_ocjson" ]]; then
-        local _tmpoc
-        _tmpoc=$(mktemp "${_ocjson}.XXXXXX")
-        awk -v val="$ANTHROPIC_API_KEY" '{gsub(/__ANTHROPIC_API_KEY__/, val)}1' "$_ocjson" > "$_tmpoc" && mv "$_tmpoc" "$_ocjson"
-        _tmpoc=$(mktemp "${_ocjson}.XXXXXX")
-        awk -v val="http://$TAILSCALE_IP:$MCP_PORT" '{gsub(/__WAZUH_MCP_URL__/, val)}1' "$_ocjson" > "$_tmpoc" && mv "$_tmpoc" "$_ocjson"
-        _tmpoc=$(mktemp "${_ocjson}.XXXXXX")
-        awk -v val="$MCP_AUTH_TOKEN" '{gsub(/__MCP_AUTH_TOKEN__/, val)}1' "$_ocjson" > "$_tmpoc" && mv "$_tmpoc" "$_ocjson"
-        _tmpoc=$(mktemp "${_ocjson}.XXXXXX")
-        awk -v val="$SLACK_BOT_TOKEN" '{gsub(/__SLACK_BOT_TOKEN__/, val)}1' "$_ocjson" > "$_tmpoc" && mv "$_tmpoc" "$_ocjson"
-        _tmpoc=$(mktemp "${_ocjson}.XXXXXX")
-        awk -v val="$SLACK_APP_TOKEN" '{gsub(/__SLACK_APP_TOKEN__/, val)}1' "$_ocjson" > "$_tmpoc" && mv "$_tmpoc" "$_ocjson"
+        local _old_umask2
+        _old_umask2=$(umask)
+        umask 0077
+
+        # Construct MCP URL for substitution
+        export WAZUH_MCP_URL_COMPUTED="http://$TAILSCALE_IP:$MCP_PORT"
+
+        _safe_subst "__ANTHROPIC_API_KEY__" "ANTHROPIC_API_KEY" "$_ocjson"
+        _safe_subst "__WAZUH_MCP_URL__" "WAZUH_MCP_URL_COMPUTED" "$_ocjson"
+        _safe_subst "__MCP_AUTH_TOKEN__" "MCP_AUTH_TOKEN" "$_ocjson"
+        _safe_subst "__SLACK_BOT_TOKEN__" "SLACK_BOT_TOKEN" "$_ocjson"
+        _safe_subst "__SLACK_APP_TOKEN__" "SLACK_APP_TOKEN" "$_ocjson"
+
+        umask "$_old_umask2"
         chmod 600 "$_ocjson"
         log_success "OpenClaw config updated with credentials"
     fi
@@ -1326,14 +1371,14 @@ validate_configuration() {
         echo -e "  ${GREEN}✓${NC} Wazuh host configured"
     else
         echo -e "  ${RED}✗${NC} WAZUH_HOST not configured"
-        ((issues++))
+        issues=$((issues + 1))
     fi
 
     if grep -q "^WAZUH_PASS=.\+" "$CONFIG_DIR/.env" 2>/dev/null; then
         echo -e "  ${GREEN}✓${NC} Wazuh API credentials set"
     else
         echo -e "  ${RED}✗${NC} WAZUH_PASS not set"
-        ((issues++))
+        issues=$((issues + 1))
     fi
 
     # Check MCP URL
@@ -1341,7 +1386,7 @@ validate_configuration() {
         echo -e "  ${GREEN}✓${NC} MCP Server URL configured"
     else
         echo -e "  ${RED}✗${NC} MCP Server URL not configured"
-        ((issues++))
+        issues=$((issues + 1))
     fi
 
     # Check at least one LLM provider (cloud API key OR local Ollama)
@@ -1361,7 +1406,7 @@ validate_configuration() {
     else
         echo -e "  ${YELLOW}!${NC} No LLM API key or local Ollama found"
         echo -e "        Set at least one provider key in .env, or install Ollama for air-gapped mode"
-        ((warnings++))
+        warnings=$((warnings + 1))
     fi
 
     # Check policy file exists
@@ -1369,7 +1414,7 @@ validate_configuration() {
         echo -e "  ${GREEN}✓${NC} Policy file present"
     else
         echo -e "  ${RED}✗${NC} Policy file missing"
-        ((issues++))
+        issues=$((issues + 1))
     fi
 
     # Check toolmap file exists
@@ -1377,7 +1422,7 @@ validate_configuration() {
         echo -e "  ${GREEN}✓${NC} Toolmap file present"
     else
         echo -e "  ${RED}✗${NC} Toolmap file missing"
-        ((issues++))
+        issues=$((issues + 1))
     fi
 
     # Check OpenClaw token
@@ -1385,7 +1430,7 @@ validate_configuration() {
         echo -e "  ${GREEN}✓${NC} OpenClaw token generated"
     else
         echo -e "  ${RED}✗${NC} OpenClaw token not found"
-        ((issues++))
+        issues=$((issues + 1))
     fi
 
     # --- Optional checks (warnings only) ---
@@ -1400,7 +1445,7 @@ validate_configuration() {
         echo -e "  ${GREEN}✓${NC} Slack integration configured"
     else
         echo -e "  ${YELLOW}○${NC} Slack not configured (optional - approvals work via REST API)"
-        ((warnings++))
+        warnings=$((warnings + 1))
     fi
 
     # Check if ports are available
@@ -1416,7 +1461,7 @@ validate_configuration() {
             echo -e "  ${GREEN}✓${NC} Port $port ($label) available"
         else
             echo -e "  ${YELLOW}!${NC} Port $port ($label) already in use"
-            ((warnings++))
+            warnings=$((warnings + 1))
         fi
     done
 
@@ -1572,7 +1617,7 @@ run_security_audit() {
         echo -e "  ${GREEN}✓${NC} Gateway binds to localhost"
     else
         echo -e "  ${RED}✗${NC} Gateway binding not verified"
-        ((issues++))
+        issues=$((issues + 1))
     fi
 
     # Check directory permissions
@@ -1582,7 +1627,7 @@ run_security_audit() {
         echo -e "  ${GREEN}✓${NC} Config directory permissions (700)"
     else
         echo -e "  ${YELLOW}!${NC} Config directory permissions: $config_perms (should be 700)"
-        ((issues++))
+        issues=$((issues + 1))
     fi
 
     # Check secrets permissions
@@ -1592,7 +1637,7 @@ run_security_audit() {
         echo -e "  ${GREEN}✓${NC} Secrets directory permissions (700)"
     else
         echo -e "  ${YELLOW}!${NC} Secrets directory permissions: $secrets_perms (should be 700)"
-        ((issues++))
+        issues=$((issues + 1))
     fi
 
     # Check env file permissions
@@ -1602,7 +1647,7 @@ run_security_audit() {
         echo -e "  ${GREEN}✓${NC} Environment file permissions (600)"
     else
         echo -e "  ${YELLOW}!${NC} Environment file permissions: $env_perms (should be 600)"
-        ((issues++))
+        issues=$((issues + 1))
     fi
 
     # Check Tailscale
@@ -1612,7 +1657,7 @@ run_security_audit() {
         echo -e "  ${GREEN}✓${NC} Tailscale connected"
     else
         echo -e "  ${RED}✗${NC} Tailscale not connected"
-        ((issues++))
+        issues=$((issues + 1))
     fi
 
     # Check firewall
@@ -1622,7 +1667,7 @@ run_security_audit() {
         echo -e "  ${GREEN}✓${NC} Firewall active (firewalld)"
     else
         echo -e "  ${YELLOW}!${NC} No firewall detected"
-        ((issues++))
+        issues=$((issues + 1))
     fi
 
     # Check responder status
@@ -1699,9 +1744,14 @@ main() {
     trap '_cleanup_on_exit' EXIT INT TERM
     _cleanup_on_exit() {
         local _exit_code=$?
-        # Remove any orphaned .env temp files (pattern: .env.XXXXXX)
+        # Remove any orphaned temp files containing secrets
         if [[ -n "${CONFIG_DIR:-}" ]]; then
             rm -f "${CONFIG_DIR}/.env."?????? 2>/dev/null || true
+        fi
+        # Also clean up openclaw.json temp files
+        local _oc_dir="${HOME:-/root}/.openclaw"
+        if [[ -d "$_oc_dir" ]]; then
+            rm -f "${_oc_dir}/openclaw.json."?????? 2>/dev/null || true
         fi
         if [[ $_exit_code -ne 0 ]]; then
             echo ""
