@@ -186,38 +186,9 @@
   // ---------------------------------------------------------------------------
   // CHANNEL CONFIGURATION
   // ---------------------------------------------------------------------------
-  "channels": {
-    "slack": {
-      "enabled": true,
-      "botToken": "${SLACK_BOT_TOKEN}",
-      "appToken": "${SLACK_APP_TOKEN}",
-      "dmPolicy": "allowlist",
-      "allowFrom": [],
-      "groupPolicy": "allowlist"
-    }
-  },
-
+  // Slack disabled for air-gapped deployments. Agents operate via REST API
+  // and heartbeats. Enable and configure tokens if Slack is available.
   // ---------------------------------------------------------------------------
-  // MULTI-AGENT ROUTING
-  // ---------------------------------------------------------------------------
-  // Bindings route Slack messages to agents. Remove this section if Slack is
-  // not used — agents will still operate via REST API and heartbeats.
-  "bindings": [
-    {
-      "agentId": "wazuh-triage",
-      "match": {
-        "channel": "slack",
-        "peer": { "kind": "group", "id": "*" }
-      }
-    },
-    {
-      "agentId": "wazuh-responder",
-      "match": {
-        "channel": "slack",
-        "peer": { "kind": "group", "id": "approvals" }
-      }
-    }
-  ],
 
   // ---------------------------------------------------------------------------
   // GLOBAL TOOL POLICY

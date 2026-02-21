@@ -146,6 +146,12 @@ parse_args() {
         SKIP_TAILSCALE=true
         log_info "AUTOPILOT_MODE=bootstrap detected — Tailscale will be skipped"
     fi
+
+    # Support AUTOPILOT_REQUIRE_TAILSCALE=false as alternative
+    if [[ "${AUTOPILOT_REQUIRE_TAILSCALE:-true}" == "false" ]]; then
+        SKIP_TAILSCALE=true
+        log_info "AUTOPILOT_REQUIRE_TAILSCALE=false detected — Tailscale will be skipped"
+    fi
 }
 
 # =============================================================================
@@ -767,8 +773,8 @@ deploy_agents() {
       },
       "memorySearch": {
         "sources": ["memory", "sessions"],
-        "provider": "openai",
-        "model": "text-embedding-3-small"
+        "provider": "__MEMORY_PROVIDER__",
+        "model": "__MEMORY_MODEL__"
       },
       "maxConcurrent": 3,
       "timeoutSeconds": 600
@@ -874,12 +880,12 @@ deploy_agents() {
 
   "bindings": [
     {
-      "agentId": "wazuh-triage",
-      "match": {"channel": "slack", "peer": {"kind": "group", "id": "*"}}
-    },
-    {
       "agentId": "wazuh-responder",
       "match": {"channel": "slack", "peer": {"kind": "group", "id": "approvals"}}
+    },
+    {
+      "agentId": "wazuh-triage",
+      "match": {"channel": "slack", "peer": {"kind": "group", "id": "*"}}
     }
   ],
 
@@ -913,6 +919,14 @@ deploy_agents() {
 
   "env": {
     "ANTHROPIC_API_KEY": "__ANTHROPIC_API_KEY__",
+    "OPENAI_API_KEY": "__OPENAI_API_KEY__",
+    "GOOGLE_API_KEY": "__GOOGLE_API_KEY__",
+    "GROQ_API_KEY": "__GROQ_API_KEY__",
+    "MISTRAL_API_KEY": "__MISTRAL_API_KEY__",
+    "XAI_API_KEY": "__XAI_API_KEY__",
+    "OPENROUTER_API_KEY": "__OPENROUTER_API_KEY__",
+    "TOGETHER_API_KEY": "__TOGETHER_API_KEY__",
+    "CEREBRAS_API_KEY": "__CEREBRAS_API_KEY__",
     "WAZUH_MCP_URL": "__WAZUH_MCP_URL__",
     "WAZUH_MCP_TOKEN": "__MCP_AUTH_TOKEN__"
   }
@@ -1095,23 +1109,27 @@ configure_system() {
     fi
 
     echo ""
-    echo -e "${CYAN}${BOLD}API Keys Configuration${NC}"
+    echo -e "${CYAN}${BOLD}LLM Provider Configuration${NC}"
     echo ""
-    echo "  You need an Anthropic API key for the AI agents."
-    echo "  Get one at: https://console.anthropic.com/"
-    echo ""
-
-    local ANTHROPIC_API_KEY
-    read -rsp "  Anthropic API Key (sk-ant-...): " ANTHROPIC_API_KEY
+    echo "  Configure at least one LLM provider for the AI agents."
+    echo "  Options: Anthropic API key, or local Ollama (air-gapped)."
     echo ""
 
-    # Validate API key format
+    local ANTHROPIC_API_KEY=""
+    read -rsp "  Anthropic API Key (sk-ant-..., or press Enter to skip): " ANTHROPIC_API_KEY
+    echo ""
+
+    # Validate API key format if provided
     if [[ -n "$ANTHROPIC_API_KEY" && ! "$ANTHROPIC_API_KEY" =~ ^sk-ant- ]]; then
         log_warn "Anthropic API key doesn't start with 'sk-ant-' — please verify it's correct"
     fi
     if [[ -z "$ANTHROPIC_API_KEY" ]]; then
-        log_error "Anthropic API key is required for the AI agents"
-        exit 1
+        if command -v ollama &>/dev/null; then
+            log_info "No Anthropic key — using local Ollama as LLM provider"
+        else
+            log_warn "No Anthropic key and Ollama not found — agents may not function"
+            log_warn "Set an LLM provider key in $CONFIG_DIR/.env later, or install Ollama"
+        fi
     fi
 
     echo ""
@@ -1276,11 +1294,28 @@ ENVEOF
         # Construct MCP URL for substitution
         export WAZUH_MCP_URL_COMPUTED="http://$TAILSCALE_IP:$MCP_PORT"
 
+        # Determine memory provider: use local embeddings for air-gapped, OpenAI otherwise
+        if [[ "$SKIP_TAILSCALE" == "true" ]] || [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+            export MEMORY_PROVIDER="local"
+            export MEMORY_MODEL="hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M.gguf"
+        else
+            export MEMORY_PROVIDER="openai"
+            export MEMORY_MODEL="text-embedding-3-small"
+        fi
+        _safe_subst "__MEMORY_PROVIDER__" "MEMORY_PROVIDER" "$_ocjson"
+        _safe_subst "__MEMORY_MODEL__" "MEMORY_MODEL" "$_ocjson"
+
         _safe_subst "__ANTHROPIC_API_KEY__" "ANTHROPIC_API_KEY" "$_ocjson"
         _safe_subst "__WAZUH_MCP_URL__" "WAZUH_MCP_URL_COMPUTED" "$_ocjson"
         _safe_subst "__MCP_AUTH_TOKEN__" "MCP_AUTH_TOKEN" "$_ocjson"
         _safe_subst "__SLACK_BOT_TOKEN__" "SLACK_BOT_TOKEN" "$_ocjson"
         _safe_subst "__SLACK_APP_TOKEN__" "SLACK_APP_TOKEN" "$_ocjson"
+
+        # Substitute additional provider API keys (empty string if not set)
+        for _provider_key in OPENAI_API_KEY GOOGLE_API_KEY GROQ_API_KEY MISTRAL_API_KEY XAI_API_KEY OPENROUTER_API_KEY TOGETHER_API_KEY CEREBRAS_API_KEY; do
+            export "$_provider_key"="${!_provider_key:-}"
+            _safe_subst "__${_provider_key}__" "$_provider_key" "$_ocjson"
+        done
 
         umask "$_old_umask2"
         chmod 600 "$_ocjson"
