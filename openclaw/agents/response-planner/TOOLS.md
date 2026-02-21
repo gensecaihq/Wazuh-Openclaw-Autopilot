@@ -81,3 +81,21 @@ When submitting the plan, note in the description if escalation rules apply:
 ## Selecting Playbook Actions
 
 Match the investigation's attack classification to the appropriate playbook (brute force, lateral movement, malware, data exfiltration, privilege escalation) and select primary/secondary actions based on the conditions documented in AGENTS.md. Always check the condition gates (e.g., "attempts > 10", "confidence > 0.8", "malware confirmed") before including an action.
+
+## Runtime API Access
+
+The Response Planner can call the runtime REST API at `http://localhost:9090` using `web.fetch`. All requests require Bearer authentication.
+
+```
+Authorization: Bearer ${AUTOPILOT_MCP_AUTH}
+```
+
+### Read Case for Context
+
+Before building a response plan, fetch the full case to review investigation findings, correlation data, and severity.
+
+```
+GET http://localhost:9090/api/cases/{case_id}
+```
+
+The `POST /api/plans` endpoint for submitting plans is documented above in the "Runtime API: Submit Plans" section.

@@ -95,3 +95,35 @@ Sysmon process creation events (rule ID 92001, 92002) contain `processGuid` and 
 - For IP IOCs, include the observed ports and protocols.
 - For hash IOCs, include the file name and path where the hash was observed.
 - For user IOCs, note whether the account is compromised (attacker used it) or targeted (attacker tried to access it).
+
+## Runtime API Access
+
+The Investigation Agent can call the runtime REST API at `http://localhost:9090` using `web.fetch`. All requests require Bearer authentication.
+
+```
+Authorization: Bearer ${AUTOPILOT_MCP_AUTH}
+```
+
+### Read Case for Deep Investigation
+
+```
+GET http://localhost:9090/api/cases/{case_id}
+```
+
+Returns the full case object including triage data, correlation results, entities, and evidence references. Use this as the starting point for pivot queries against the Wazuh indexer.
+
+### Update Case with Investigation Findings
+
+After completing all pivot queries, baseline comparisons, and IOC extraction, write the findings back and advance the case status.
+
+```
+PUT http://localhost:9090/api/cases/{case_id}
+Content-Type: application/json
+
+{
+  "investigation": { ... },
+  "status": "investigated"
+}
+```
+
+Setting `status: "investigated"` automatically triggers the Response Planner.

@@ -87,3 +87,43 @@ Count distinct kill chain phases present in the cluster. Score:
 - Process correlation in 5-minute windows during cron runs.
 - For high-severity clusters (score >= 0.8), emit immediately without waiting for the batch window to close.
 - Cap cluster size at 50 cases to prevent runaway correlation on noisy rule groups.
+
+## Runtime API Access
+
+The Correlation Agent can call the runtime REST API at `http://localhost:9090` using `web.fetch`. All requests require Bearer authentication.
+
+```
+Authorization: Bearer ${AUTOPILOT_MCP_AUTH}
+```
+
+### List Cases (Find Triaged Cases)
+
+```
+GET http://localhost:9090/api/cases
+```
+
+Filter the response for cases with `status: "triaged"` to identify cases ready for correlation.
+
+### Read Full Case Evidence Pack
+
+```
+GET http://localhost:9090/api/cases/{case_id}
+```
+
+Returns the complete case object including entities, timeline, MITRE mappings, and evidence references.
+
+### Update Case with Correlation Data
+
+After computing entity overlaps, temporal clusters, and attack chain scores, write the correlation results back and advance the case status.
+
+```
+PUT http://localhost:9090/api/cases/{case_id}
+Content-Type: application/json
+
+{
+  "correlation": { ... },
+  "status": "correlated"
+}
+```
+
+Setting `status: "correlated"` automatically triggers the Investigation Agent.

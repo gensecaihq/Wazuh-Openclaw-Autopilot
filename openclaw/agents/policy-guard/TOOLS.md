@@ -92,3 +92,15 @@ If below threshold, deny with `LOW_CONFIDENCE`.
 ## Evidence Threshold Check
 
 Count the evidence items attached to the case. A minimum of 3 evidence items is required. If fewer, deny with `INSUFFICIENT_EVIDENCE`.
+
+## Runtime API Access
+
+All runtime API requests use `web.fetch` and require Bearer authentication.
+
+```
+Authorization: Bearer ${AUTOPILOT_MCP_AUTH}
+```
+
+**Note on inline policy enforcement**: Policy enforcement is now handled inline by the runtime service at plan creation, approval, and execution time. The runtime reads `policy.yaml` and enforces action allowlists, confidence thresholds, approver authorization, and evidence requirements automatically.
+
+The Policy Guard agent is still triggered via webhook for supplementary LLM-based analysis, such as contextual risk reasoning that goes beyond static policy rules.

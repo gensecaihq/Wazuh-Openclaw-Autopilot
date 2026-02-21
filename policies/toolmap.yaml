@@ -126,7 +126,7 @@ action_operations:
     mcp_tool: wazuh_block_ip
     description: "Block an IP address via Wazuh active response"
     required: false
-    enabled: false  # Explicitly enable when ready
+    enabled: true
     risk_level: low
     reversible: true
     parameters:
@@ -152,7 +152,7 @@ action_operations:
     mcp_tool: wazuh_isolate_host
     description: "Isolate a host from the network"
     required: false
-    enabled: false
+    enabled: true
     risk_level: medium
     reversible: true
     parameters:
@@ -172,7 +172,7 @@ action_operations:
     mcp_tool: wazuh_kill_process
     description: "Terminate a process on an agent"
     required: false
-    enabled: false
+    enabled: true
     risk_level: medium
     reversible: false
     parameters:
@@ -193,7 +193,7 @@ action_operations:
     mcp_tool: wazuh_disable_user
     description: "Disable a user account"
     required: false
-    enabled: false
+    enabled: true
     risk_level: high
     reversible: true
     parameters:
@@ -216,7 +216,7 @@ action_operations:
     mcp_tool: wazuh_quarantine_file
     description: "Quarantine a file on an agent"
     required: false
-    enabled: false
+    enabled: true
     risk_level: low
     reversible: true
     parameters:
@@ -259,7 +259,7 @@ action_operations:
     mcp_tool: wazuh_firewall_drop
     description: "Add firewall drop rule via active response"
     required: false
-    enabled: false
+    enabled: true
     risk_level: medium
     reversible: true
     parameters:
@@ -282,7 +282,7 @@ action_operations:
     mcp_tool: wazuh_host_deny
     description: "Add entry to hosts.deny"
     required: false
-    enabled: false
+    enabled: true
     risk_level: medium
     reversible: true
     parameters:

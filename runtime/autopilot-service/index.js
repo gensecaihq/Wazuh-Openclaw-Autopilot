@@ -74,6 +74,9 @@ const config = {
   corsEnabled: process.env.CORS_ENABLED !== "false",
   // Graceful shutdown timeout (Issue #12 fix)
   shutdownTimeoutMs: parseInt(process.env.SHUTDOWN_TIMEOUT_MS || "30000", 10),
+  // OpenClaw Gateway dispatch (for agent pipeline handoffs)
+  openclawGatewayUrl: process.env.OPENCLAW_GATEWAY_URL || "http://127.0.0.1:18789",
+  openclawToken: process.env.OPENCLAW_TOKEN || "",
 };
 
 // =============================================================================
@@ -132,6 +135,9 @@ const metrics = {
   executions_success_total: 0,
   executions_failed_total: 0,
   responder_disabled_blocks_total: 0,
+  // Webhook dispatch metrics
+  webhook_dispatches_total: 0,
+  webhook_dispatch_failures_total: 0,
   policy_denies_total: {},
   errors_total: {},
 };
@@ -187,6 +193,7 @@ function formatMetrics() {
     "plans_rejected_total", "plans_expired_total",
     "executions_success_total", "executions_failed_total",
     "responder_disabled_blocks_total",
+    "webhook_dispatches_total", "webhook_dispatch_failures_total",
   ].forEach((name) => {
     lines.push(`# TYPE autopilot_${name} counter`);
     lines.push(`autopilot_${name} ${metrics[name] || 0}`);
@@ -231,6 +238,76 @@ function formatMetrics() {
   lines.push(`autopilot_plans_executing ${executingPlans.size}`);
 
   return lines.join("\n");
+}
+
+// =============================================================================
+// OPENCLAW GATEWAY DISPATCH (Agent Pipeline Handoffs)
+// =============================================================================
+
+/**
+ * Fire-and-forget async POST to OpenClaw Gateway webhook endpoint.
+ * Triggers downstream agents via OpenClaw's hook routing.
+ * Never throws — logs and records metrics on failure.
+ */
+async function dispatchToGateway(webhookPath, payload) {
+  if (!config.openclawGatewayUrl || !config.openclawToken) {
+    log("debug", "dispatch", "Gateway dispatch skipped (not configured)", { path: webhookPath });
+    return;
+  }
+
+  const url = `${config.openclawGatewayUrl}${webhookPath}`;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.openclawToken}`,
+        },
+        body: JSON.stringify({ ...payload, dispatched_at: new Date().toISOString() }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.ok || response.status < 500) {
+        incrementMetric("webhook_dispatches_total");
+        log("info", "dispatch", "Webhook dispatched", {
+          path: webhookPath,
+          status: response.status,
+          ...(attempt > 0 && { attempt: attempt + 1 }),
+        });
+        return;
+      }
+
+      // 5xx — retry once
+      if (attempt === 0) {
+        await response.text().catch(() => ""); // drain body
+        continue;
+      }
+    } catch (err) {
+      if (attempt === 0 && (err.name === "AbortError" ||
+        (err.cause && ["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT"].includes(err.cause.code)))) {
+        continue; // retry once on transient errors
+      }
+
+      incrementMetric("webhook_dispatch_failures_total");
+      log("warn", "dispatch", "Webhook dispatch failed", {
+        path: webhookPath,
+        error: err.message,
+        attempts: attempt + 1,
+      });
+      return;
+    }
+  }
+
+  // All attempts exhausted
+  incrementMetric("webhook_dispatch_failures_total");
+  log("warn", "dispatch", "Webhook dispatch failed after retries", { path: webhookPath });
 }
 
 // =============================================================================
@@ -416,6 +493,24 @@ async function updateCase(caseId, updates) {
 
     incrementMetric("cases_updated_total");
     log("info", "evidence-pack", "Case updated", { case_id: caseId });
+
+    // Dispatch to downstream agents based on status transitions
+    if (Object.prototype.hasOwnProperty.call(updates, "status")) {
+      const statusWebhooks = {
+        triaged: "/webhook/case-created",       // → correlation agent
+        correlated: "/webhook/investigation-request", // → investigation agent
+        investigated: "/webhook/plan-request",   // → response-planner agent
+      };
+      const webhookPath = statusWebhooks[updates.status];
+      if (webhookPath) {
+        dispatchToGateway(webhookPath, {
+          case_id: caseId,
+          status: updates.status,
+          severity: evidencePack.severity,
+          trigger: "status_change",
+        }).catch(() => {});
+      }
+    }
 
     return evidencePack;
   }); // end withCaseLock
@@ -623,6 +718,16 @@ function createResponsePlan(planData) {
     if (validationErrors.length > 0) {
       throw new Error(`Invalid actions: ${validationErrors.join("; ")}`);
     }
+
+    // Policy enforcement: check each action against allowlist
+    for (const action of planData.actions) {
+      const policyResult = policyCheckAction(action.type, planData.confidence || 0);
+      if (!policyResult.allowed) {
+        incrementMetric("policy_denies_total", { reason: "action_denied", action: action.type });
+        log("warn", "policy", "Action denied by policy", { action: action.type, reason: policyResult.reason });
+        throw new Error(`Policy denied action '${action.type}': ${policyResult.reason}`);
+      }
+    }
   }
 
   // Enforce plan limit
@@ -693,6 +798,15 @@ function createResponsePlan(planData) {
       log("warn", "plans", "Failed to post plan to Slack", { error: err.message, plan_id: planId });
     });
   }
+
+  // Dispatch to policy-guard agent for supplementary analysis
+  dispatchToGateway("/webhook/policy-check", {
+    plan_id: planId,
+    case_id: planData.case_id,
+    risk_level: plan.risk_level,
+    actions_count: plan.actions.length,
+    trigger: "plan_created",
+  }).catch(() => {});
 
   return plan;
 }
@@ -1024,11 +1138,21 @@ function parseSimpleYaml(content) {
     if (trimmed.startsWith("- ")) {
       const value = trimmed.substring(2).trim();
       // Bug #5 fix: Use pendingListKey to track which key should receive list items
-      const listKey = current.pendingListKey;
+      // Fix: When list items are indented under their key (standard YAML style),
+      // pendingListKey is on the parent stack entry. Look up the stack to find it.
+      let listKey = current.pendingListKey;
+      let targetObj = parent;
+      if (!listKey && stack.length > 1) {
+        const parentEntry = stack[stack.length - 2];
+        if (parentEntry.pendingListKey) {
+          listKey = parentEntry.pendingListKey;
+          targetObj = parentEntry.obj;
+        }
+      }
       if (listKey) {
-        // Ensure array exists
-        if (!Array.isArray(parent[listKey])) {
-          parent[listKey] = [];
+        // Ensure array exists (replaces the placeholder Object.create(null))
+        if (!Array.isArray(targetObj[listKey])) {
+          targetObj[listKey] = [];
         }
         // Bug #6 fix: Use indexOf to split on first colon only
         const colonIdx = value.indexOf(":");
@@ -1037,9 +1161,9 @@ function parseSimpleYaml(content) {
           const k = value.substring(0, colonIdx).trim();
           const v = value.substring(colonIdx + 1).trim().replace(/^["']|["']$/g, "");
           obj[k] = v;
-          parent[listKey].push(obj);
+          targetObj[listKey].push(obj);
         } else {
-          parent[listKey].push(value.replace(/^["']|["']$/g, ""));
+          targetObj[listKey].push(value.replace(/^["']|["']$/g, ""));
         }
       }
       continue;
@@ -1124,6 +1248,188 @@ async function loadToolmap() {
     };
     return toolmapConfig;
   }
+}
+
+// =============================================================================
+// POLICY ENFORCEMENT (Inline checks against policies/policy.yaml)
+// =============================================================================
+
+let policyConfig = null;
+
+async function loadPolicyConfig(overrideConfigDir) {
+  const policyPath = path.join(overrideConfigDir || config.configDir, "policies", "policy.yaml");
+  try {
+    const content = await fs.readFile(policyPath, "utf8");
+    policyConfig = parseSimpleYaml(content);
+    log("info", "policy", "Policy config loaded", { path: policyPath });
+    return policyConfig;
+  } catch (err) {
+    if (config.mode === "production") {
+      log("error", "policy", "Failed to load policy config (required in production)", { error: err.message });
+      throw err;
+    }
+    log("warn", "policy", "Policy config not loaded, enforcement will allow all in bootstrap mode", { error: err.message });
+    return null;
+  }
+}
+
+/**
+ * Check if an action type is allowed by policy.
+ * Returns { allowed: boolean, reason: string }
+ */
+function policyCheckAction(actionType, confidence = 0) {
+  if (!policyConfig) {
+    if (config.mode === "production") {
+      return { allowed: false, reason: "Policy not loaded" };
+    }
+    return { allowed: true, reason: "Policy not loaded (bootstrap mode — allowing)" };
+  }
+
+  const actions = policyConfig.actions;
+  if (!actions || actions.enabled === false) {
+    return { allowed: false, reason: "Actions globally disabled in policy" };
+  }
+
+  const allowlist = actions.allowlist;
+  if (!allowlist || !allowlist[actionType]) {
+    if (actions.deny_unlisted === true || actions.deny_unlisted === "true") {
+      return { allowed: false, reason: `Action '${actionType}' not in allowlist (deny_unlisted=true)` };
+    }
+    return { allowed: true, reason: "Action not in allowlist but deny_unlisted is false" };
+  }
+
+  const actionConfig = allowlist[actionType];
+
+  // Check if action is enabled
+  if (actionConfig.enabled === false || actionConfig.enabled === "false") {
+    return { allowed: false, reason: `Action '${actionType}' is disabled in policy` };
+  }
+
+  // Check minimum confidence
+  const minConfidence = parseFloat(actionConfig.min_confidence) || 0;
+  if (confidence > 0 && confidence < minConfidence) {
+    return { allowed: false, reason: `Confidence ${confidence} below minimum ${minConfidence} for '${actionType}'` };
+  }
+
+  return { allowed: true, reason: "Action allowed by policy" };
+}
+
+/**
+ * Check if an approver is authorized for given actions and risk level.
+ * Returns { authorized: boolean, reason: string }
+ */
+function policyCheckApprover(approverId, actionTypes = [], planRiskLevel = "medium") {
+  if (!policyConfig) {
+    if (config.mode === "production") {
+      return { authorized: false, reason: "Policy not loaded" };
+    }
+    return { authorized: true, reason: "Policy not loaded (bootstrap mode — allowing)" };
+  }
+
+  const approvers = policyConfig.approvers;
+  if (!approvers || !approvers.groups) {
+    return { authorized: true, reason: "No approver groups configured" };
+  }
+
+  // Check if all Slack IDs are placeholders (development/bootstrap scenario)
+  const allPlaceholders = Object.values(approvers.groups).every((group) => {
+    if (!group.members) return true;
+    if (Array.isArray(group.members)) {
+      return group.members.every((m) => {
+        const id = typeof m === "object" ? (m.slack_id || "") : String(m);
+        return id.startsWith("<") && id.endsWith(">");
+      });
+    }
+    return true;
+  });
+
+  if (allPlaceholders) {
+    log("warn", "policy", "All approver Slack IDs are placeholders — bypassing approver check", { approver_id: approverId });
+    return { authorized: true, reason: "Approver check bypassed (placeholder Slack IDs)" };
+  }
+
+  // Risk level hierarchy
+  const riskHierarchy = { low: 0, medium: 1, high: 2, critical: 3 };
+  const planRisk = riskHierarchy[planRiskLevel] !== undefined ? riskHierarchy[planRiskLevel] : 1;
+
+  // Search for this approver in all groups
+  for (const [groupName, group] of Object.entries(approvers.groups)) {
+    if (!group.members) continue;
+
+    const isMember = Array.isArray(group.members) && group.members.some((m) => {
+      const id = typeof m === "object" ? (m.slack_id || "") : String(m);
+      return id === approverId;
+    });
+
+    if (!isMember) continue;
+
+    // Check risk level
+    const maxRisk = riskHierarchy[group.max_risk_level] !== undefined ? riskHierarchy[group.max_risk_level] : 1;
+    if (planRisk > maxRisk) {
+      continue; // This group can't handle this risk level, try next
+    }
+
+    // Check if group can approve all requested action types
+    const canApprove = group.can_approve;
+    if (canApprove && Array.isArray(canApprove)) {
+      const canApproveList = canApprove.map((a) => typeof a === "object" ? Object.keys(a)[0] : String(a));
+      const allAllowed = actionTypes.every((at) => canApproveList.includes(at));
+      if (allAllowed) {
+        return { authorized: true, reason: `Authorized via '${groupName}' group` };
+      }
+    }
+  }
+
+  return { authorized: false, reason: `Approver '${approverId}' not authorized for risk='${planRiskLevel}' actions=[${actionTypes.join(",")}]` };
+}
+
+/**
+ * Check if a plan has sufficient evidence.
+ * Returns { sufficient: boolean, reason: string }
+ */
+async function policyCheckEvidence(planActions, caseId) {
+  if (!policyConfig) {
+    if (config.mode === "production") {
+      return { sufficient: false, reason: "Policy not loaded" };
+    }
+    return { sufficient: true, reason: "Policy not loaded (bootstrap mode — allowing)" };
+  }
+
+  // Count evidence items in the case
+  let evidenceCount = 0;
+  try {
+    const caseData = await getCase(caseId);
+    evidenceCount = (caseData.evidence_refs || []).length +
+                    (caseData.mcp_calls || []).length +
+                    (caseData.timeline || []).length;
+  } catch (err) {
+    log("warn", "policy", "Could not read case for evidence check", { case_id: caseId, error: err.message });
+    if (config.mode === "production") {
+      return { sufficient: false, reason: `Cannot verify evidence: ${err.message}` };
+    }
+    return { sufficient: true, reason: "Case not found (bootstrap mode — allowing)" };
+  }
+
+  // Check minimum evidence for each action
+  const allowlist = policyConfig.actions?.allowlist;
+  if (!allowlist) {
+    return { sufficient: true, reason: "No action allowlist configured" };
+  }
+
+  for (const action of planActions) {
+    const actionConfig = allowlist[action.type];
+    if (actionConfig) {
+      const minEvidence = parseInt(actionConfig.min_evidence_items, 10) || 0;
+      if (evidenceCount < minEvidence) {
+        return {
+          sufficient: false,
+          reason: `Action '${action.type}' requires ${minEvidence} evidence items, case has ${evidenceCount}`,
+        };
+      }
+    }
+  }
+
+  return { sufficient: true, reason: `Evidence sufficient (${evidenceCount} items)` };
 }
 
 // Resolve logical tool name to MCP tool name
@@ -2019,6 +2325,15 @@ function createServer() {
           // Create new case
           await createCase(caseId, caseData);
           log("info", "triage", "Created new case from alert", { case_id: caseId, alert_id: alertId, severity });
+
+          // Dispatch to triage agent via OpenClaw gateway
+          dispatchToGateway("/webhook/wazuh-alert", {
+            case_id: caseId,
+            severity,
+            title: caseData.title,
+            entities_count: entities.length,
+            trigger: "alert_ingestion",
+          }).catch(() => {});
         }
 
         // Record metrics
@@ -2173,6 +2488,21 @@ function createServer() {
         }
 
         try {
+          // Policy enforcement: check approver authorization
+          const planForCheck = getPlan(planId, { updateExpiry: false });
+          const actionTypes = (planForCheck.actions || []).map((a) => a.type);
+          const approverResult = policyCheckApprover(body.approver_id, actionTypes, planForCheck.risk_level);
+          if (!approverResult.authorized) {
+            incrementMetric("policy_denies_total", { reason: "approver_denied" });
+            log("warn", "policy", "Approver denied by policy", {
+              approver_id: body.approver_id,
+              plan_id: planId,
+              reason: approverResult.reason,
+            });
+            sendJsonError(res, 403, `Approver not authorized: ${approverResult.reason}`, requestId);
+            return;
+          }
+
           const plan = approvePlan(planId, body.approver_id, body.reason || "");
           res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
           res.end(JSON.stringify({
@@ -2241,6 +2571,20 @@ function createServer() {
         }
 
         try {
+          // Policy enforcement: check evidence sufficiency before execution
+          const planForEvidence = getPlan(planId, { updateExpiry: false });
+          const evidenceResult = await policyCheckEvidence(planForEvidence.actions, planForEvidence.case_id);
+          if (!evidenceResult.sufficient) {
+            incrementMetric("policy_denies_total", { reason: "insufficient_evidence" });
+            log("warn", "policy", "Execution denied: insufficient evidence", {
+              plan_id: planId,
+              case_id: planForEvidence.case_id,
+              reason: evidenceResult.reason,
+            });
+            sendJsonError(res, 403, `Insufficient evidence: ${evidenceResult.reason}`, requestId);
+            return;
+          }
+
           const plan = await executePlan(planId, body.executor_id);
           // Bug #2 fix: Return 200 for success, 207 (Multi-Status) for partial failure
           const statusCode = plan.state === PLAN_STATES.COMPLETED ? 200 : 207;
@@ -2372,6 +2716,9 @@ async function validateStartup() {
   // Load toolmap
   await loadToolmap();
 
+  // Load policy config for inline enforcement
+  await loadPolicyConfig();
+
   // Validate numeric configuration values
   const numericConfigs = [
     ["metricsPort", config.metricsPort],
@@ -2500,6 +2847,13 @@ module.exports = {
   loadToolmap,
   resolveMcpTool,
   isToolEnabled,
+  // Gateway dispatch
+  dispatchToGateway,
+  // Policy enforcement
+  loadPolicyConfig,
+  policyCheckAction,
+  policyCheckApprover,
+  policyCheckEvidence,
   // Metrics
   incrementMetric,
   recordLatency,

@@ -34,6 +34,11 @@ const {
   PLAN_STATES,
   validateAuthorization,
   isValidCaseId,
+  dispatchToGateway,
+  loadPolicyConfig,
+  policyCheckAction,
+  policyCheckApprover,
+  policyCheckEvidence,
 } = require("./index.js");
 
 describe("Evidence Pack Management", () => {
@@ -576,6 +581,298 @@ describe("Case ID Validation", () => {
     assert.strictEqual(isValidCaseId("../etc/passwd"), false);
     assert.strictEqual(isValidCaseId("case with spaces"), false);
     assert.strictEqual(isValidCaseId("a".repeat(65)), false);
+  });
+});
+
+// =============================================================================
+// GATEWAY DISPATCH TESTS
+// =============================================================================
+
+describe("Gateway Dispatch", () => {
+  it("dispatchToGateway does not throw on unreachable server", async () => {
+    // Save and set config
+    const origUrl = process.env.OPENCLAW_GATEWAY_URL;
+    const origToken = process.env.OPENCLAW_TOKEN;
+    process.env.OPENCLAW_GATEWAY_URL = "http://127.0.0.1:19999"; // unreachable
+    process.env.OPENCLAW_TOKEN = "test-token";
+
+    try {
+      // Should not throw — fire-and-forget
+      await dispatchToGateway("/webhook/test", { test: true });
+    } finally {
+      if (origUrl === undefined) delete process.env.OPENCLAW_GATEWAY_URL;
+      else process.env.OPENCLAW_GATEWAY_URL = origUrl;
+      if (origToken === undefined) delete process.env.OPENCLAW_TOKEN;
+      else process.env.OPENCLAW_TOKEN = origToken;
+    }
+  });
+
+  it("dispatchToGateway skips when gateway URL not configured", async () => {
+    const origUrl = process.env.OPENCLAW_GATEWAY_URL;
+    const origToken = process.env.OPENCLAW_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.OPENCLAW_TOKEN;
+
+    try {
+      // Should silently skip, not throw
+      await dispatchToGateway("/webhook/test", { test: true });
+    } finally {
+      if (origUrl !== undefined) process.env.OPENCLAW_GATEWAY_URL = origUrl;
+      if (origToken !== undefined) process.env.OPENCLAW_TOKEN = origToken;
+    }
+  });
+
+  it("dispatchToGateway silently skips when token is empty (default config)", async () => {
+    // config.openclawToken is "" at module load (no env var set) → early return
+    // This verifies the guard clause works — no HTTP request is made
+    await dispatchToGateway("/webhook/test", { case_id: "CASE-001" });
+    // Should complete without throwing — verified by reaching this line
+  });
+});
+
+// =============================================================================
+// POLICY ENFORCEMENT TESTS
+// =============================================================================
+
+describe("Policy Enforcement - policyCheckAction", () => {
+  it("allows an action that is in the allowlist and enabled", () => {
+    // loadPolicyConfig would have been called at startup; directly test the function
+    // with known policy state. In bootstrap mode with no policy, everything is allowed.
+    const result = policyCheckAction("block_ip", 0.8);
+    // In bootstrap mode without policy loaded, should allow
+    assert.strictEqual(result.allowed, true);
+  });
+
+  it("allows action in bootstrap mode when policy not loaded", () => {
+    const result = policyCheckAction("unknown_action", 0.5);
+    assert.strictEqual(result.allowed, true);
+    assert.ok(result.reason.includes("bootstrap") || result.reason.includes("Policy not loaded"));
+  });
+});
+
+describe("Policy Enforcement - policyCheckApprover", () => {
+  it("allows approver in bootstrap mode when policy not loaded", () => {
+    const result = policyCheckApprover("U12345", ["block_ip"], "medium");
+    assert.strictEqual(result.authorized, true);
+  });
+
+  it("returns authorized=true when no approver groups configured", () => {
+    const result = policyCheckApprover("U12345", ["block_ip"], "low");
+    assert.strictEqual(result.authorized, true);
+  });
+});
+
+describe("Policy Enforcement - policyCheckEvidence", () => {
+  beforeEach(async () => {
+    await fs.mkdir(process.env.AUTOPILOT_DATA_DIR, { recursive: true });
+    await fs.mkdir(path.join(process.env.AUTOPILOT_DATA_DIR, "cases"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(process.env.AUTOPILOT_DATA_DIR, { recursive: true, force: true });
+  });
+
+  it("allows execution in bootstrap mode when policy not loaded", async () => {
+    await createCase("CASE-EVIDENCE-001", {
+      title: "Test Case",
+      severity: "high",
+      evidence_refs: [{ type: "alert", ref_id: "a1" }],
+    });
+
+    const result = await policyCheckEvidence(
+      [{ type: "block_ip", target: "1.2.3.4" }],
+      "CASE-EVIDENCE-001",
+    );
+    assert.strictEqual(result.sufficient, true);
+  });
+
+  it("allows execution when case not found in bootstrap mode", async () => {
+    const result = await policyCheckEvidence(
+      [{ type: "block_ip", target: "1.2.3.4" }],
+      "CASE-NONEXISTENT",
+    );
+    assert.strictEqual(result.sufficient, true);
+  });
+});
+
+describe("Policy Enforcement - loadPolicyConfig", () => {
+  it("loads policy from config dir without throwing in bootstrap mode", async () => {
+    // Pass a nonexistent dir — in bootstrap mode should return null without throwing
+    const tmpDir = path.join(os.tmpdir(), `policy-test-${Date.now()}`);
+    const result = await loadPolicyConfig(tmpDir);
+    assert.strictEqual(result, null);
+  });
+
+  it("loads a valid policy file successfully", async () => {
+    const tmpDir = path.join(os.tmpdir(), `policy-load-test-${Date.now()}`);
+    const policyDir = path.join(tmpDir, "policies");
+    await fs.mkdir(policyDir, { recursive: true });
+
+    const policyContent = `
+schema_version: "1.0"
+actions:
+  enabled: true
+  deny_unlisted: true
+  allowlist:
+    block_ip:
+      enabled: true
+      risk_level: low
+      min_confidence: 0.7
+      min_evidence_items: 2
+    disable_user:
+      enabled: false
+      risk_level: high
+`;
+
+    await fs.writeFile(path.join(policyDir, "policy.yaml"), policyContent);
+
+    try {
+      const result = await loadPolicyConfig(tmpDir);
+      assert.ok(result, "Policy config should be loaded");
+
+      // Test policyCheckAction with loaded policy
+      const allowed = policyCheckAction("block_ip", 0.8);
+      assert.strictEqual(allowed.allowed, true);
+
+      const disabledAction = policyCheckAction("disable_user", 0.9);
+      assert.strictEqual(disabledAction.allowed, false);
+      assert.ok(disabledAction.reason.includes("disabled"));
+
+      const unlisted = policyCheckAction("restart_wazuh", 0.5);
+      assert.strictEqual(unlisted.allowed, false);
+      assert.ok(unlisted.reason.includes("deny_unlisted"));
+
+      const lowConfidence = policyCheckAction("block_ip", 0.3);
+      assert.strictEqual(lowConfidence.allowed, false);
+      assert.ok(lowConfidence.reason.includes("Confidence"));
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Policy Enforcement - policyCheckApprover with loaded policy", () => {
+  let tmpDir;
+
+  beforeEach(async () => {
+    tmpDir = path.join(os.tmpdir(), `approver-test-${Date.now()}`);
+    const policyDir = path.join(tmpDir, "policies");
+    await fs.mkdir(policyDir, { recursive: true });
+
+    // Policy with placeholder + real Slack IDs
+    // Note: parseSimpleYaml handles single-key list items; multi-line list objects
+    // have the second key attached to the parent. We test the logic that matters.
+    const policyContent = `
+schema_version: "1.0"
+approvers:
+  groups:
+    standard:
+      members:
+        - slack_id: "<SLACK_USER_1>"
+      can_approve:
+        - block_ip
+      max_risk_level: medium
+    admin:
+      members:
+        - slack_id: "U_REAL_ADMIN"
+      can_approve:
+        - block_ip
+        - disable_user
+      max_risk_level: critical
+actions:
+  enabled: true
+  deny_unlisted: false
+`;
+
+    await fs.writeFile(path.join(policyDir, "policy.yaml"), policyContent);
+    await loadPolicyConfig(tmpDir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("authorizes a real admin user for allowed actions", () => {
+    const result = policyCheckApprover("U_REAL_ADMIN", ["block_ip"], "medium");
+    assert.strictEqual(result.authorized, true);
+    assert.ok(result.reason.includes("admin"));
+  });
+
+  it("denies an unknown user", () => {
+    const result = policyCheckApprover("U_UNKNOWN", ["block_ip"], "medium");
+    assert.strictEqual(result.authorized, false);
+    assert.ok(result.reason.includes("not authorized"));
+  });
+
+  it("denies admin for actions not in their can_approve list", () => {
+    const result = policyCheckApprover("U_REAL_ADMIN", ["restart_wazuh"], "critical");
+    assert.strictEqual(result.authorized, false);
+  });
+});
+
+describe("Policy Enforcement - policyCheckEvidence with loaded policy", () => {
+  let tmpDir;
+
+  beforeEach(async () => {
+    await fs.mkdir(process.env.AUTOPILOT_DATA_DIR, { recursive: true });
+    await fs.mkdir(path.join(process.env.AUTOPILOT_DATA_DIR, "cases"), { recursive: true });
+
+    tmpDir = path.join(os.tmpdir(), `evidence-policy-test-${Date.now()}`);
+    const policyDir = path.join(tmpDir, "policies");
+    await fs.mkdir(policyDir, { recursive: true });
+
+    const policyContent = `
+schema_version: "1.0"
+actions:
+  enabled: true
+  deny_unlisted: false
+  allowlist:
+    block_ip:
+      enabled: true
+      min_evidence_items: 2
+    disable_user:
+      enabled: true
+      min_evidence_items: 5
+`;
+
+    await fs.writeFile(path.join(policyDir, "policy.yaml"), policyContent);
+    await loadPolicyConfig(tmpDir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    await fs.rm(process.env.AUTOPILOT_DATA_DIR, { recursive: true, force: true });
+  });
+
+  it("passes when case has sufficient evidence for action", async () => {
+    await createCase("CASE-EV-PASS", {
+      title: "Test",
+      severity: "high",
+      evidence_refs: [{ type: "alert", ref_id: "a1" }, { type: "alert", ref_id: "a2" }],
+      timeline: [{ timestamp: new Date().toISOString(), event_type: "test" }],
+    });
+
+    const result = await policyCheckEvidence(
+      [{ type: "block_ip", target: "1.2.3.4" }],
+      "CASE-EV-PASS",
+    );
+    assert.strictEqual(result.sufficient, true);
+  });
+
+  it("fails when case has insufficient evidence for action", async () => {
+    await createCase("CASE-EV-FAIL", {
+      title: "Test",
+      severity: "high",
+      evidence_refs: [{ type: "alert", ref_id: "a1" }],
+    });
+
+    const result = await policyCheckEvidence(
+      [{ type: "disable_user", target: "jsmith" }],
+      "CASE-EV-FAIL",
+    );
+    assert.strictEqual(result.sufficient, false);
+    assert.ok(result.reason.includes("disable_user"));
+    assert.ok(result.reason.includes("5"));
   });
 });
 

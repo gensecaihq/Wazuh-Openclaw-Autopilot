@@ -39,6 +39,8 @@ services:
       - METRICS_HOST=0.0.0.0
       - METRICS_ENABLED=true
       - LOG_FORMAT=json
+      - OPENCLAW_GATEWAY_URL=${OPENCLAW_GATEWAY_URL:-http://host.docker.internal:18789}
+      - OPENCLAW_TOKEN=${OPENCLAW_TOKEN:-}
 
     volumes:
       # Persistent data

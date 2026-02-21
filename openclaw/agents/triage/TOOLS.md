@@ -52,3 +52,52 @@ Sort by `rule.level` descending so critical alerts are processed first.
 - Always include `raw_alert_ids` as an array so downstream agents can trace back to source data.
 - Ensure `timestamp` is ISO 8601 with timezone (UTC preferred).
 - Keep `summary` under 2000 characters to avoid truncation in notification channels (Slack, email).
+
+## Runtime API Access
+
+The Triage Agent can call the runtime REST API at `http://localhost:9090` using `web.fetch`. All requests require Bearer authentication.
+
+```
+Authorization: Bearer ${AUTOPILOT_MCP_AUTH}
+```
+
+### List Existing Cases
+
+Check for duplicates before creating a new case.
+
+```
+GET http://localhost:9090/api/cases
+```
+
+### Create a New Case
+
+```
+POST http://localhost:9090/api/cases
+Content-Type: application/json
+
+{
+  "case_id": "CASE-YYYYMMDD-xxxxxxxx",
+  "title": "Short case title",
+  "summary": "Case summary text",
+  "severity": "low|medium|high|critical",
+  "entities": { ... },
+  "timeline": [ ... ],
+  "mitre": { ... },
+  "evidence_refs": [ ... ]
+}
+```
+
+### Update Case Status
+
+Set `status: "triaged"` to hand off to the Correlation Agent.
+
+```
+PUT http://localhost:9090/api/cases/{case_id}
+Content-Type: application/json
+
+{
+  "status": "triaged"
+}
+```
+
+**Note**: Setting `status: "triaged"` automatically triggers the Correlation Agent.

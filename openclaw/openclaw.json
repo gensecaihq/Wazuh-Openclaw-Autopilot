@@ -241,7 +241,7 @@
     "deny": ["browser", "canvas"],
     "web": {
       "search": { "enabled": false },
-      "fetch": { "enabled": false }
+      "fetch": { "enabled": true }
     }
   },
 
@@ -313,6 +313,8 @@
     "TOGETHER_API_KEY": "${TOGETHER_API_KEY}",
     "CEREBRAS_API_KEY": "${CEREBRAS_API_KEY}",
     "MCP_URL": "${MCP_URL}",
-    "AUTOPILOT_MCP_AUTH": "${AUTOPILOT_MCP_AUTH}"
+    "AUTOPILOT_MCP_AUTH": "${AUTOPILOT_MCP_AUTH}",
+    "OPENCLAW_GATEWAY_URL": "${OPENCLAW_GATEWAY_URL}",
+    "AUTOPILOT_RUNTIME_URL": "${AUTOPILOT_RUNTIME_URL}"
   }
 }
