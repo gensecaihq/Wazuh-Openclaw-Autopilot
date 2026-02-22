@@ -26,6 +26,10 @@ services:
     security_opt:
       - no-new-privileges:true
 
+    # Resolve host.docker.internal on Linux (already works on Docker Desktop)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
     ports:
       - "127.0.0.1:${RUNTIME_PORT:-9090}:${RUNTIME_PORT:-9090}"
 

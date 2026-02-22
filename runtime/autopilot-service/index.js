@@ -272,7 +272,7 @@ function formatMetrics() {
  */
 async function dispatchToGateway(webhookPath, payload) {
   if (!config.openclawGatewayUrl || !config.openclawToken) {
-    log("debug", "dispatch", "Gateway dispatch skipped (not configured)", { path: webhookPath });
+    log("warn", "dispatch", "Gateway dispatch skipped — OPENCLAW_TOKEN not configured. Agent pipeline is disabled.", { path: webhookPath });
     return;
   }
 
@@ -295,12 +295,24 @@ async function dispatchToGateway(webhookPath, payload) {
 
       clearTimeout(timeoutId);
 
-      if (response.ok || response.status < 500) {
+      if (response.ok) {
         incrementMetric("webhook_dispatches_total");
         log("info", "dispatch", "Webhook dispatched", {
           path: webhookPath,
           status: response.status,
           ...(attempt > 0 && { attempt: attempt + 1 }),
+        });
+        return;
+      }
+
+      if (response.status < 500) {
+        // Client error (401, 403, 404) — log as failure, don't retry
+        incrementMetric("webhook_dispatch_failures_total");
+        const errBody = await response.text().catch(() => "");
+        log("warn", "dispatch", "Webhook dispatch client error", {
+          path: webhookPath,
+          status: response.status,
+          body: errBody.substring(0, 200),
         });
         return;
       }
@@ -336,11 +348,13 @@ async function dispatchToGateway(webhookPath, payload) {
 // =============================================================================
 
 let mcpJwtCache = { token: null, expiresAt: 0 };
+let mcpAuthNegativeCache = 0; // timestamp when negative cache expires
 
 /**
  * Get an auth token for MCP calls.
  * - legacy-rest mode: returns the raw API key as Bearer token
  * - mcp-jsonrpc mode: exchanges API key for JWT via /auth/token, caches result
+ * - Negative cache: skips JWT exchange for 60s after failure to avoid latency loops
  */
 async function getMcpAuthToken() {
   if (!config.mcpAuth) return null;
@@ -353,6 +367,11 @@ async function getMcpAuthToken() {
   // Check cached JWT
   if (mcpJwtCache.token && Date.now() < mcpJwtCache.expiresAt) {
     return mcpJwtCache.token;
+  }
+
+  // Skip JWT exchange if we recently failed (avoid 3x latency per MCP call)
+  if (Date.now() < mcpAuthNegativeCache) {
+    return config.mcpAuth;
   }
 
   // Exchange API key for JWT
@@ -374,12 +393,14 @@ async function getMcpAuthToken() {
 
     if (!response.ok) {
       log("warn", "mcp", "JWT exchange failed, falling back to raw key", { status: response.status });
+      mcpAuthNegativeCache = Date.now() + 60000;
       return config.mcpAuth;
     }
 
     const data = await response.json();
     const token = data.access_token || data.token;
     if (token) {
+      mcpAuthNegativeCache = 0; // Clear negative cache on success
       mcpJwtCache = {
         token,
         expiresAt: Date.now() + config.mcpJwtTtlMs,
@@ -387,9 +408,11 @@ async function getMcpAuthToken() {
       return token;
     }
 
+    mcpAuthNegativeCache = Date.now() + 60000;
     return config.mcpAuth;
   } catch (err) {
     log("warn", "mcp", "JWT exchange error, falling back to raw key", { error: err.message });
+    mcpAuthNegativeCache = Date.now() + 60000;
     return config.mcpAuth;
   }
 }
@@ -639,6 +662,8 @@ async function createCase(caseId, data) {
     plans: [],
     approvals: [],
     actions: [],
+    status: "open",
+    feedback: [],
   };
 
   await atomicWriteFile(
@@ -703,12 +728,31 @@ async function updateCase(caseId, updates) {
     const now = new Date().toISOString();
     evidencePack.updated_at = now;
 
+    // Status transition validation — enforce valid pipeline progression
+    if (Object.prototype.hasOwnProperty.call(updates, "status")) {
+      const VALID_STATUS_TRANSITIONS = {
+        open: ["triaged", "false_positive", "closed"],
+        triaged: ["correlated", "false_positive", "closed"],
+        correlated: ["investigated", "false_positive", "closed"],
+        investigated: ["planned", "false_positive", "closed"],
+        planned: ["approved", "rejected", "false_positive", "closed"],
+        approved: ["executed", "false_positive", "closed"],
+        executed: ["closed", "false_positive"],
+        rejected: ["open", "closed"],
+        false_positive: ["open"],
+      };
+      const currentStatus = evidencePack.status || "open";
+      const allowed = VALID_STATUS_TRANSITIONS[currentStatus];
+      if (allowed && !allowed.includes(updates.status)) {
+        throw new Error(`Invalid status transition: ${currentStatus} → ${updates.status}. Allowed: ${allowed.join(", ")}`);
+      }
+    }
+
     // Bug #14 fix: Use hasOwnProperty to allow falsy values (0, "", etc.)
     if (Object.prototype.hasOwnProperty.call(updates, "title")) evidencePack.title = updates.title;
     if (Object.prototype.hasOwnProperty.call(updates, "summary")) evidencePack.summary = updates.summary;
     if (Object.prototype.hasOwnProperty.call(updates, "severity")) evidencePack.severity = updates.severity;
     if (Object.prototype.hasOwnProperty.call(updates, "confidence")) evidencePack.confidence = updates.confidence;
-    // Bug #11 fix: Sync status field to evidence pack
     if (Object.prototype.hasOwnProperty.call(updates, "status")) evidencePack.status = updates.status;
 
     // Append arrays with size cap to prevent unbounded growth
@@ -719,7 +763,16 @@ async function updateCase(caseId, updates) {
     };
 
     if (updates.entities) {
-      evidencePack.entities = appendCapped(evidencePack.entities, updates.entities);
+      // Deduplicate entities by (type, value) tuple to prevent bloat from grouped alerts
+      const existing = new Map((evidencePack.entities || []).map(e => [`${e.type}:${e.value}`, e]));
+      for (const entity of updates.entities) {
+        const key = `${entity.type}:${entity.value}`;
+        if (!existing.has(key)) {
+          existing.set(key, entity);
+        }
+      }
+      const merged = [...existing.values()];
+      evidencePack.entities = merged.length > MAX_ARRAY_ITEMS ? merged.slice(-MAX_ARRAY_ITEMS) : merged;
     }
     if (updates.timeline) {
       evidencePack.timeline = appendCapped(evidencePack.timeline, updates.timeline);
@@ -739,9 +792,13 @@ async function updateCase(caseId, updates) {
     if (updates.actions) {
       evidencePack.actions = appendCapped(evidencePack.actions, updates.actions);
     }
-    // Feedback array: replace entirely (caller manages appending)
+    // Feedback: replace entire array (legacy callers) or atomic append (race-safe)
     if (updates.feedback) {
       evidencePack.feedback = updates.feedback;
+    }
+    if (updates.appendFeedback) {
+      if (!evidencePack.feedback) evidencePack.feedback = [];
+      evidencePack.feedback.push(updates.appendFeedback);
     }
 
     await atomicWriteFile(packPath, JSON.stringify(evidencePack, null, 2));
@@ -2309,6 +2366,10 @@ function createServer() {
 
       // Metrics endpoint
       if (url.pathname === "/metrics" && req.method === "GET") {
+        if (!config.metricsEnabled) {
+          sendJsonError(res, 404, "Metrics disabled (METRICS_ENABLED=false)", requestId);
+          return;
+        }
         res.writeHead(200, { "Content-Type": "text/plain" });
         res.end(formatMetrics());
         return;
@@ -2334,6 +2395,8 @@ function createServer() {
           checks: {
             data_dir: dataDirOk,
             metrics: config.metricsEnabled,
+            mcp_configured: !!config.mcpUrl,
+            gateway_configured: !!(config.openclawGatewayUrl && config.openclawToken),
           },
           responder: {
             enabled: config.responderEnabled,
@@ -2463,6 +2526,8 @@ function createServer() {
         } catch (err) {
           if (err.message.includes("not found")) {
             sendJsonError(res, 404, "Case not found", requestId);
+          } else if (err.message.includes("Invalid status transition")) {
+            sendJsonError(res, 400, err.message, requestId);
           } else {
             throw err;
           }
@@ -2559,6 +2624,60 @@ function createServer() {
           });
         }
 
+        // Extract file hashes (syscheck, VirusTotal integration)
+        const hashFields = ["md5_before", "md5_after", "sha1_before", "sha1_after", "sha256_before", "sha256_after"];
+        for (const field of hashFields) {
+          const hash = alert.data?.syscheck?.[field] || alert.data?.[field];
+          if (hash && typeof hash === "string" && /^[a-fA-F0-9]{32,64}$/.test(hash)) {
+            entities.push({
+              type: "hash",
+              value: hash.toLowerCase(),
+              role: field.includes("before") ? "original" : "modified",
+              hash_type: field.startsWith("md5") ? "md5" : field.startsWith("sha1") ? "sha1" : "sha256",
+              extracted_from: `data.syscheck.${field}`,
+            });
+          }
+        }
+
+        // Extract CVE IDs (vulnerability detection)
+        const cvePattern = /CVE-\d{4}-\d{4,}/gi;
+        const alertDataStr = JSON.stringify(alert.data || {});
+        const cveMatches = [...new Set((alertDataStr.match(cvePattern) || []).map(c => c.toUpperCase()))];
+        for (const cve of cveMatches.slice(0, 10)) {
+          entities.push({ type: "cve", value: cve, role: "vulnerability", extracted_from: "data" });
+        }
+
+        // Extract process names (Sysmon, audit)
+        const processFields = ["process.name", "parentprocess.name", "win.eventdata.image", "win.eventdata.parentImage"];
+        for (const fieldPath of processFields) {
+          const parts = fieldPath.split(".");
+          let processVal = alert.data;
+          for (const p of parts) { processVal = processVal?.[p]; }
+          if (processVal && typeof processVal === "string" && processVal.length > 0 && processVal.length < 256) {
+            entities.push({
+              type: "process",
+              value: processVal,
+              role: fieldPath.includes("parent") ? "parent" : "child",
+              extracted_from: `data.${fieldPath}`,
+            });
+          }
+        }
+
+        // Extract port numbers
+        const portFields = ["srcport", "dstport", "src_port", "dst_port"];
+        for (const field of portFields) {
+          const port = alert.data?.[field] || alert[field];
+          const portNum = parseInt(port, 10);
+          if (portNum > 0 && portNum <= 65535) {
+            entities.push({
+              type: "port",
+              value: String(portNum),
+              role: field.includes("src") ? "source" : "destination",
+              extracted_from: `data.${field}`,
+            });
+          }
+        }
+
         // Enrich IP entities (non-blocking, best-effort)
         if (config.enrichmentEnabled) {
           const ipEntities = entities.filter((e) => e.type === "ip");
@@ -2569,9 +2688,12 @@ function createServer() {
           await Promise.all(enrichmentPromises);
         }
 
-        // Determine severity from rule level
+        // Determine severity from rule level (handle string, number, null)
         let severity = "medium";
-        const ruleLevel = alert.rule?.level || alert.level || 0;
+        const rawLevel = alert.rule?.level ?? alert.level ?? 0;
+        const parsedLevel = typeof rawLevel === "string" ? parseInt(rawLevel, 10) : Number(rawLevel);
+        // Default NaN to 5 (medium) rather than 0 (informational) — safer for unknown alerts
+        const ruleLevel = isNaN(parsedLevel) ? 5 : parsedLevel;
         if (ruleLevel >= 13) severity = "critical";
         else if (ruleLevel >= 10) severity = "high";
         else if (ruleLevel >= 7) severity = "medium";
@@ -2751,6 +2873,14 @@ function createServer() {
 
         if (!body.actions || !Array.isArray(body.actions) || body.actions.length === 0) {
           sendJsonError(res, 400, "actions array is required and must not be empty", requestId);
+          return;
+        }
+
+        // Verify case exists before creating plan
+        try {
+          await getCase(body.case_id);
+        } catch (e) {
+          sendJsonError(res, 404, `Case ${body.case_id} not found — cannot create plan for non-existent case`, requestId);
           return;
         }
 
@@ -2983,8 +3113,6 @@ function createServer() {
         }
 
         try {
-          const feedbackCase = await getCase(feedbackCaseId);
-
           // Build feedback record
           const feedback = {
             verdict: body.verdict,
@@ -2993,11 +3121,8 @@ function createServer() {
             submitted_at: new Date().toISOString(),
           };
 
-          // Append to case feedback array
-          const existingFeedback = feedbackCase.feedback || [];
-          existingFeedback.push(feedback);
-
-          const updates = { feedback: existingFeedback };
+          // Use appendFeedback for atomic append inside the case lock (race-safe)
+          const updates = { appendFeedback: feedback };
 
           // If false positive, update case status and entity index
           if (body.verdict === "false_positive") {
@@ -3006,7 +3131,8 @@ function createServer() {
             incrementMetric("false_positives_total");
           }
 
-          await updateCase(feedbackCaseId, updates);
+          const updatedCase = await updateCase(feedbackCaseId, updates);
+          const feedbackCount = (updatedCase.feedback || []).length;
 
           incrementMetric("feedback_submitted_total", { verdict: body.verdict });
           log("info", "feedback", "Case feedback submitted", {
@@ -3019,8 +3145,8 @@ function createServer() {
           res.end(JSON.stringify({
             case_id: feedbackCaseId,
             verdict: body.verdict,
-            feedback_count: existingFeedback.length,
-            status: body.verdict === "false_positive" ? "false_positive" : feedbackCase.status,
+            feedback_count: feedbackCount,
+            status: updatedCase.status || "open",
           }));
         } catch (err) {
           if (err.message.includes("not found")) {
@@ -3174,6 +3300,35 @@ async function validateStartup() {
     }
   }
 
+  // Warn if OPENCLAW_TOKEN is not set (agent pipeline will be disabled)
+  if (!config.openclawToken) {
+    log("warn", "startup", "OPENCLAW_TOKEN not set — agent pipeline dispatch is disabled. Set OPENCLAW_TOKEN to enable agent orchestration.");
+  }
+
+  // Warn if enrichment is enabled but API key is missing
+  if (config.enrichmentEnabled && !config.abuseIpdbApiKey) {
+    log("warn", "startup", "ENRICHMENT_ENABLED=true but ABUSEIPDB_API_KEY is empty — enrichment will be silently skipped");
+  }
+
+  // Connectivity probes (non-blocking, warn-only)
+  if (config.mcpUrl) {
+    try {
+      const probe = await fetch(`${config.mcpUrl}/health`, { signal: AbortSignal.timeout(5000) });
+      log("info", "startup", "MCP server reachable", { url: config.mcpUrl, status: probe.status });
+    } catch (e) {
+      log("warn", "startup", "MCP server NOT reachable — MCP tool calls will fail until connectivity is restored", { url: config.mcpUrl, error: e.message });
+    }
+  }
+
+  if (config.openclawGatewayUrl && config.openclawToken) {
+    try {
+      const probe = await fetch(`${config.openclawGatewayUrl}/health`, { signal: AbortSignal.timeout(5000) });
+      log("info", "startup", "OpenClaw Gateway reachable", { url: config.openclawGatewayUrl, status: probe.status });
+    } catch (e) {
+      log("warn", "startup", "OpenClaw Gateway NOT reachable — agent dispatch will fail", { url: config.openclawGatewayUrl, error: e.message });
+    }
+  }
+
   log("info", "startup", "Configuration validated", { mode: config.mode });
 }
 
@@ -3209,25 +3364,26 @@ async function main() {
   // Setup cleanup intervals for memory management
   setupCleanupIntervals();
 
-  if (config.metricsEnabled) {
-    server = createServer();
-    server.on("error", (err) => {
-      log("error", "startup", "Server failed to start", {
-        error: err.message,
-        code: err.code,
-        host: config.metricsHost,
-        port: config.metricsPort,
-      });
-      process.exit(1);
+  // HTTP server always starts — it's the core API, not just metrics
+  server = createServer();
+  server.on("error", (err) => {
+    log("error", "startup", "Server failed to start", {
+      error: err.message,
+      code: err.code,
+      host: config.metricsHost,
+      port: config.metricsPort,
     });
-    server.listen(config.metricsPort, config.metricsHost, () => {
-      log("info", "startup", "Server listening", {
-        host: config.metricsHost,
-        port: config.metricsPort,
-      });
+    process.exit(1);
+  });
+  server.listen(config.metricsPort, config.metricsHost, () => {
+    log("info", "startup", "Server listening", {
+      host: config.metricsHost,
+      port: config.metricsPort,
+    });
+    if (config.metricsEnabled) {
       log("info", "startup", `Metrics available at http://${config.metricsHost}:${config.metricsPort}/metrics`);
-    });
-  }
+    }
+  });
 
   // Initialize Slack integration (optional)
   if (slack) {

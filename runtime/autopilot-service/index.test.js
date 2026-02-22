@@ -3,7 +3,7 @@
  * Wazuh OpenClaw Autopilot - Runtime Service Tests
  */
 
-const { describe, it, beforeEach, afterEach } = require("node:test");
+const { describe, it, before, after, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert");
 const fs = require("fs").promises;
 const path = require("path");
@@ -1019,6 +1019,150 @@ describe("New metrics in formatMetrics", () => {
   it("includes feedback_submitted_total type header", () => {
     const output = formatMetrics();
     assert.ok(output.includes("autopilot_feedback_submitted_total"));
+  });
+});
+
+// =============================================================================
+// STATUS TRANSITION VALIDATION
+// =============================================================================
+describe("Status transition validation", () => {
+  const tmpDir = path.join(os.tmpdir(), `status-transitions-${Date.now()}`);
+
+  before(async () => {
+    process.env.AUTOPILOT_DATA_DIR = tmpDir;
+    await fs.mkdir(path.join(tmpDir, "cases"), { recursive: true });
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("allows valid transition: open → triaged", async () => {
+    const caseId = `CASE-${Date.now()}-statusvalid01`;
+    await createCase(caseId, { title: "Test", severity: "high" });
+    const result = await updateCase(caseId, { status: "triaged" });
+    assert.strictEqual(result.status, "triaged");
+  });
+
+  it("rejects invalid transition: open → executed", async () => {
+    const caseId = `CASE-${Date.now()}-statusinv01`;
+    await createCase(caseId, { title: "Test", severity: "high" });
+    await assert.rejects(
+      () => updateCase(caseId, { status: "executed" }),
+      /Invalid status transition.*open.*executed/,
+    );
+  });
+
+  it("allows transition: triaged → correlated", async () => {
+    const caseId = `CASE-${Date.now()}-statusvalid02`;
+    await createCase(caseId, { title: "Test", severity: "high" });
+    await updateCase(caseId, { status: "triaged" });
+    const result = await updateCase(caseId, { status: "correlated" });
+    assert.strictEqual(result.status, "correlated");
+  });
+
+  it("allows false_positive from any state", async () => {
+    const caseId = `CASE-${Date.now()}-statusfp01`;
+    await createCase(caseId, { title: "Test", severity: "high" });
+    await updateCase(caseId, { status: "triaged" });
+    const result = await updateCase(caseId, { status: "false_positive" });
+    assert.strictEqual(result.status, "false_positive");
+  });
+
+  it("allows reopen from false_positive", async () => {
+    const caseId = `CASE-${Date.now()}-statusreopen01`;
+    await createCase(caseId, { title: "Test", severity: "high" });
+    await updateCase(caseId, { status: "false_positive" });
+    const result = await updateCase(caseId, { status: "open" });
+    assert.strictEqual(result.status, "open");
+  });
+});
+
+// =============================================================================
+// ENTITY DEDUPLICATION
+// =============================================================================
+describe("Entity deduplication in updateCase", () => {
+  const tmpDir = path.join(os.tmpdir(), `entity-dedup-${Date.now()}`);
+
+  before(async () => {
+    process.env.AUTOPILOT_DATA_DIR = tmpDir;
+    await fs.mkdir(path.join(tmpDir, "cases"), { recursive: true });
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("deduplicates entities by (type, value)", async () => {
+    const caseId = `CASE-${Date.now()}-dedup01`;
+    const ip = { type: "ip", value: "10.0.0.1", role: "source" };
+    await createCase(caseId, { title: "Test", severity: "high", entities: [ip] });
+    await updateCase(caseId, { entities: [ip, ip, ip] });
+    const result = await getCase(caseId);
+    const ipEntities = result.entities.filter(e => e.type === "ip" && e.value === "10.0.0.1");
+    assert.strictEqual(ipEntities.length, 1);
+  });
+
+  it("preserves different entities", async () => {
+    const caseId = `CASE-${Date.now()}-dedup02`;
+    const ip1 = { type: "ip", value: "10.0.0.1", role: "source" };
+    const ip2 = { type: "ip", value: "10.0.0.2", role: "source" };
+    const user = { type: "user", value: "admin", role: "actor" };
+    await createCase(caseId, { title: "Test", severity: "high", entities: [ip1] });
+    await updateCase(caseId, { entities: [ip1, ip2, user] });
+    const result = await getCase(caseId);
+    assert.strictEqual(result.entities.length, 3);
+  });
+});
+
+// =============================================================================
+// EVIDENCE PACK STATUS + FEEDBACK FIELDS
+// =============================================================================
+describe("Evidence pack initialization", () => {
+  const tmpDir = path.join(os.tmpdir(), `evpack-init-${Date.now()}`);
+
+  before(async () => {
+    process.env.AUTOPILOT_DATA_DIR = tmpDir;
+    await fs.mkdir(path.join(tmpDir, "cases"), { recursive: true });
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("includes status and feedback fields at creation", async () => {
+    const caseId = `CASE-${Date.now()}-evpackinit01`;
+    const result = await createCase(caseId, { title: "Test", severity: "high" });
+    assert.strictEqual(result.status, "open");
+    assert.ok(Array.isArray(result.feedback));
+    assert.strictEqual(result.feedback.length, 0);
+  });
+});
+
+// =============================================================================
+// ATOMIC FEEDBACK APPEND
+// =============================================================================
+describe("appendFeedback in updateCase", () => {
+  const tmpDir = path.join(os.tmpdir(), `feedback-append-${Date.now()}`);
+
+  before(async () => {
+    process.env.AUTOPILOT_DATA_DIR = tmpDir;
+    await fs.mkdir(path.join(tmpDir, "cases"), { recursive: true });
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("atomically appends feedback inside the lock", async () => {
+    const caseId = `CASE-${Date.now()}-fbappend01`;
+    await createCase(caseId, { title: "Test", severity: "high" });
+    await updateCase(caseId, { appendFeedback: { verdict: "true_positive", user_id: "analyst-1" } });
+    await updateCase(caseId, { appendFeedback: { verdict: "needs_review", user_id: "analyst-2" } });
+    const result = await getCase(caseId);
+    assert.strictEqual(result.feedback.length, 2);
+    assert.strictEqual(result.feedback[0].verdict, "true_positive");
+    assert.strictEqual(result.feedback[1].verdict, "needs_review");
   });
 });
 

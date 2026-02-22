@@ -1217,14 +1217,25 @@ OPENCLAW_TOKEN=__OPENCLAW_TOKEN__
 ANTHROPIC_API_KEY=__ANTHROPIC_API_KEY__
 
 # RUNTIME SERVICE (Localhost Only)
-AUTOPILOT_HOST=__GATEWAY_BIND__
-AUTOPILOT_PORT=__RUNTIME_PORT__
+METRICS_HOST=__GATEWAY_BIND__
+RUNTIME_PORT=__RUNTIME_PORT__
 AUTOPILOT_DATA_DIR=__DATA_DIR__
-AUTOPILOT_LOG_DIR=__LOG_DIR__
 AUTOPILOT_CONFIG_DIR=__CONFIG_DIR__
 
+# AUTOPILOT MODE
+# bootstrap = permissive (localhost auth bypass, relaxed policy)
+# production = strict (all requests require token, Tailscale enforced)
+AUTOPILOT_MODE=bootstrap
+
+# MCP PROTOCOL MODE
+# mcp-jsonrpc = standard MCP protocol (JWT exchange at /auth/token, JSON-RPC at /mcp)
+# legacy-rest = backwards compat (raw Bearer token, REST at /tools/<name>)
+MCP_AUTH_MODE=mcp-jsonrpc
+
+# OPENCLAW GATEWAY DISPATCH
+OPENCLAW_GATEWAY_URL=http://__GATEWAY_BIND__:__GATEWAY_PORT__
+
 # APPROVAL SYSTEM
-AUTOPILOT_TOKEN_SECRET=__APPROVAL_SECRET__
 AUTOPILOT_TOKEN_TTL_MINUTES=60
 
 # PAIRING MODE
@@ -1389,11 +1400,15 @@ configure_wazuh_integrator() {
 # Wazuh integratord passes the alert JSON file as \$1
 
 ALERT_FILE="\$1"
-WEBHOOK="http://127.0.0.1:\${RUNTIME_PORT:-$RUNTIME_PORT}/api/alerts"
+WEBHOOK="http://127.0.0.1:$RUNTIME_PORT/api/alerts"
+
+# Read auth token from config (required in production mode)
+AUTH_TOKEN=\$(grep '^AUTOPILOT_MCP_AUTH=' /etc/wazuh-autopilot/.env 2>/dev/null | cut -d= -f2-)
 
 if [[ -f "\$ALERT_FILE" ]]; then
     curl -s -X POST "\$WEBHOOK" \\
         -H "Content-Type: application/json" \\
+        -H "Authorization: Bearer \$AUTH_TOKEN" \\
         -d @"\$ALERT_FILE" \\
         --connect-timeout 5 \\
         --max-time 10 \\

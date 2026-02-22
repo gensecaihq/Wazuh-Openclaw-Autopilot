@@ -976,6 +976,184 @@ describe("Case Feedback Endpoint", () => {
 });
 
 // ===================================================================
+// STATUS TRANSITION ENFORCEMENT (HTTP)
+// ===================================================================
+
+describe("Status Transition Enforcement", () => {
+  let server;
+  let validCaseId;
+  const AUTH = { Authorization: "Bearer test-mcp-secret-token" };
+
+  before(() => {
+    ensureTestDirs();
+    server = createServer();
+    return new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  });
+
+  after(() => new Promise((resolve) => server.close(resolve)));
+
+  it("creates a case for transition tests", async () => {
+    const res = await request(server, "POST", "/api/alerts", {
+      alert_id: "transition-test-001",
+      rule: { id: "5712", level: 10, description: "Transition test" },
+      agent: { id: "001", name: "test-server" },
+      data: { srcip: "172.16.99.1" },
+    }, AUTH);
+    assert.strictEqual(res.status, 201);
+    validCaseId = res.body.case_id;
+  });
+
+  it("rejects invalid transition open → executed with 400", async () => {
+    const res = await request(server, "PUT", `/api/cases/${validCaseId}`, { status: "executed" }, AUTH);
+    assert.strictEqual(res.status, 400);
+    assert.ok(res.raw.includes("Invalid status transition"));
+  });
+
+  it("allows valid transition open → triaged", async () => {
+    const res = await request(server, "PUT", `/api/cases/${validCaseId}`, { status: "triaged" }, AUTH);
+    assert.strictEqual(res.status, 200);
+  });
+
+  it("rejects triaged → executed", async () => {
+    const res = await request(server, "PUT", `/api/cases/${validCaseId}`, { status: "executed" }, AUTH);
+    assert.strictEqual(res.status, 400);
+  });
+});
+
+// ===================================================================
+// PLAN CASE EXISTENCE CHECK
+// ===================================================================
+
+describe("Plan Case Existence Check", () => {
+  let server;
+  const AUTH = { Authorization: "Bearer test-mcp-secret-token" };
+
+  before(() => {
+    ensureTestDirs();
+    server = createServer();
+    return new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  });
+
+  after(() => new Promise((resolve) => server.close(resolve)));
+
+  it("rejects plan for non-existent case with 404", async () => {
+    const res = await request(server, "POST", "/api/plans", {
+      case_id: "CASE-99999999-fakecase1234",
+      title: "Phantom plan",
+      actions: [{ action: "block_ip", params: { ip: "1.2.3.4" } }],
+    }, AUTH);
+    assert.strictEqual(res.status, 404);
+    assert.ok(res.raw.includes("not found"));
+  });
+});
+
+// ===================================================================
+// EXPANDED ENTITY EXTRACTION
+// ===================================================================
+
+describe("Expanded Entity Extraction", () => {
+  let server;
+  const AUTH = { Authorization: "Bearer test-mcp-secret-token" };
+
+  before(() => {
+    ensureTestDirs();
+    server = createServer();
+    return new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  });
+
+  after(() => new Promise((resolve) => server.close(resolve)));
+
+  it("extracts file hashes from syscheck alerts", async () => {
+    const res = await request(server, "POST", "/api/alerts", {
+      alert_id: "hash-test-001",
+      rule: { id: "550", level: 7, description: "File integrity change" },
+      agent: { id: "002", name: "file-server" },
+      data: { syscheck: { md5_after: "d41d8cd98f00b204e9800998ecf8427e", sha256_after: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" } },
+    }, AUTH);
+    assert.strictEqual(res.status, 201);
+    assert.ok(res.body.entities_extracted >= 3); // host + 2 hashes
+  });
+
+  it("extracts CVE IDs from vulnerability alerts", async () => {
+    const res = await request(server, "POST", "/api/alerts", {
+      alert_id: "cve-test-001",
+      rule: { id: "23504", level: 10, description: "Vulnerability detected" },
+      agent: { id: "003", name: "vuln-server" },
+      data: { vulnerability: { cve: "CVE-2024-1234", severity: "high", reference: "CVE-2024-5678" } },
+    }, AUTH);
+    assert.strictEqual(res.status, 201);
+    assert.ok(res.body.entities_extracted >= 3); // host + 2 CVEs
+  });
+
+  it("extracts port numbers from alerts", async () => {
+    const res = await request(server, "POST", "/api/alerts", {
+      alert_id: "port-test-001",
+      rule: { id: "5712", level: 10, description: "Port test" },
+      agent: { id: "004", name: "net-server" },
+      data: { srcip: "10.0.0.1", srcport: "44322", dstport: "22" },
+    }, AUTH);
+    assert.strictEqual(res.status, 201);
+    assert.ok(res.body.entities_extracted >= 4); // host + IP + 2 ports
+  });
+
+  it("handles string rule.level correctly", async () => {
+    const res = await request(server, "POST", "/api/alerts", {
+      alert_id: "strlevel-test-001",
+      rule: { id: "5712", level: "12", description: "String level test" },
+      agent: { id: "005", name: "str-server" },
+      data: { srcip: "10.0.0.5" },
+    }, AUTH);
+    assert.strictEqual(res.status, 201);
+    assert.strictEqual(res.body.severity, "high"); // 12 should be "high"
+  });
+});
+
+// ===================================================================
+// METRICS ENDPOINT GATING
+// ===================================================================
+
+describe("Metrics endpoint gating", () => {
+  let server;
+
+  before(() => {
+    ensureTestDirs();
+    server = createServer();
+    return new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  });
+
+  after(() => new Promise((resolve) => server.close(resolve)));
+
+  it("returns metrics when METRICS_ENABLED is not false (default)", async () => {
+    const res = await request(server, "GET", "/metrics");
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.raw.includes("autopilot_cases_created_total"));
+  });
+});
+
+// ===================================================================
+// HEALTH ENDPOINT CONNECTIVITY CHECKS
+// ===================================================================
+
+describe("Health endpoint connectivity fields", () => {
+  let server;
+
+  before(() => {
+    ensureTestDirs();
+    server = createServer();
+    return new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  });
+
+  after(() => new Promise((resolve) => server.close(resolve)));
+
+  it("includes mcp_configured and gateway_configured in checks", async () => {
+    const res = await request(server, "GET", "/health");
+    assert.strictEqual(res.status, 200);
+    assert.ok("mcp_configured" in res.body.checks);
+    assert.ok("gateway_configured" in res.body.checks);
+  });
+});
+
+// ===================================================================
 // Cleanup
 // ===================================================================
 

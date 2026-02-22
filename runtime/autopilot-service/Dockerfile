@@ -52,7 +52,7 @@ RUN mkdir -p /var/lib/wazuh-autopilot/cases \
 
 # Environment defaults
 ENV NODE_ENV=production \
-    AUTOPILOT_MODE=production \
+    AUTOPILOT_MODE=bootstrap \
     AUTOPILOT_DATA_DIR=/var/lib/wazuh-autopilot \
     AUTOPILOT_CONFIG_DIR=/etc/wazuh-autopilot \
     RUNTIME_PORT=9090 \
