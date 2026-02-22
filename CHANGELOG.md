@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-02-22
+
+### Added
+- **Autonomous agent pipeline**: Webhook dispatch wires agents end-to-end — runtime triggers downstream agents via OpenClaw Gateway on status changes
+- **Gateway dispatch**: Fire-and-forget `dispatchToGateway()` with 10s timeout, 1 retry, and Prometheus metrics (`webhook_dispatches_total`, `webhook_dispatch_failures_total`)
+- **Status-driven handoffs**: Case status changes automatically trigger the next agent (triaged → correlation, correlated → investigation, investigated → response-planner)
+- **Inline policy enforcement**: Three enforcement points enforce `policy.yaml` at runtime:
+  - **Plan creation**: Validates each action against allowlist, checks `enabled` and `min_confidence`
+  - **Plan approval**: Validates approver against groups, checks `can_approve` and `max_risk_level`
+  - **Plan execution**: Validates evidence count against `min_evidence_items`
+- **7 action tools enabled** in `toolmap.yaml`: `block_ip`, `isolate_host`, `kill_process`, `disable_user`, `quarantine_file`, `firewall_drop`, `host_deny`
+- **Agent Runtime API access**: All 6 agent TOOLS.md files updated with HTTP endpoint documentation
+- 16 new tests for gateway dispatch and policy enforcement (196 total)
+- `OPENCLAW_GATEWAY_URL` and `OPENCLAW_TOKEN` environment variables for gateway integration
+
+### Changed
+- **Policy Guard role**: Primary enforcement is now inline at the runtime level; the Policy Guard agent provides supplementary LLM-based analysis
+- `web.fetch` enabled in both `openclaw.json` and `openclaw-airgapped.json` so agents can call the runtime API
+- Bootstrap mode: Policy enforcement is fail-open (warns but allows) for easier testing
+- Production mode: Policy enforcement is fail-closed (denies if policy cannot be loaded)
+
+### Fixed
+- **YAML parser bug**: `parseSimpleYaml` silently skipped indented list items (standard YAML style) — now correctly parses `items:\n  - first\n  - second`
+- Policy configuration loaded at startup but never enforced at runtime
+
 ## [2.1.0] - 2026-02-17
 
 ### Added
@@ -88,7 +113,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Responder Agent
   - Reporting Agent
 
-[Unreleased]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/releases/tag/v1.0.0

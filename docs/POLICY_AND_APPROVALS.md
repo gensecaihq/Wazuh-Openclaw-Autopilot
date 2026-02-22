@@ -8,6 +8,29 @@ Wazuh Autopilot implements an enterprise-grade policy engine that controls all a
 2. **Separation of Duties** - Different agents have different permissions
 3. **Audit Trail** - Every decision is logged with reason codes
 4. **Configurable Autonomy** - Balance automation with human oversight
+5. **Inline Enforcement** - Policies are enforced at the Runtime Service level, not just by agents
+
+## Enforcement Architecture
+
+Policy enforcement operates at **two levels**:
+
+### 1. Runtime-Level (Inline) — Primary
+
+The Runtime Service enforces `policies/policy.yaml` at three critical points:
+
+| Enforcement Point | API Endpoint | What's Checked |
+|-------------------|-------------|----------------|
+| **Plan Creation** | `POST /api/plans` | Each action validated against `actions.allowlist` — must be `enabled`, must meet `min_confidence` |
+| **Plan Approval** | `POST /api/plans/:id/approve` | Approver validated against `approvers.groups` — must have action in `can_approve`, risk level must be within `max_risk_level` |
+| **Plan Execution** | `POST /api/plans/:id/execute` | Evidence count validated against `min_evidence_items` for each action type |
+
+**Fail modes:**
+- **Production mode** (`AUTOPILOT_MODE=production`): Fail-closed — denies if policy cannot be loaded
+- **Bootstrap mode** (`AUTOPILOT_MODE=bootstrap`): Fail-open — warns but allows (easier testing)
+
+### 2. Agent-Level (Supplementary) — Advisory
+
+The Policy Guard agent is still triggered via webhook when a plan is created. It performs supplementary LLM-based analysis (blast radius assessment, context-aware evaluation) that complements the rule-based inline checks. Its findings are advisory — the Runtime's inline enforcement is authoritative.
 
 ## Autonomy Levels
 
@@ -259,22 +282,33 @@ When a case reaches high/critical severity, the Response Planner agent generates
 }
 ```
 
-### 2. Policy Guard Evaluates
+### 2. Inline Policy Enforcement (Automatic)
 
-The Policy Guard agent checks the plan against all policies:
+The Runtime Service enforces policy rules before the plan is stored:
 
 ```
-Evaluation Order:
-1. ✓ Workspace allowlist (passed)
-2. ✓ Channel allowlist (passed)
-3. ✓ Action allowlist (block_ip enabled)
-4. ✓ Asset criticality (dev system, standard ok)
-5. ✓ Evidence threshold (3 items >= 2 required)
-6. ✓ Confidence threshold (0.85 >= 0.7)
-7. ✓ Time window (within allowed hours)
-8. ✓ Idempotency (IP not already blocked)
+Inline Enforcement (plan creation):
+1. ✓ Action allowlist (block_ip enabled)
+2. ✓ Confidence threshold (0.85 >= 0.7)
+3. ✓ deny_unlisted check (action is listed)
 
-Result: ALLOW (proceed to approval)
+Result: ALLOW (plan created, webhook dispatched to Policy Guard)
+```
+
+### 2b. Policy Guard Evaluates (Supplementary)
+
+The Policy Guard agent receives a webhook and performs LLM-based analysis:
+
+```
+Supplementary Analysis:
+1. ✓ Asset criticality (dev system, standard ok)
+2. ✓ Evidence threshold (3 items >= 2 required)
+3. ✓ Time window (within allowed hours)
+4. ✓ Idempotency (IP not already blocked)
+5. ✓ Blast radius assessment
+6. ✓ Context-aware risk evaluation
+
+Result: ADVISORY — findings added to case
 ```
 
 ### 3. Approval Request Posted

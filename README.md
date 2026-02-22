@@ -75,7 +75,9 @@
 | **Autonomous Triage** | AI agents analyze incoming alerts, extract entities (IPs, users, hosts), and assign severity |
 | **Incident Correlation** | Automatically link related alerts into unified cases with attack timelines |
 | **Response Planning** | Generate risk-assessed response plans with recommended Wazuh Active Response actions |
+| **Policy Enforcement** | Inline enforcement of action allowlists, approver authorization, confidence thresholds, and evidence requirements |
 | **Human-in-the-Loop** | Two-tier approval workflow ensures humans authorize every response action |
+| **Webhook Orchestration** | Status-driven agent handoffs via fire-and-forget webhook dispatch to OpenClaw Gateway |
 | **Evidence Packs** | Structured JSON evidence packages for compliance and forensics |
 | **Prometheus Metrics** | Full observability with SOC KPIs (MTTD, MTTR, auto-triage rate) |
 | **Slack Integration** | Real-time alerts and interactive approval buttons via Socket Mode |
@@ -90,37 +92,53 @@
 │                                                                              │
 │   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐              │
 │   │    Wazuh     │      │     MCP      │      │   OpenClaw   │              │
-│   │   Manager    │─────▶│    Server    │◀────▶│   Gateway    │              │
-│   │              │      │              │      │              │              │
+│   │   Manager    │◀─────│    Server    │      │   Gateway    │              │
+│   │   :55000     │      │   :3000      │      │   :18789     │              │
 │   └──────────────┘      └──────────────┘      └──────────────┘              │
-│          │                     │                     │                       │
-│      Alerts               Wazuh API             AI Agents                    │
-│          │                                          │                        │
-│          ▼                                          ▼                        │
-│   ┌──────────────┐                          ┌──────────────┐                │
-│   │   Runtime    │◀─────────────────────────│   7 SOC      │                │
-│   │   Service    │                          │   Agents     │                │
-│   │              │                          │              │                │
-│   └──────────────┘                          └──────────────┘                │
-│          │                                                                   │
-│          ├── Cases & Evidence Packs                                          │
-│          ├── Response Plans (human approval required)                        │
-│          ├── Prometheus Metrics (/metrics)                                   │
-│          └── Slack Notifications (Socket Mode)                               │
+│                                ▲                     ▲     │                 │
+│                           MCP calls             Webhooks   │                 │
+│                                │                     │     ▼                 │
+│                          ┌─────┴────────┐      ┌─────┴──────────┐           │
+│                          │   Runtime    │      │   7 SOC Agents  │           │
+│                          │   Service    │◀─────│   (OpenClaw)    │           │
+│                          │   :9090      │      │                 │           │
+│                          └──────────────┘      └─────────────────┘           │
+│                                │                  web.fetch ▲                │
+│                                │                            │                │
+│    ┌───────────────────────────┤                            │                │
+│    │           │               │              webhook dispatch                │
+│    ▼           ▼               ▼                                             │
+│  Cases     Response      Prometheus        Slack                             │
+│  Evidence  Plans         Metrics           Notifications                     │
+│  Packs     (policy-      (/metrics)        (Socket Mode)                    │
+│            enforced)                                                         │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
+
+Data Flow:
+  Agents ──web.fetch──▶ Runtime ──callMcpTool──▶ MCP Server ──▶ Wazuh API
+  Runtime ──webhook──▶ OpenClaw Gateway ──▶ Next Agent
 ```
 
 ### Agent Pipeline
 
+Agents are orchestrated via **webhook dispatch** — the runtime automatically triggers the next agent when a case changes status:
+
 ```
 Alert Ingestion ──▶ Triage ──▶ Correlation ──▶ Investigation
-                                                     │
-                    ┌────────────────────────────────┘
-                    ▼
-              Response Planner ──▶ Policy Guard ──▶ Human Approval ──▶ Responder
-                                                          │
-                                                    [Approve] [Execute]
+     │               (auto)       (auto)          (auto)
+     │               status:      status:         status:
+     │               triaged      correlated      investigated
+     │                                                │
+     │              ┌─────────────────────────────────┘
+     │              ▼
+     │        Response Planner ──▶ Policy Enforcement ──▶ Human Approval ──▶ Responder
+     │                                  (inline)              │
+     │                             action allowlist     [Approve] [Execute]
+     │                             approver auth        evidence check
+     │                             evidence check
+     ▼
+  Webhook ──▶ OpenClaw Gateway ──▶ Agent
 ```
 
 ---
@@ -129,13 +147,13 @@ Alert Ingestion ──▶ Triage ──▶ Correlation ──▶ Investigation
 
 | Agent | Function | Autonomy |
 |-------|----------|----------|
-| **Triage** | Analyze alerts, extract IOCs, create cases | Automatic |
-| **Correlation** | Link related alerts, build attack timelines | Automatic |
-| **Investigation** | Deep analysis, process trees, threat intel enrichment | Automatic |
-| **Response Planner** | Generate risk-assessed response plans | Proposal only |
-| **Policy Guard** | Validate actions against security policies | Advisory |
+| **Triage** | Analyze alerts, extract IOCs, create cases | Automatic (webhook-triggered) |
+| **Correlation** | Link related alerts, build attack timelines | Automatic (webhook-triggered) |
+| **Investigation** | Deep analysis, process trees, threat intel enrichment | Automatic (webhook-triggered) |
+| **Response Planner** | Generate risk-assessed response plans | Automatic (webhook-triggered) |
+| **Policy Guard** | Supplementary LLM analysis (inline enforcement is primary) | Advisory (webhook-triggered) |
 | **Responder** | Execute Wazuh Active Response commands | Human-gated |
-| **Reporting** | Generate SOC metrics, KPIs, shift reports | Automatic |
+| **Reporting** | Generate SOC metrics, KPIs, shift reports | Automatic (heartbeat) |
 
 ---
 
@@ -183,7 +201,7 @@ Model format is `"provider/model-name"`. Example `openclaw.json` snippet:
 
 ## Human-in-the-Loop Approval
 
-Every response action requires explicit human authorization through a two-tier workflow:
+Every response action requires explicit human authorization through a two-tier workflow with inline policy enforcement:
 
 ```
 ┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
@@ -192,13 +210,14 @@ Every response action requires explicit human authorization through a two-tier w
 │  AI generates   │      │  Human clicks   │      │  Human clicks   │
 │  response plan  │      │  [Approve]      │      │  [Execute]      │
 └─────────────────┘      └─────────────────┘      └─────────────────┘
-                                │                        │
-                                ▼                        ▼
-                         Tier 1: Validate          Tier 2: Authorize
-                         the plan is correct       actual execution
+        │                        │                        │
+        ▼                        ▼                        ▼
+  Policy Check:            Policy Check:            Policy Check:
+  action allowlist         approver authorized      evidence sufficient
+  confidence threshold     risk level permitted     min items met
 ```
 
-**AI agents cannot execute actions autonomously.** The responder capability is disabled by default and requires explicit enablement plus human approval for every action.
+**AI agents cannot execute actions autonomously.** The responder capability is disabled by default and requires explicit enablement plus human approval for every action. Policy enforcement is applied inline at each step — fail-closed in production mode, fail-open in bootstrap mode.
 
 ---
 
@@ -372,6 +391,10 @@ autopilot_executions_success_total
 autopilot_executions_failed_total
 autopilot_responder_disabled_blocks_total
 
+# Webhook Dispatch
+autopilot_webhook_dispatches_total
+autopilot_webhook_dispatch_failures_total
+
 # Policy
 autopilot_policy_denies_total{reason="..."}
 autopilot_errors_total{component="..."}
@@ -458,9 +481,9 @@ Features:
 │   └── agents/                 # 7 SOC agents + _shared/ (AGENTS.md, IDENTITY.md, TOOLS.md, HEARTBEAT.md, MEMORY.md)
 ├── runtime/autopilot-service/
 │   ├── Dockerfile              # Production container
-│   ├── index.js                # Main service (2400+ LOC)
+│   ├── index.js                # Main service (2800+ LOC)
 │   ├── slack.js                # Slack Socket Mode integration
-│   └── index.test.js           # Unit tests (40 tests)
+│   └── *.test.js               # Test suite (196 tests)
 ├── policies/
 │   ├── policy.yaml             # Security policies & approvers
 │   └── toolmap.yaml            # MCP tool mappings

@@ -161,6 +161,8 @@ Expected response (case_id is a hash-based identifier):
 }
 ```
 
+> If OpenClaw Gateway is running, the runtime will also dispatch a webhook to `/webhook/wazuh-alert` to trigger the Triage Agent automatically.
+
 ### View the created case:
 
 ```bash
@@ -170,10 +172,11 @@ curl http://127.0.0.1:9090/api/cases
 ## What's Next?
 
 1. **Configure OpenClaw** - Load the agent configurations into your OpenClaw instance
-2. **Set up Slack** - See [SLACK_SOCKET_MODE.md](SLACK_SOCKET_MODE.md) for full integration
-3. **Production mode** - See [TAILSCALE_MANDATORY.md](TAILSCALE_MANDATORY.md) for zero-trust networking
-4. **Customize policies** - Review `policies/policy.yaml` for your environment
-5. **Review playbooks** - Understand response workflows in `playbooks/`
+2. **Verify agent pipeline** - Update case status to `triaged` and check that the Correlation Agent is triggered via webhook
+3. **Set up Slack** - See [SLACK_SOCKET_MODE.md](SLACK_SOCKET_MODE.md) for full integration
+4. **Production mode** - See [TAILSCALE_MANDATORY.md](TAILSCALE_MANDATORY.md) for zero-trust networking
+5. **Customize policies** - Review `policies/policy.yaml` for your environment (inline enforcement is active)
+6. **Review playbooks** - Understand response workflows in `playbooks/`
 
 ## Troubleshooting
 

@@ -93,9 +93,23 @@ Tool permissions are enforced by the OpenClaw gateway via `tools.allow` and `too
 
 ### Triggers
 
-Agents are triggered via **heartbeats** (configured per-agent in `openclaw.json`) and **hooks** (webhook endpoints):
+Agents are triggered in three ways:
 
-**Heartbeats** (periodic sweeps):
+**1. Webhook Dispatch (Primary — event-driven)**
+
+The Runtime Service dispatches webhooks to the OpenClaw Gateway when case status changes. This is the primary orchestration mechanism:
+
+| Trigger Event | Webhook Path | Agent Triggered |
+|--------------|-------------|-----------------|
+| Alert ingested (new case) | `/webhook/wazuh-alert` | Triage |
+| Case status → `triaged` | `/webhook/case-created` | Correlation |
+| Case status → `correlated` | `/webhook/investigation-request` | Investigation |
+| Case status → `investigated` | `/webhook/plan-request` | Response Planner |
+| Plan created | `/webhook/policy-check` | Policy Guard |
+
+Dispatches are fire-and-forget (async, 10s timeout, 1 retry).
+
+**2. Heartbeats (Periodic sweeps)**
 
 | Agent | Interval | Task |
 |-------|----------|------|
@@ -103,12 +117,16 @@ Agents are triggered via **heartbeats** (configured per-agent in `openclaw.json`
 | wazuh-correlation | Every 5 min | Recorrelate active cases |
 | All agents | Every 30 min (default) | Health check and maintenance |
 
-**Cron jobs** (reports) can be added via CLI:
+**3. Cron jobs** (reports) can be added via CLI:
 
 ```bash
 openclaw cron add --schedule "0 8 * * *" --agent wazuh-reporting --name "daily-digest"
 openclaw cron add --schedule "0 9 * * 1" --agent wazuh-reporting --name "weekly-summary"
 ```
+
+### Agent API Access
+
+Agents use `web.fetch` (enabled in `openclaw.json`) to call the Runtime Service API at `${AUTOPILOT_RUNTIME_URL}` (default `http://127.0.0.1:9090`). Agents do **not** connect to the Wazuh MCP Server directly — the Runtime Service acts as the intermediary for all MCP calls.
 
 ---
 

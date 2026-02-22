@@ -1,6 +1,6 @@
 # Runtime API Reference
 
-The Wazuh Autopilot Runtime Service (v2.1.0) provides a REST API for case management, response plan approval workflow, alert ingestion, metrics, and health monitoring.
+The Wazuh Autopilot Runtime Service (v2.2.0) provides a REST API for case management, response plan approval workflow, alert ingestion, metrics, health monitoring, and webhook-driven agent orchestration.
 
 ## Base URL
 
@@ -252,6 +252,22 @@ The endpoint automatically:
 }
 ```
 
+> **Webhook Dispatch:** When a new case is created, the runtime dispatches a webhook to the OpenClaw Gateway (`/webhook/wazuh-alert`) to trigger the Triage Agent. This is fire-and-forget and does not block the API response.
+
+---
+
+### Case Status Handoffs
+
+When a case status is updated via `PUT /api/cases/:id`, the runtime automatically dispatches webhooks to trigger downstream agents:
+
+| Status Set To | Webhook Path | Agent Triggered |
+|---------------|-------------|-----------------|
+| `triaged` | `/webhook/case-created` | Correlation |
+| `correlated` | `/webhook/investigation-request` | Investigation |
+| `investigated` | `/webhook/plan-request` | Response Planner |
+
+Dispatches are fire-and-forget (async, never block the API response).
+
 ---
 
 ### Responder Status
@@ -348,6 +364,8 @@ Create a new response plan in `proposed` state. Requires `write` scope. Typicall
 
 Required fields: `case_id`, `actions` (non-empty array). Each action must have `action` and `target`.
 
+> **Policy Enforcement:** Each action in the plan is validated against the action allowlist in `policies/policy.yaml`. Actions must be `enabled`, and the plan's confidence must meet the action's `min_confidence` threshold. Unlisted actions are denied when `deny_unlisted: true`. Returns `400` if policy denies an action.
+
 **Response:** `201 Created`
 ```json
 {
@@ -397,6 +415,7 @@ Required fields: `approver_id`.
 
 **Errors:**
 - `400`: Plan not in `proposed` state, or plan has expired
+- `403`: Approver not authorized (policy check — approver group, risk level, action types)
 - `404`: Plan not found
 
 #### POST /api/plans/:planId/reject
@@ -455,7 +474,7 @@ Required fields: `executor_id`.
 ```
 
 **Errors:**
-- `403`: Responder capability is disabled (`AUTOPILOT_RESPONDER_ENABLED` not set to `true`)
+- `403`: Responder capability is disabled, approver not authorized (policy check), or insufficient evidence (policy check)
 - `400`: Plan not in `approved` state, or plan has expired
 - `404`: Plan not found
 
@@ -557,3 +576,5 @@ All responses include security headers:
 | `CORS_ORIGIN` | http://localhost:3000 | Allowed CORS origin |
 | `CORS_ENABLED` | true | Enable CORS headers |
 | `SHUTDOWN_TIMEOUT_MS` | 30000 | Graceful shutdown timeout |
+| `OPENCLAW_GATEWAY_URL` | http://127.0.0.1:18789 | OpenClaw Gateway URL for webhook dispatch |
+| `OPENCLAW_TOKEN` | (none) | Bearer token for Gateway webhook auth |

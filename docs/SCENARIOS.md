@@ -320,13 +320,16 @@ Run the standard installer in the cloud, then configure `MCP_URL` to point to th
 
 ## Network Requirements
 
-| From | To | Port | Protocol |
-|------|-----|------|----------|
-| OpenClaw | MCP | 3000 | HTTPS |
-| Runtime | MCP | 3000 | HTTPS |
-| MCP | Wazuh API | 55000 | HTTPS |
-| Runtime | Slack | 443 | HTTPS |
-| Prometheus | Runtime | 9090 | HTTP |
+| From | To | Port | Protocol | Purpose |
+|------|-----|------|----------|---------|
+| Runtime | MCP Server | 3000 | HTTPS | `callMcpTool()` — Wazuh data queries and actions |
+| Runtime | OpenClaw Gateway | 18789 | HTTP | Webhook dispatch — trigger downstream agents |
+| OpenClaw Agents | Runtime | 9090 | HTTP | `web.fetch` — case/plan CRUD, metrics |
+| MCP Server | Wazuh API | 55000 | HTTPS | Wazuh Manager queries |
+| Runtime | Slack | 443 | HTTPS | Socket Mode notifications |
+| Prometheus | Runtime | 9090 | HTTP | Metrics scraping |
+
+> **Note:** OpenClaw agents do NOT connect to the MCP Server directly. The Runtime Service is the sole MCP client. Agents interact with Wazuh data through the Runtime API.
 
 ---
 

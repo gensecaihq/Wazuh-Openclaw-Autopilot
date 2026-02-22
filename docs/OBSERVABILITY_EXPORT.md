@@ -94,6 +94,16 @@ autopilot_policy_denies_total{reason="APPROVER_NOT_AUTHORIZED"}
 autopilot_policy_denies_total{reason="ACTION_NOT_ALLOWED"}
 ```
 
+#### Webhook Dispatch Metrics
+
+```prometheus
+# Counter: Successful webhook dispatches to OpenClaw Gateway
+autopilot_webhook_dispatches_total
+
+# Counter: Failed webhook dispatches
+autopilot_webhook_dispatch_failures_total
+```
+
 #### Error Metrics
 
 ```prometheus
@@ -158,6 +168,12 @@ sum(rate(autopilot_mcp_tool_calls_total[5m]))
 **Policy deny breakdown:**
 ```promql
 sum by (reason) (rate(autopilot_policy_denies_total[1h]))
+```
+
+**Webhook dispatch success rate:**
+```promql
+rate(autopilot_webhook_dispatches_total[5m]) /
+(rate(autopilot_webhook_dispatches_total[5m]) + rate(autopilot_webhook_dispatch_failures_total[5m]))
 ```
 
 ## Structured Logs

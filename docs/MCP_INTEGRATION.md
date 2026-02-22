@@ -12,31 +12,38 @@ The Model Context Protocol (MCP) provides a standardized interface for AI agents
 - Execute active response commands
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Wazuh Autopilot                          │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
-│  │   Triage    │  │   Correlate │  │  Investigate │         │
-│  │   Agent     │  │   Agent     │  │    Agent     │         │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬───────┘         │
-│         │                │                │                  │
-│         └────────────────┼────────────────┘                  │
-│                          │                                   │
-│                   ┌──────▼──────┐                            │
-│                   │  Runtime    │                            │
-│                   │  Service    │                            │
-│                   └──────┬──────┘                            │
-└──────────────────────────│───────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                           Wazuh Autopilot                                │
+│                                                                          │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                     │
+│  │   Triage    │  │   Correlate │  │  Investigate │  ... (7 agents)     │
+│  │   Agent     │  │   Agent     │  │    Agent     │                     │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬───────┘                     │
+│         │                │                │                              │
+│         └────── web.fetch (HTTP) ─────────┘                              │
+│                          │                                               │
+│                   ┌──────▼──────┐                                        │
+│                   │  Runtime    │  Agents call Runtime API via web.fetch  │
+│                   │  Service    │  Runtime calls MCP via callMcpTool()   │
+│                   │  :9090      │                                        │
+│                   └──────┬──────┘                                        │
+└──────────────────────────│───────────────────────────────────────────────┘
                            │ HTTP/HTTPS
                            │ (Tailscale recommended)
                     ┌──────▼──────┐
                     │  Wazuh MCP  │
                     │   Server    │
+                    │   :3000     │
                     └──────┬──────┘
                            │ HTTPS
                     ┌──────▼──────┐
                     │   Wazuh     │
                     │   Manager   │
+                    │   :55000    │
                     └─────────────┘
+
+Note: OpenClaw agents do NOT connect to the MCP Server directly.
+      Agents → Runtime Service → MCP Server → Wazuh Manager
 ```
 
 ## MCP Server Setup
