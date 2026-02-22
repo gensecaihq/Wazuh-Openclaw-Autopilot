@@ -1,6 +1,6 @@
 {
   "name": "wazuh-openclaw-autopilot-service",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Wazuh OpenClaw Autopilot Runtime Service - Evidence packs, approvals, metrics",
   "main": "index.js",
   "bin": {

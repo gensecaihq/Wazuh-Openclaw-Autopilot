@@ -169,14 +169,65 @@ Expected response (case_id is a hash-based identifier):
 curl http://127.0.0.1:9090/api/cases
 ```
 
+## Step 8: Test Alert Grouping
+
+Send a second alert with the same source IP — it should be grouped into the same case:
+
+```bash
+curl -X POST http://127.0.0.1:9090/api/alerts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "alert_id": "test-002",
+    "rule": {
+      "id": "5712",
+      "level": 12,
+      "description": "Test alert - SSH brute force continued"
+    },
+    "agent": {
+      "id": "001",
+      "name": "test-server",
+      "ip": "10.0.1.50"
+    },
+    "data": {
+      "srcip": "192.168.1.100"
+    }
+  }'
+```
+
+Expected response (note `status: "updated"` and `grouped_into`):
+```json
+{
+  "case_id": "CASE-20260217-6a82c1f38bed",
+  "status": "updated",
+  "severity": "high",
+  "entities_extracted": 2,
+  "grouped_into": "CASE-20260217-6a82c1f38bed"
+}
+```
+
+## Step 9: Submit Feedback (Optional)
+
+Mark a case as a false positive or true positive:
+
+```bash
+curl -X POST http://127.0.0.1:9090/api/cases/CASE-20260217-6a82c1f38bed/feedback \
+  -H "Content-Type: application/json" \
+  -d '{
+    "verdict": "true_positive",
+    "reason": "Confirmed SSH brute force attack",
+    "user_id": "analyst-1"
+  }'
+```
+
 ## What's Next?
 
 1. **Configure OpenClaw** - Load the agent configurations into your OpenClaw instance
 2. **Verify agent pipeline** - Update case status to `triaged` and check that the Correlation Agent is triggered via webhook
-3. **Set up Slack** - See [SLACK_SOCKET_MODE.md](SLACK_SOCKET_MODE.md) for full integration
-4. **Production mode** - See [TAILSCALE_MANDATORY.md](TAILSCALE_MANDATORY.md) for zero-trust networking
-5. **Customize policies** - Review `policies/policy.yaml` for your environment (inline enforcement is active)
-6. **Review playbooks** - Understand response workflows in `playbooks/`
+3. **Enable IP enrichment** - Set `ENRICHMENT_ENABLED=true` and `ABUSEIPDB_API_KEY` in `/etc/wazuh-autopilot/.env` for automatic threat intelligence enrichment
+4. **Set up Slack** - See [SLACK_SOCKET_MODE.md](SLACK_SOCKET_MODE.md) for full integration
+5. **Production mode** - See [TAILSCALE_MANDATORY.md](TAILSCALE_MANDATORY.md) for zero-trust networking
+6. **Customize policies** - Review `policies/policy.yaml` for your environment (inline enforcement is active)
+7. **Review playbooks** - Understand response workflows in `playbooks/`
 
 ## Troubleshooting
 

@@ -73,11 +73,15 @@
 | Capability | Description |
 |------------|-------------|
 | **Autonomous Triage** | AI agents analyze incoming alerts, extract entities (IPs, users, hosts), and assign severity |
+| **Alert Grouping** | Entity-based correlation groups related alerts (shared IPs, users) into unified cases |
+| **IP Enrichment** | Automatic AbuseIPDB lookups on public IPs with TTL caching |
 | **Incident Correlation** | Automatically link related alerts into unified cases with attack timelines |
 | **Response Planning** | Generate risk-assessed response plans with recommended Wazuh Active Response actions |
 | **Policy Enforcement** | Inline enforcement of action allowlists, approver authorization, confidence thresholds, and evidence requirements |
 | **Human-in-the-Loop** | Two-tier approval workflow ensures humans authorize every response action |
+| **False Positive Feedback** | Analysts submit verdicts (true/false positive) that refine future alert grouping |
 | **Webhook Orchestration** | Status-driven agent handoffs via fire-and-forget webhook dispatch to OpenClaw Gateway |
+| **MCP JSON-RPC Protocol** | Standards-compliant MCP communication with JWT auth exchange and auto-retry |
 | **Evidence Packs** | Structured JSON evidence packages for compliance and forensics |
 | **Prometheus Metrics** | Full observability with SOC KPIs (MTTD, MTTR, auto-triage rate) |
 | **Slack Integration** | Real-time alerts and interactive approval buttons via Socket Mode |
@@ -340,7 +344,8 @@ curl http://localhost:9090/metrics
 | `/api/cases` | POST | Create case |
 | `/api/cases/:id` | GET | Get case details |
 | `/api/cases/:id` | PUT | Update case |
-| `/api/alerts` | POST | Ingest Wazuh alert (auto-triage) |
+| `/api/alerts` | POST | Ingest Wazuh alert (auto-triage, enrich, group) |
+| `/api/cases/:id/feedback` | POST | Submit analyst verdict (true/false positive) |
 
 ### Response Plans
 
@@ -395,6 +400,15 @@ autopilot_responder_disabled_blocks_total
 autopilot_webhook_dispatches_total
 autopilot_webhook_dispatch_failures_total
 
+# IP Enrichment
+autopilot_enrichment_requests_total
+autopilot_enrichment_cache_hits_total
+autopilot_enrichment_errors_total
+
+# Feedback
+autopilot_false_positives_total
+autopilot_feedback_submitted_total{verdict="..."}
+
 # Policy
 autopilot_policy_denies_total{reason="..."}
 autopilot_errors_total{component="..."}
@@ -413,8 +427,12 @@ Each case generates a structured evidence pack:
   "created_at": "2026-02-17T10:30:00Z",
   "severity": "high",
   "entities": [
-    {"type": "ip", "value": "192.168.1.100", "role": "attacker"},
+    {"type": "ip", "value": "192.168.1.100", "role": "attacker",
+     "enrichment": {"source": "abuseipdb", "abuse_confidence_score": 87, "country_code": "CN"}},
     {"type": "user", "value": "admin", "role": "target"}
+  ],
+  "feedback": [
+    {"verdict": "true_positive", "reason": "Confirmed attack", "user_id": "analyst-1"}
   ],
   "timeline": [...],
   "mitre": [{"technique_id": "T1110", "tactic": "Credential Access"}],
@@ -481,9 +499,9 @@ Features:
 │   └── agents/                 # 7 SOC agents + _shared/ (AGENTS.md, IDENTITY.md, TOOLS.md, HEARTBEAT.md, MEMORY.md)
 ├── runtime/autopilot-service/
 │   ├── Dockerfile              # Production container
-│   ├── index.js                # Main service (2800+ LOC)
+│   ├── index.js                # Main service (3500+ LOC)
 │   ├── slack.js                # Slack Socket Mode integration
-│   └── *.test.js               # Test suite (196 tests)
+│   └── *.test.js               # Test suite (228 tests)
 ├── policies/
 │   ├── policy.yaml             # Security policies & approvers
 │   └── toolmap.yaml            # MCP tool mappings

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-02-22
+
+### Added
+- **MCP JSON-RPC protocol**: `callMcpTool()` now supports the standard MCP JSON-RPC 2.0 protocol (`POST /mcp` with `tools/call` method) in addition to legacy REST mode. Configurable via `MCP_AUTH_MODE`.
+- **JWT auth exchange**: Automatic API key → JWT exchange via `/auth/token` with in-memory caching and 401 retry logic
+- **IP enrichment**: AbuseIPDB v2 integration enriches public IP entities during alert ingestion. TTL-based cache (10K max entries), configurable timeout. Enabled via `ENRICHMENT_ENABLED=true`.
+- **Entity-based alert grouping**: Alerts sharing entities (IPs, users, hosts) within a configurable time window are automatically grouped into existing cases instead of creating duplicates
+- **False positive feedback endpoint**: `POST /api/cases/:id/feedback` accepts analyst verdicts (`true_positive`, `false_positive`, `needs_review`). False positive verdicts mark entities in the grouping index to prevent future re-grouping.
+- **Alert ID normalization**: Raw Wazuh alerts using `id` or `_id` fields are normalized to `alert_id` for consistent downstream handling
+- **Wazuh integrator improvements**: `--max-time 10` for curl, `${RUNTIME_PORT}` env var, configurable alert level threshold via `WAZUH_ALERT_LEVEL`
+- **New Prometheus metrics**: `enrichment_requests_total`, `enrichment_cache_hits_total`, `enrichment_errors_total`, `false_positives_total`, `feedback_submitted_total{verdict}`
+- **Cleanup intervals**: Automatic expiry of stale entity index entries and enrichment cache entries
+- 32 new tests (228 total): E2E pipeline test, feedback endpoint tests, enrichment unit tests, alert grouping tests, MCP auth tests
+- New `.env.example` variables: `MCP_AUTH_MODE`, `ENRICHMENT_ENABLED`, `ABUSEIPDB_API_KEY`, `ALERT_GROUP_ENABLED`, `WAZUH_ALERT_LEVEL`, cache TTLs
+
+### Changed
+- `callMcpTool()` defaults to `mcp-jsonrpc` mode (JSON-RPC 2.0 at `/mcp` endpoint); set `MCP_AUTH_MODE=legacy-rest` for backwards compatibility
+- Alert ingestion response now includes `grouped_into` field when an alert is grouped into an existing case
+- `updateCase()` supports `feedback` array field for persisting analyst verdicts
+
 ## [2.2.0] - 2026-02-22
 
 ### Added
@@ -113,7 +133,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Responder Agent
   - Reporting Agent
 
-[Unreleased]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/compare/v1.0.0...v2.0.0

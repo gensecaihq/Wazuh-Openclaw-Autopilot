@@ -1,6 +1,6 @@
 # Runtime API Reference
 
-The Wazuh Autopilot Runtime Service (v2.2.0) provides a REST API for case management, response plan approval workflow, alert ingestion, metrics, health monitoring, and webhook-driven agent orchestration.
+The Wazuh Autopilot Runtime Service (v2.3.0) provides a REST API for case management, response plan approval workflow, alert ingestion, IP enrichment, alert grouping, analyst feedback, metrics, health monitoring, and webhook-driven agent orchestration.
 
 ## Base URL
 
@@ -209,7 +209,10 @@ Update an existing case. Requires `write` scope. Array fields (`entities`, `time
 Ingest a Wazuh alert and perform automated triage. Creates a new case or updates an existing one. Requires `write` scope.
 
 The endpoint automatically:
+- Normalizes alert IDs from Wazuh native format (`id` or `_id` → `alert_id`)
 - Extracts entities (IPs, users, hosts) from alert fields
+- Enriches public IP entities via AbuseIPDB (when `ENRICHMENT_ENABLED=true`)
+- Groups alerts sharing entities (IPs, users) into existing cases within the configured time window
 - Determines severity from rule level (4-6: low, 7-9: medium, 10-12: high, 13+: critical)
 - Extracts MITRE ATT&CK mappings from rule metadata
 - Generates a case ID from the alert ID hash
@@ -240,7 +243,7 @@ The endpoint automatically:
 }
 ```
 
-**Response:** `201 Created` (new case) or `200 OK` (existing case updated)
+**Response:** `201 Created` (new case) or `200 OK` (existing case updated / grouped)
 ```json
 {
   "case_id": "CASE-20260217-a1b2c3d4e5f6",
@@ -248,11 +251,51 @@ The endpoint automatically:
   "severity": "high",
   "entities_extracted": 3,
   "mitre_mappings": 1,
-  "triage_latency_ms": 12
+  "triage_latency_ms": 12,
+  "grouped_into": "CASE-20260217-existing123"
 }
 ```
 
+> The `grouped_into` field only appears when the alert was grouped into an existing case via entity matching. When `status` is `"updated"`, the `case_id` reflects the existing case the alert was merged into.
+
 > **Webhook Dispatch:** When a new case is created, the runtime dispatches a webhook to the OpenClaw Gateway (`/webhook/wazuh-alert`) to trigger the Triage Agent. This is fire-and-forget and does not block the API response.
+
+---
+
+### Case Feedback
+
+#### POST /api/cases/:caseId/feedback
+
+Submit analyst feedback on a case. Used for false positive tracking and refining alert grouping. Requires `write` scope.
+
+**Request Body:**
+```json
+{
+  "verdict": "false_positive",
+  "reason": "Known vulnerability scanner",
+  "user_id": "analyst-1"
+}
+```
+
+Required fields: `verdict` (one of: `true_positive`, `false_positive`, `needs_review`).
+
+**Response:** `200 OK`
+```json
+{
+  "case_id": "CASE-20260217-a1b2c3d4e5f6",
+  "verdict": "false_positive",
+  "feedback_count": 1,
+  "status": "false_positive"
+}
+```
+
+When `verdict` is `false_positive`:
+- The case status is set to `false_positive`
+- The case's entities are marked in the alert grouping index so future alerts sharing those entities are not grouped into this case
+
+**Errors:**
+- `400`: Invalid verdict value
+- `404`: Case not found
 
 ---
 
@@ -578,3 +621,11 @@ All responses include security headers:
 | `SHUTDOWN_TIMEOUT_MS` | 30000 | Graceful shutdown timeout |
 | `OPENCLAW_GATEWAY_URL` | http://127.0.0.1:18789 | OpenClaw Gateway URL for webhook dispatch |
 | `OPENCLAW_TOKEN` | (none) | Bearer token for Gateway webhook auth |
+| `MCP_AUTH_MODE` | mcp-jsonrpc | MCP protocol mode: `mcp-jsonrpc` or `legacy-rest` |
+| `MCP_JWT_TTL_MS` | 3000000 | JWT cache TTL (50 min default) |
+| `ENRICHMENT_ENABLED` | false | Enable IP enrichment via AbuseIPDB |
+| `ABUSEIPDB_API_KEY` | (none) | AbuseIPDB API key for IP enrichment |
+| `ENRICHMENT_CACHE_TTL_MS` | 3600000 | Enrichment cache TTL (1 hour) |
+| `ENRICHMENT_TIMEOUT_MS` | 5000 | Enrichment request timeout |
+| `ALERT_GROUP_ENABLED` | true | Enable entity-based alert grouping |
+| `ALERT_GROUP_WINDOW_MS` | 3600000 | Alert grouping time window (1 hour) |

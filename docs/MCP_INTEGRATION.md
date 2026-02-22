@@ -94,6 +94,37 @@ MAX_CONNECTIONS=10
 
 ---
 
+## Protocol Modes
+
+The runtime supports two MCP communication modes, configured via `MCP_AUTH_MODE`:
+
+| Mode | Endpoint | Auth | Use Case |
+|------|----------|------|----------|
+| `mcp-jsonrpc` (default) | `POST /mcp` | JWT (via `/auth/token` exchange) | Standard MCP protocol (recommended) |
+| `legacy-rest` | `POST /tools/<name>` | Raw Bearer token | Backwards compatibility with older MCP servers |
+
+### JSON-RPC Mode (Default)
+
+In `mcp-jsonrpc` mode, the runtime:
+1. Exchanges the API key for a JWT via `POST /auth/token` (cached for 50 min)
+2. Sends tool calls as JSON-RPC 2.0 to `POST /mcp`:
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "request-hash",
+     "method": "tools/call",
+     "params": { "name": "get_wazuh_alerts", "arguments": { "level": 10 } }
+   }
+   ```
+3. Unwraps JSON-RPC responses and handles errors
+4. On 401, invalidates the JWT cache and retries
+
+### Legacy REST Mode
+
+Set `MCP_AUTH_MODE=legacy-rest` to use the older REST-style calls (`POST /tools/<name>` with raw params in the body and the API key directly as Bearer token).
+
+---
+
 ## Connection Methods
 
 ### Method 1: Direct Connection (Development)
@@ -109,6 +140,7 @@ Runtime → MCP (HTTP/HTTPS on LAN)
 AUTOPILOT_MODE=bootstrap
 MCP_URL=http://192.168.1.100:3000
 AUTOPILOT_MCP_AUTH=your-token
+MCP_AUTH_MODE=mcp-jsonrpc
 ```
 
 **Security Considerations:**

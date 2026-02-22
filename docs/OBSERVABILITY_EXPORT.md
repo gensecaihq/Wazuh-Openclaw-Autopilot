@@ -104,6 +104,31 @@ autopilot_webhook_dispatches_total
 autopilot_webhook_dispatch_failures_total
 ```
 
+#### Enrichment Metrics
+
+```prometheus
+# Counter: Total IP enrichment requests to AbuseIPDB
+autopilot_enrichment_requests_total
+
+# Counter: Enrichment cache hits (avoided API calls)
+autopilot_enrichment_cache_hits_total
+
+# Counter: Enrichment errors (API failures, timeouts)
+autopilot_enrichment_errors_total
+```
+
+#### Feedback Metrics
+
+```prometheus
+# Counter: Total false positive verdicts
+autopilot_false_positives_total
+
+# Counter: Feedback submissions by verdict
+autopilot_feedback_submitted_total{verdict="true_positive"}
+autopilot_feedback_submitted_total{verdict="false_positive"}
+autopilot_feedback_submitted_total{verdict="needs_review"}
+```
+
 #### Error Metrics
 
 ```prometheus
@@ -174,6 +199,23 @@ sum by (reason) (rate(autopilot_policy_denies_total[1h]))
 ```promql
 rate(autopilot_webhook_dispatches_total[5m]) /
 (rate(autopilot_webhook_dispatches_total[5m]) + rate(autopilot_webhook_dispatch_failures_total[5m]))
+```
+
+**Enrichment cache hit rate:**
+```promql
+rate(autopilot_enrichment_cache_hits_total[5m]) /
+rate(autopilot_enrichment_requests_total[5m])
+```
+
+**False positive rate:**
+```promql
+rate(autopilot_false_positives_total[1h]) /
+rate(autopilot_cases_created_total[1h])
+```
+
+**Feedback by verdict:**
+```promql
+sum by (verdict) (rate(autopilot_feedback_submitted_total[1h]))
 ```
 
 ## Structured Logs
