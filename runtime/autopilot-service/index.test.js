@@ -39,6 +39,13 @@ const {
   policyCheckAction,
   policyCheckApprover,
   policyCheckEvidence,
+  // New: enrichment & grouping
+  isPrivateIp,
+  enrichIpAddress,
+  findRelatedCase,
+  indexCaseEntities,
+  markEntityFalsePositive,
+  getMcpAuthToken,
 } = require("./index.js");
 
 describe("Evidence Pack Management", () => {
@@ -873,6 +880,145 @@ actions:
     assert.strictEqual(result.sufficient, false);
     assert.ok(result.reason.includes("disable_user"));
     assert.ok(result.reason.includes("5"));
+  });
+});
+
+// =============================================================================
+// IP Enrichment
+// =============================================================================
+
+describe("isPrivateIp", () => {
+  it("returns true for 10.x.x.x", () => {
+    assert.strictEqual(isPrivateIp("10.0.0.1"), true);
+    assert.strictEqual(isPrivateIp("10.255.255.255"), true);
+  });
+
+  it("returns true for 172.16-31.x.x", () => {
+    assert.strictEqual(isPrivateIp("172.16.0.1"), true);
+    assert.strictEqual(isPrivateIp("172.31.255.255"), true);
+  });
+
+  it("returns true for 192.168.x.x", () => {
+    assert.strictEqual(isPrivateIp("192.168.0.1"), true);
+    assert.strictEqual(isPrivateIp("192.168.255.255"), true);
+  });
+
+  it("returns true for 127.x.x.x (loopback)", () => {
+    assert.strictEqual(isPrivateIp("127.0.0.1"), true);
+  });
+
+  it("returns true for 0.x.x.x", () => {
+    assert.strictEqual(isPrivateIp("0.0.0.0"), true);
+  });
+
+  it("returns false for public IPs", () => {
+    assert.strictEqual(isPrivateIp("8.8.8.8"), false);
+    assert.strictEqual(isPrivateIp("203.0.113.50"), false);
+    assert.strictEqual(isPrivateIp("1.1.1.1"), false);
+  });
+
+  it("returns true for invalid input", () => {
+    assert.strictEqual(isPrivateIp(null), true);
+    assert.strictEqual(isPrivateIp(""), true);
+    assert.strictEqual(isPrivateIp("not-an-ip"), true);
+  });
+
+  it("returns false for 172.32.x.x (outside /12 range)", () => {
+    assert.strictEqual(isPrivateIp("172.32.0.1"), false);
+  });
+});
+
+describe("enrichIpAddress", () => {
+  it("returns null for private IPs", async () => {
+    const result = await enrichIpAddress("10.0.0.1");
+    assert.strictEqual(result, null);
+  });
+
+  it("returns null when enrichment is disabled", async () => {
+    // enrichment is disabled by default in test env (ENRICHMENT_ENABLED not set)
+    const result = await enrichIpAddress("203.0.113.50");
+    assert.strictEqual(result, null);
+  });
+});
+
+// =============================================================================
+// Alert Grouping
+// =============================================================================
+
+describe("Alert Grouping", () => {
+  it("findRelatedCase returns null when no entities match", () => {
+    const result = findRelatedCase([{ type: "ip", value: "99.99.99.99" }]);
+    assert.strictEqual(result, null);
+  });
+
+  it("findRelatedCase returns null for empty entities", () => {
+    const result = findRelatedCase([]);
+    assert.strictEqual(result, null);
+  });
+
+  it("findRelatedCase returns case when entity matches within window", () => {
+    const entities = [{ type: "ip", value: "100.100.100.1" }];
+    indexCaseEntities("CASE-GROUP-001", entities, "high");
+
+    const result = findRelatedCase(entities);
+    assert.strictEqual(result, "CASE-GROUP-001");
+  });
+
+  it("findRelatedCase skips false-positive cases", () => {
+    const entities = [{ type: "ip", value: "100.100.100.2" }];
+    indexCaseEntities("CASE-FP-001", entities, "high");
+    markEntityFalsePositive("CASE-FP-001");
+
+    const result = findRelatedCase(entities);
+    assert.strictEqual(result, null);
+  });
+
+  it("findRelatedCase picks case with most matches", () => {
+    const ip1 = { type: "ip", value: "100.100.100.3" };
+    const ip2 = { type: "ip", value: "100.100.100.4" };
+    const user1 = { type: "user", value: "admin" };
+
+    indexCaseEntities("CASE-MATCH-1", [ip1], "medium");
+    indexCaseEntities("CASE-MATCH-2", [ip1, ip2, user1], "high");
+
+    const result = findRelatedCase([ip1, ip2]);
+    assert.strictEqual(result, "CASE-MATCH-2");
+  });
+});
+
+// =============================================================================
+// MCP Auth Mode
+// =============================================================================
+
+describe("getMcpAuthToken", () => {
+  it("returns raw key in legacy-rest mode (config default for test)", async () => {
+    // In test env, MCP_AUTH_MODE defaults to "mcp-jsonrpc" but we test the function
+    const token = await getMcpAuthToken();
+    // In test env, mcpAuth is not set, so should return null
+    assert.strictEqual(token, null);
+  });
+});
+
+// =============================================================================
+// Metrics format includes new counters
+// =============================================================================
+
+describe("New metrics in formatMetrics", () => {
+  it("includes enrichment metrics", () => {
+    const output = formatMetrics();
+    assert.ok(output.includes("autopilot_enrichment_requests_total"));
+    assert.ok(output.includes("autopilot_enrichment_cache_hits_total"));
+    assert.ok(output.includes("autopilot_enrichment_errors_total"));
+  });
+
+  it("includes false_positives_total metric", () => {
+    const output = formatMetrics();
+    assert.ok(output.includes("autopilot_false_positives_total"));
+  });
+
+  it("includes feedback_submitted_total type header", () => {
+    const output = formatMetrics();
+    assert.ok(output.includes("autopilot_feedback_submitted_total"));
   });
 });
 

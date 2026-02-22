@@ -25,6 +25,7 @@ process.env.MCP_MAX_RETRIES = "1";
 process.env.MCP_RETRY_BASE_MS = "50";
 process.env.MCP_TIMEOUT_MS = "5000";
 process.env.MAX_CONCURRENT_EXECUTIONS = "2";
+process.env.MCP_AUTH_MODE = "legacy-rest";
 
 const {
   createCase,

@@ -754,6 +754,228 @@ describe("Validation and edge cases", () => {
 });
 
 // ===================================================================
+// 8. End-to-End Pipeline
+// ===================================================================
+
+describe("End-to-End Pipeline", () => {
+  let server;
+  let pipelineCaseId;
+
+  before(() => {
+    ensureTestDirs();
+    server = createServer();
+    return new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  });
+
+  after(() => new Promise((resolve) => server.close(resolve)));
+
+  it("POST /api/alerts creates a case with entities and severity", async () => {
+    const res = await request(
+      server,
+      "POST",
+      "/api/alerts",
+      {
+        alert_id: "e2e-alert-001",
+        rule: { id: "5712", level: 10, description: "SSH brute force" },
+        agent: { id: "001", name: "prod-01", ip: "10.0.1.50" },
+        data: { srcip: "203.0.113.50" },
+      },
+      { Authorization: "Bearer test-mcp-secret-token" },
+    );
+    assert.equal(res.status, 201);
+    assert.ok(res.body.case_id);
+    assert.equal(res.body.status, "created");
+    assert.equal(res.body.severity, "high");
+    assert.ok(res.body.entities_extracted >= 2);
+    pipelineCaseId = res.body.case_id;
+  });
+
+  it("GET /api/cases/:id returns full case structure", async () => {
+    const res = await request(
+      server,
+      "GET",
+      `/api/cases/${pipelineCaseId}`,
+      null,
+      { Authorization: "Bearer test-mcp-secret-token" },
+    );
+    assert.equal(res.status, 200);
+    assert.ok(res.body.entities);
+    assert.ok(res.body.timeline);
+    assert.ok(res.body.evidence_refs);
+    assert.equal(res.body.severity, "high");
+  });
+
+  it("PUT /api/cases/:id updates status to triaged", async () => {
+    const res = await request(
+      server,
+      "PUT",
+      `/api/cases/${pipelineCaseId}`,
+      { status: "triaged" },
+      { Authorization: "Bearer test-mcp-secret-token" },
+    );
+    assert.equal(res.status, 200);
+  });
+
+  it("PUT /api/cases/:id updates status to correlated", async () => {
+    const res = await request(
+      server,
+      "PUT",
+      `/api/cases/${pipelineCaseId}`,
+      { status: "correlated" },
+      { Authorization: "Bearer test-mcp-secret-token" },
+    );
+    assert.equal(res.status, 200);
+  });
+
+  it("PUT /api/cases/:id updates status to investigated", async () => {
+    const res = await request(
+      server,
+      "PUT",
+      `/api/cases/${pipelineCaseId}`,
+      { status: "investigated" },
+      { Authorization: "Bearer test-mcp-secret-token" },
+    );
+    assert.equal(res.status, 200);
+  });
+
+  it("POST /api/plans creates a proposed plan on the case", async () => {
+    const res = await request(
+      server,
+      "POST",
+      "/api/plans",
+      {
+        case_id: pipelineCaseId,
+        risk_level: "medium",
+        actions: [
+          { type: "block_ip", target: "203.0.113.50", params: { ip: "203.0.113.50" } },
+        ],
+      },
+      { Authorization: "Bearer test-mcp-secret-token" },
+    );
+    assert.equal(res.status, 201);
+    assert.equal(res.body.state, "proposed");
+    assert.ok(res.body.plan_id);
+  });
+
+  it("POST /api/alerts groups second alert with same IP into existing case", async () => {
+    const res = await request(
+      server,
+      "POST",
+      "/api/alerts",
+      {
+        alert_id: "e2e-alert-002",
+        rule: { id: "5712", level: 12, description: "SSH brute force continued" },
+        agent: { id: "001", name: "prod-01", ip: "10.0.1.50" },
+        data: { srcip: "203.0.113.50" },
+      },
+      { Authorization: "Bearer test-mcp-secret-token" },
+    );
+    assert.equal(res.status, 200); // 200 = updated existing
+    assert.equal(res.body.status, "updated");
+  });
+
+  it("GET /metrics includes incremented counters", async () => {
+    const res = await request(server, "GET", "/metrics");
+    assert.equal(res.status, 200);
+    assert.ok(res.raw.includes("autopilot_alerts_ingested_total"));
+    assert.ok(res.raw.includes("autopilot_cases_created_total"));
+  });
+});
+
+// ===================================================================
+// 9. Case Feedback Endpoint
+// ===================================================================
+
+describe("Case Feedback Endpoint", () => {
+  let server;
+  let feedbackCaseId;
+
+  before(async () => {
+    ensureTestDirs();
+    server = createServer();
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    // Create a case for feedback testing
+    const res = await request(
+      server,
+      "POST",
+      "/api/alerts",
+      {
+        alert_id: "feedback-test-001",
+        rule: { id: "5000", level: 8, description: "Test alert for feedback" },
+        agent: { id: "002", name: "test-host" },
+        data: { srcip: "198.51.100.10" },
+      },
+      { Authorization: "Bearer test-mcp-secret-token" },
+    );
+    feedbackCaseId = res.body.case_id;
+  });
+
+  after(() => new Promise((resolve) => server.close(resolve)));
+
+  it("POST /api/cases/:id/feedback records true_positive verdict", async () => {
+    const res = await request(
+      server,
+      "POST",
+      `/api/cases/${feedbackCaseId}/feedback`,
+      { verdict: "true_positive", reason: "Confirmed attack", user_id: "analyst-1" },
+      { Authorization: "Bearer test-mcp-secret-token" },
+    );
+    assert.equal(res.status, 200);
+    assert.equal(res.body.verdict, "true_positive");
+    assert.equal(res.body.feedback_count, 1);
+  });
+
+  it("POST /api/cases/:id/feedback records false_positive verdict and updates status", async () => {
+    const res = await request(
+      server,
+      "POST",
+      `/api/cases/${feedbackCaseId}/feedback`,
+      { verdict: "false_positive", reason: "Known scanner", user_id: "analyst-2" },
+      { Authorization: "Bearer test-mcp-secret-token" },
+    );
+    assert.equal(res.status, 200);
+    assert.equal(res.body.verdict, "false_positive");
+    assert.equal(res.body.status, "false_positive");
+    assert.equal(res.body.feedback_count, 2);
+  });
+
+  it("POST /api/cases/:id/feedback rejects invalid verdict", async () => {
+    const res = await request(
+      server,
+      "POST",
+      `/api/cases/${feedbackCaseId}/feedback`,
+      { verdict: "invalid_verdict" },
+      { Authorization: "Bearer test-mcp-secret-token" },
+    );
+    assert.equal(res.status, 400);
+  });
+
+  it("POST /api/cases/:id/feedback returns 404 for non-existent case", async () => {
+    const res = await request(
+      server,
+      "POST",
+      "/api/cases/CASE-00000000-000000000000/feedback",
+      { verdict: "true_positive", reason: "test" },
+      { Authorization: "Bearer test-mcp-secret-token" },
+    );
+    assert.equal(res.status, 404);
+  });
+
+  it("POST /api/cases/:id/feedback allows localhost in bootstrap mode", async () => {
+    // In bootstrap mode, localhost requests are allowed without auth
+    const res = await request(
+      server,
+      "POST",
+      `/api/cases/${feedbackCaseId}/feedback`,
+      { verdict: "needs_review", reason: "auto-test" },
+    );
+    assert.equal(res.status, 200);
+    assert.equal(res.body.verdict, "needs_review");
+  });
+});
+
+// ===================================================================
 // Cleanup
 // ===================================================================
 

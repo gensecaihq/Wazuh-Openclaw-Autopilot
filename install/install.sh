@@ -1386,15 +1386,17 @@ configure_wazuh_integrator() {
 #!/bin/bash
 # Wazuh OpenClaw Autopilot Integration
 # Forwards alerts to localhost runtime service
+# Wazuh integratord passes the alert JSON file as \$1
 
 ALERT_FILE="\$1"
-WEBHOOK="http://$GATEWAY_BIND:$RUNTIME_PORT/api/alerts"
+WEBHOOK="http://127.0.0.1:\${RUNTIME_PORT:-$RUNTIME_PORT}/api/alerts"
 
 if [[ -f "\$ALERT_FILE" ]]; then
     curl -s -X POST "\$WEBHOOK" \\
         -H "Content-Type: application/json" \\
         -d @"\$ALERT_FILE" \\
         --connect-timeout 5 \\
+        --max-time 10 \\
         >/dev/null 2>&1 || true
 fi
 
@@ -1413,7 +1415,7 @@ SCRIPT
   <integration>
     <name>wazuh-autopilot</name>
     <hook_url>http://$GATEWAY_BIND:$RUNTIME_PORT/api/alerts</hook_url>
-    <level>10</level>
+    <level>${WAZUH_ALERT_LEVEL:-10}</level>
     <alert_format>json</alert_format>
   </integration>
 "
@@ -1426,7 +1428,7 @@ SCRIPT
             chmod --reference="$OSSEC_CONF" "$_ossec_tmp" && \
             mv "$_ossec_tmp" "$OSSEC_CONF" || { rm -f "$_ossec_tmp"; log_error "Failed to update ossec.conf"; }
 
-        log_success "Alert forwarding configured (level 10+)"
+        log_success "Alert forwarding configured (level ${WAZUH_ALERT_LEVEL:-10}+)"
         log_security "Alerts sent to localhost only"
     fi
 }

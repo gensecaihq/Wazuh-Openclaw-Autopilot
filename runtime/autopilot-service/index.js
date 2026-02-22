@@ -77,6 +77,18 @@ const config = {
   // OpenClaw Gateway dispatch (for agent pipeline handoffs)
   openclawGatewayUrl: process.env.OPENCLAW_GATEWAY_URL || "http://127.0.0.1:18789",
   openclawToken: process.env.OPENCLAW_TOKEN || "",
+  // MCP auth mode: "mcp-jsonrpc" (proper MCP protocol) or "legacy-rest" (backwards compat)
+  mcpAuthMode: process.env.MCP_AUTH_MODE || "mcp-jsonrpc",
+  mcpJwtTtlMs: parseInt(process.env.MCP_JWT_TTL_MS || "3000000", 10), // 50 min
+  // IP Enrichment (AbuseIPDB)
+  enrichmentEnabled: process.env.ENRICHMENT_ENABLED === "true",
+  abuseIpdbApiKey: process.env.ABUSEIPDB_API_KEY || "",
+  enrichmentCacheTtlMs: parseInt(process.env.ENRICHMENT_CACHE_TTL_MS || "3600000", 10),
+  enrichmentErrorCacheTtlMs: parseInt(process.env.ENRICHMENT_ERROR_CACHE_TTL_MS || "300000", 10),
+  enrichmentTimeoutMs: parseInt(process.env.ENRICHMENT_TIMEOUT_MS || "5000", 10),
+  // Alert grouping
+  alertGroupEnabled: process.env.ALERT_GROUP_ENABLED !== "false",
+  alertGroupWindowMs: parseInt(process.env.ALERT_GROUP_WINDOW_MS || "3600000", 10),
 };
 
 // =============================================================================
@@ -138,6 +150,13 @@ const metrics = {
   // Webhook dispatch metrics
   webhook_dispatches_total: 0,
   webhook_dispatch_failures_total: 0,
+  // Enrichment metrics
+  enrichment_requests_total: 0,
+  enrichment_cache_hits_total: 0,
+  enrichment_errors_total: 0,
+  // Feedback metrics
+  false_positives_total: 0,
+  feedback_submitted_total: {},
   policy_denies_total: {},
   errors_total: {},
 };
@@ -194,13 +213,15 @@ function formatMetrics() {
     "executions_success_total", "executions_failed_total",
     "responder_disabled_blocks_total",
     "webhook_dispatches_total", "webhook_dispatch_failures_total",
+    "enrichment_requests_total", "enrichment_cache_hits_total", "enrichment_errors_total",
+    "false_positives_total",
   ].forEach((name) => {
     lines.push(`# TYPE autopilot_${name} counter`);
     lines.push(`autopilot_${name} ${metrics[name] || 0}`);
   });
 
   // Labeled counters
-  ["mcp_tool_calls_total", "policy_denies_total", "errors_total"].forEach((name) => {
+  ["mcp_tool_calls_total", "policy_denies_total", "errors_total", "feedback_submitted_total"].forEach((name) => {
     lines.push(`# TYPE autopilot_${name} counter`);
     const data = metrics[name] || {};
     Object.entries(data).forEach(([labelJson, value]) => {
@@ -308,6 +329,250 @@ async function dispatchToGateway(webhookPath, payload) {
   // All attempts exhausted
   incrementMetric("webhook_dispatch_failures_total");
   log("warn", "dispatch", "Webhook dispatch failed after retries", { path: webhookPath });
+}
+
+// =============================================================================
+// MCP JWT CACHE
+// =============================================================================
+
+let mcpJwtCache = { token: null, expiresAt: 0 };
+
+/**
+ * Get an auth token for MCP calls.
+ * - legacy-rest mode: returns the raw API key as Bearer token
+ * - mcp-jsonrpc mode: exchanges API key for JWT via /auth/token, caches result
+ */
+async function getMcpAuthToken() {
+  if (!config.mcpAuth) return null;
+
+  // Legacy REST mode: use raw API key directly
+  if (config.mcpAuthMode === "legacy-rest") {
+    return config.mcpAuth;
+  }
+
+  // Check cached JWT
+  if (mcpJwtCache.token && Date.now() < mcpJwtCache.expiresAt) {
+    return mcpJwtCache.token;
+  }
+
+  // Exchange API key for JWT
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(`${config.mcpUrl}/auth/token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.mcpAuth}`,
+      },
+      body: JSON.stringify({ grant_type: "api_key" }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      log("warn", "mcp", "JWT exchange failed, falling back to raw key", { status: response.status });
+      return config.mcpAuth;
+    }
+
+    const data = await response.json();
+    const token = data.access_token || data.token;
+    if (token) {
+      mcpJwtCache = {
+        token,
+        expiresAt: Date.now() + config.mcpJwtTtlMs,
+      };
+      return token;
+    }
+
+    return config.mcpAuth;
+  } catch (err) {
+    log("warn", "mcp", "JWT exchange error, falling back to raw key", { error: err.message });
+    return config.mcpAuth;
+  }
+}
+
+// =============================================================================
+// IP ENRICHMENT
+// =============================================================================
+
+const enrichmentCache = new Map();
+const MAX_ENRICHMENT_CACHE_SIZE = 10000;
+
+function isPrivateIp(ip) {
+  if (!ip || typeof ip !== "string") return true;
+  const parts = ip.split(".");
+  if (parts.length !== 4) return true;
+  const a = parseInt(parts[0], 10);
+  const b = parseInt(parts[1], 10);
+  // 10.0.0.0/8
+  if (a === 10) return true;
+  // 172.16.0.0/12
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  // 192.168.0.0/16
+  if (a === 192 && b === 168) return true;
+  // 127.0.0.0/8 (loopback)
+  if (a === 127) return true;
+  // 0.0.0.0/8
+  if (a === 0) return true;
+  return false;
+}
+
+async function enrichIpAddress(ip) {
+  if (!config.enrichmentEnabled || !config.abuseIpdbApiKey) return null;
+  if (isPrivateIp(ip)) return null;
+
+  // Check cache
+  const cached = enrichmentCache.get(ip);
+  if (cached) {
+    if (Date.now() < cached.expiresAt) {
+      incrementMetric("enrichment_cache_hits_total");
+      return cached.data;
+    }
+    enrichmentCache.delete(ip);
+  }
+
+  incrementMetric("enrichment_requests_total");
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), config.enrichmentTimeoutMs);
+
+    const response = await fetch(
+      `https://api.abuseipdb.com/api/v2/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=90`,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Key: config.abuseIpdbApiKey,
+        },
+        signal: controller.signal,
+      },
+    );
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      incrementMetric("enrichment_errors_total");
+      // Cache errors with shorter TTL to avoid hammering the API
+      if (enrichmentCache.size < MAX_ENRICHMENT_CACHE_SIZE) {
+        enrichmentCache.set(ip, { data: null, expiresAt: Date.now() + config.enrichmentErrorCacheTtlMs });
+      }
+      return null;
+    }
+
+    const body = await response.json();
+    const d = body.data || {};
+    const result = {
+      source: "abuseipdb",
+      abuse_confidence_score: d.abuseConfidenceScore,
+      isp: d.isp || null,
+      domain: d.domain || null,
+      country_code: d.countryCode || null,
+      total_reports: d.totalReports || 0,
+      is_tor: d.isTor || false,
+      last_reported_at: d.lastReportedAt || null,
+      checked_at: new Date().toISOString(),
+    };
+
+    // Cache successful result
+    if (enrichmentCache.size >= MAX_ENRICHMENT_CACHE_SIZE) {
+      // Evict oldest entry
+      const firstKey = enrichmentCache.keys().next().value;
+      enrichmentCache.delete(firstKey);
+    }
+    enrichmentCache.set(ip, { data: result, expiresAt: Date.now() + config.enrichmentCacheTtlMs });
+    return result;
+  } catch (err) {
+    incrementMetric("enrichment_errors_total");
+    log("warn", "enrichment", "IP enrichment failed", { ip, error: err.message });
+    // Cache errors with shorter TTL
+    if (enrichmentCache.size < MAX_ENRICHMENT_CACHE_SIZE) {
+      enrichmentCache.set(ip, { data: null, expiresAt: Date.now() + config.enrichmentErrorCacheTtlMs });
+    }
+    return null;
+  }
+}
+
+// =============================================================================
+// ALERT GROUPING (Entity-Based Correlation)
+// =============================================================================
+
+// Maps "type:value" → [{caseId, severity, createdAt, isFalsePositive}]
+const entityCaseIndex = new Map();
+const MAX_ENTITY_INDEX_SIZE = 50000;
+
+function indexCaseEntities(caseId, entities, severity) {
+  if (!config.alertGroupEnabled) return;
+  const now = Date.now();
+  for (const entity of entities) {
+    const key = `${entity.type}:${entity.value}`;
+    if (!entityCaseIndex.has(key)) {
+      if (entityCaseIndex.size >= MAX_ENTITY_INDEX_SIZE) continue;
+      entityCaseIndex.set(key, []);
+    }
+    const entries = entityCaseIndex.get(key);
+    // Don't add duplicate case entries
+    if (!entries.some((e) => e.caseId === caseId)) {
+      entries.push({ caseId, severity, createdAt: now, isFalsePositive: false });
+    }
+  }
+}
+
+function findRelatedCase(entities) {
+  if (!config.alertGroupEnabled || entities.length === 0) return null;
+
+  const now = Date.now();
+  const windowStart = now - config.alertGroupWindowMs;
+  const caseScores = new Map(); // caseId → {matches, severity}
+
+  for (const entity of entities) {
+    const key = `${entity.type}:${entity.value}`;
+    const entries = entityCaseIndex.get(key);
+    if (!entries) continue;
+
+    for (const entry of entries) {
+      if (entry.isFalsePositive) continue;
+      if (entry.createdAt < windowStart) continue;
+
+      if (!caseScores.has(entry.caseId)) {
+        caseScores.set(entry.caseId, { matches: 0, severity: entry.severity });
+      }
+      caseScores.get(entry.caseId).matches++;
+    }
+  }
+
+  if (caseScores.size === 0) return null;
+
+  // Pick case with most entity matches, tiebreak by severity
+  const severityRank = { critical: 4, high: 3, medium: 2, low: 1, informational: 0 };
+  let bestCaseId = null;
+  let bestScore = { matches: 0, rank: -1 };
+
+  for (const [caseId, score] of caseScores) {
+    const rank = severityRank[score.severity] || 0;
+    if (
+      score.matches > bestScore.matches ||
+      (score.matches === bestScore.matches && rank > bestScore.rank)
+    ) {
+      bestCaseId = caseId;
+      bestScore = { matches: score.matches, rank };
+    }
+  }
+
+  return bestCaseId;
+}
+
+function markEntityFalsePositive(caseId) {
+  for (const [, entries] of entityCaseIndex) {
+    for (const entry of entries) {
+      if (entry.caseId === caseId) {
+        entry.isFalsePositive = true;
+      }
+    }
+  }
 }
 
 // =============================================================================
@@ -473,6 +738,10 @@ async function updateCase(caseId, updates) {
     }
     if (updates.actions) {
       evidencePack.actions = appendCapped(evidencePack.actions, updates.actions);
+    }
+    // Feedback array: replace entirely (caller manages appending)
+    if (updates.feedback) {
+      evidencePack.feedback = updates.feedback;
     }
 
     await atomicWriteFile(packPath, JSON.stringify(evidencePack, null, 2));
@@ -1522,18 +1791,48 @@ async function callMcpTool(toolName, params, correlationId) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), config.mcpTimeoutMs);
 
-      const response = await fetch(`${config.mcpUrl}/tools/${mcpToolName}`, {
+      // Get auth token (JWT exchange for jsonrpc mode, raw key for legacy)
+      const authToken = await getMcpAuthToken();
+
+      // Build request based on auth mode
+      let fetchUrl, fetchBody;
+      if (config.mcpAuthMode === "legacy-rest") {
+        // Legacy REST: POST /tools/<name> with raw params
+        fetchUrl = `${config.mcpUrl}/tools/${mcpToolName}`;
+        fetchBody = JSON.stringify(params);
+      } else {
+        // MCP JSON-RPC: POST /mcp with JSON-RPC 2.0 envelope
+        fetchUrl = `${config.mcpUrl}/mcp`;
+        fetchBody = JSON.stringify({
+          jsonrpc: "2.0",
+          id: requestHash,
+          method: "tools/call",
+          params: { name: mcpToolName, arguments: params },
+        });
+      }
+
+      const response = await fetch(fetchUrl, {
         method: "POST",
         headers: {
-          "Content-Type": JSON_CONTENT_TYPE,
-          ...(config.mcpAuth && { Authorization: `Bearer ${config.mcpAuth}` }),
+          "Content-Type": "application/json",
+          ...(authToken && { Authorization: `Bearer ${authToken}` }),
           ...(correlationId && { "X-Correlation-ID": correlationId }),
         },
-        body: JSON.stringify(params),
+        body: fetchBody,
         signal: controller.signal,
       });
 
       clearTimeout(timeoutId);
+
+      // Handle 401: invalidate JWT cache and retry
+      if (response.status === 401 && config.mcpAuthMode !== "legacy-rest") {
+        mcpJwtCache = { token: null, expiresAt: 0 };
+        if (attempt < config.mcpMaxRetries) {
+          await response.text().catch(() => "");
+          lastError = new Error("MCP auth expired (401)");
+          continue;
+        }
+      }
 
       // Retry on 5xx server errors (transient)
       if (!response.ok && response.status >= 500 && attempt < config.mcpMaxRetries) {
@@ -1552,6 +1851,15 @@ async function callMcpTool(toolName, params, correlationId) {
       const contentType = response.headers.get("content-type") || "";
       if (contentType.includes("application/json")) {
         responseData = await response.json();
+
+        // Unwrap JSON-RPC envelope if present
+        if (responseData.jsonrpc === "2.0") {
+          if (responseData.error) {
+            const rpcError = responseData.error;
+            throw new Error(`MCP RPC error ${rpcError.code}: ${rpcError.message}`);
+          }
+          responseData = responseData.result || responseData;
+        }
       } else {
         const text = await response.text();
         responseData = { raw_response: text.substring(0, 1000), content_type: contentType };
@@ -2177,6 +2485,11 @@ function createServer() {
 
         const alert = await parseJsonBody(req);
 
+        // Normalize alert_id from Wazuh native format
+        if (!alert.alert_id && (alert.id || alert._id)) {
+          alert.alert_id = String(alert.id || alert._id);
+        }
+
         // Validate alert has minimum required fields
         if (!alert.alert_id && !alert._id && !alert.id) {
           sendJsonError(res, 400, "Alert must have alert_id, _id, or id field", requestId);
@@ -2246,6 +2559,16 @@ function createServer() {
           });
         }
 
+        // Enrich IP entities (non-blocking, best-effort)
+        if (config.enrichmentEnabled) {
+          const ipEntities = entities.filter((e) => e.type === "ip");
+          const enrichmentPromises = ipEntities.map(async (entity) => {
+            const enrichment = await enrichIpAddress(entity.value);
+            if (enrichment) entity.enrichment = enrichment;
+          });
+          await Promise.all(enrichmentPromises);
+        }
+
         // Determine severity from rule level
         let severity = "medium";
         const ruleLevel = alert.rule?.level || alert.level || 0;
@@ -2305,7 +2628,7 @@ function createServer() {
           }],
         };
 
-        // Check if case already exists (idempotency)
+        // Check if case already exists (idempotency via hash)
         let existingCase = null;
         try {
           existingCase = await getCase(caseId);
@@ -2313,17 +2636,38 @@ function createServer() {
           // Case doesn't exist, which is expected
         }
 
+        // Entity-based alert grouping: if no exact hash match, check for related cases
+        let groupedCaseId = null;
+        if (!existingCase && entities.length > 0) {
+          groupedCaseId = findRelatedCase(entities);
+          if (groupedCaseId) {
+            try {
+              existingCase = await getCase(groupedCaseId);
+            } catch (e) {
+              groupedCaseId = null; // Related case was deleted
+            }
+          }
+        }
+
+        const effectiveCaseId = groupedCaseId || caseId;
+
         if (existingCase) {
           // Update existing case with new evidence
-          await updateCase(caseId, {
+          await updateCase(effectiveCaseId, {
             entities: caseData.entities,
             timeline: caseData.timeline,
             evidence_refs: caseData.evidence_refs,
           });
-          log("info", "triage", "Updated existing case with new alert", { case_id: caseId, alert_id: alertId });
+          indexCaseEntities(effectiveCaseId, entities, severity);
+          log("info", "triage", "Updated existing case with new alert", {
+            case_id: effectiveCaseId,
+            alert_id: alertId,
+            ...(groupedCaseId && { grouped_from: caseId }),
+          });
         } else {
           // Create new case
           await createCase(caseId, caseData);
+          indexCaseEntities(caseId, entities, severity);
           log("info", "triage", "Created new case from alert", { case_id: caseId, alert_id: alertId, severity });
 
           // Dispatch to triage agent via OpenClaw gateway
@@ -2343,12 +2687,13 @@ function createServer() {
 
         res.writeHead(existingCase ? 200 : 201, { "Content-Type": JSON_CONTENT_TYPE });
         res.end(JSON.stringify({
-          case_id: caseId,
+          case_id: effectiveCaseId,
           status: existingCase ? "updated" : "created",
           severity,
           entities_extracted: entities.length,
           mitre_mappings: mitre.length,
           triage_latency_ms: Math.round(triageLatency * 1000),
+          ...(groupedCaseId && { grouped_into: groupedCaseId }),
         }));
         return;
       }
@@ -2613,6 +2958,80 @@ function createServer() {
         return;
       }
 
+      // =================================================================
+      // CASE FEEDBACK ENDPOINT
+      // =================================================================
+      if (url.pathname.match(/^\/api\/cases\/[^/]+\/feedback$/) && req.method === "POST") {
+        const authResult = validateAuthorization(req, "write");
+        if (!authResult.valid) {
+          sendAuthError(res, authResult, requestId);
+          return;
+        }
+
+        const feedbackCaseId = url.pathname.split("/")[3];
+        if (!feedbackCaseId || !isValidCaseId(feedbackCaseId)) {
+          sendJsonError(res, 400, "Invalid case ID format", requestId);
+          return;
+        }
+
+        const body = await parseJsonBody(req);
+
+        const validVerdicts = ["false_positive", "true_positive", "needs_review"];
+        if (!body.verdict || !validVerdicts.includes(body.verdict)) {
+          sendJsonError(res, 400, `verdict must be one of: ${validVerdicts.join(", ")}`, requestId);
+          return;
+        }
+
+        try {
+          const feedbackCase = await getCase(feedbackCaseId);
+
+          // Build feedback record
+          const feedback = {
+            verdict: body.verdict,
+            reason: body.reason || "",
+            user_id: body.user_id || "anonymous",
+            submitted_at: new Date().toISOString(),
+          };
+
+          // Append to case feedback array
+          const existingFeedback = feedbackCase.feedback || [];
+          existingFeedback.push(feedback);
+
+          const updates = { feedback: existingFeedback };
+
+          // If false positive, update case status and entity index
+          if (body.verdict === "false_positive") {
+            updates.status = "false_positive";
+            markEntityFalsePositive(feedbackCaseId);
+            incrementMetric("false_positives_total");
+          }
+
+          await updateCase(feedbackCaseId, updates);
+
+          incrementMetric("feedback_submitted_total", { verdict: body.verdict });
+          log("info", "feedback", "Case feedback submitted", {
+            case_id: feedbackCaseId,
+            verdict: body.verdict,
+            user_id: feedback.user_id,
+          });
+
+          res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
+          res.end(JSON.stringify({
+            case_id: feedbackCaseId,
+            verdict: body.verdict,
+            feedback_count: existingFeedback.length,
+            status: body.verdict === "false_positive" ? "false_positive" : feedbackCase.status,
+          }));
+        } catch (err) {
+          if (err.message.includes("not found")) {
+            sendJsonError(res, 404, "Case not found", requestId);
+          } else {
+            throw err;
+          }
+        }
+        return;
+      }
+
       // 404 for unknown routes
       sendJsonError(res, 404, "Not found", requestId);
     } catch (err) {
@@ -2844,11 +3263,19 @@ module.exports = {
   PLAN_STATES,
   // MCP
   callMcpTool,
+  getMcpAuthToken,
   loadToolmap,
   resolveMcpTool,
   isToolEnabled,
   // Gateway dispatch
   dispatchToGateway,
+  // Enrichment
+  isPrivateIp,
+  enrichIpAddress,
+  // Alert grouping
+  findRelatedCase,
+  indexCaseEntities,
+  markEntityFalsePositive,
   // Policy enforcement
   loadPolicyConfig,
   policyCheckAction,
@@ -2976,6 +3403,42 @@ function setupCleanupIntervals() {
     }
   }, 60000);
   cleanupIntervals.push(plansCleanup);
+
+  // Entity case index cleanup (evict entries outside group window)
+  const entityCleanup = setInterval(() => {
+    const cutoff = Date.now() - config.alertGroupWindowMs;
+    let removed = 0;
+    for (const [key, entries] of entityCaseIndex) {
+      const filtered = entries.filter((e) => e.createdAt >= cutoff);
+      if (filtered.length === 0) {
+        entityCaseIndex.delete(key);
+        removed++;
+      } else if (filtered.length < entries.length) {
+        entityCaseIndex.set(key, filtered);
+        removed += entries.length - filtered.length;
+      }
+    }
+    if (removed > 0) {
+      log("debug", "cleanup", "Expired entity index entries removed", { count: removed });
+    }
+  }, 300000); // every 5 minutes
+  cleanupIntervals.push(entityCleanup);
+
+  // Enrichment cache cleanup
+  const enrichmentCleanup = setInterval(() => {
+    const now = Date.now();
+    let removed = 0;
+    for (const [ip, entry] of enrichmentCache) {
+      if (now >= entry.expiresAt) {
+        enrichmentCache.delete(ip);
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      log("debug", "cleanup", "Expired enrichment cache entries removed", { count: removed });
+    }
+  }, 300000);
+  cleanupIntervals.push(enrichmentCleanup);
 }
 
 // Issue #12 fix: Add configurable shutdown timeout with force kill
