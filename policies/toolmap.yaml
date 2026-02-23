@@ -1,96 +1,177 @@
 # Wazuh Autopilot - MCP Tool Mapping Configuration
-# Maps logical operations to actual MCP tool names
-# Version: 1.0.0
+# Maps logical operations to actual MCP tool names on Wazuh-MCP-Server v4.0.6
+# Version: 2.0.0
 
-schema_version: "1.0"
+schema_version: "2.0"
 description: |
   This file maps Autopilot's logical operations to the actual tool names
-  exposed by the Wazuh MCP Server. Update the 'mcp_tool' values to match
-  your MCP server's tool naming conventions.
-
-  The doctor utility validates this mapping against available MCP tools.
+  exposed by the Wazuh MCP Server (https://github.com/gensecaihq/Wazuh-MCP-Server).
+  Update the 'mcp_tool' values if your MCP server uses different tool names.
 
 # =============================================================================
-# READ OPERATIONS (Required for basic functionality)
+# READ OPERATIONS — Alert Management
 # =============================================================================
 read_operations:
-  # Get details of a specific alert
+  # Get alerts from Wazuh Indexer (wazuh-alerts-* index)
   get_alert:
     logical_name: get_alert
-    mcp_tool: wazuh_get_alert
-    description: "Retrieve details of a specific Wazuh alert by ID"
+    mcp_tool: get_wazuh_alerts
+    description: "Retrieve alerts from Wazuh Indexer with filtering"
     required: true
     parameters:
-      - name: alert_id
-        type: string
-        required: true
-    response_fields:
-      - id
-      - timestamp
-      - rule
-      - agent
-      - data
-
-  # Search for alerts matching criteria
-  search_alerts:
-    logical_name: search_alerts
-    mcp_tool: wazuh_search_alerts
-    description: "Search Wazuh alerts with filters"
-    required: true
-    parameters:
-      - name: query
-        type: string
-        required: false
-      - name: timeframe
-        type: string
-        required: false
-      - name: severity
-        type: string
-        required: false
       - name: limit
         type: integer
         required: false
         default: 100
+        description: "Max results (1-1000)"
+      - name: rule_id
+        type: string
+        required: false
+        description: "Filter by rule ID"
+      - name: level
+        type: string
+        required: false
+        description: "Minimum alert level (e.g. 10, 12+)"
+      - name: agent_id
+        type: string
+        required: false
+        description: "Filter by agent ID"
+      - name: timestamp_start
+        type: string
+        required: false
+        description: "ISO 8601 start time"
+      - name: timestamp_end
+        type: string
+        required: false
+        description: "ISO 8601 end time"
+      - name: compact
+        type: boolean
+        required: false
+        default: true
+        description: "Reduce token usage (~66%)"
     response_fields:
       - alerts
       - total
-      - query_time
 
-  # Search for events/logs
-  search_events:
-    logical_name: search_events
-    mcp_tool: wazuh_search_events
-    description: "Search Wazuh events/logs"
+  # Search alerts (same MCP tool, different logical purpose)
+  search_alerts:
+    logical_name: search_alerts
+    mcp_tool: get_wazuh_alerts
+    description: "Search Wazuh alerts with filters"
     required: true
     parameters:
-      - name: query
+      - name: limit
+        type: integer
+        required: false
+        default: 100
+      - name: rule_id
         type: string
         required: false
-      - name: timeframe
+      - name: level
         type: string
         required: false
       - name: agent_id
         type: string
         required: false
+      - name: timestamp_start
+        type: string
+        required: false
+      - name: timestamp_end
+        type: string
+        required: false
+      - name: compact
+        type: boolean
+        required: false
+        default: true
+    response_fields:
+      - alerts
+      - total
+
+  # Full-text search across Wazuh security events
+  search_events:
+    logical_name: search_events
+    mcp_tool: search_security_events
+    description: "Full-text search across Wazuh security events"
+    required: true
+    parameters:
+      - name: query
+        type: string
+        required: true
+        description: "Search query text"
+      - name: time_range
+        type: string
+        required: false
+        default: "24h"
+        description: "Time range: 1h, 6h, 24h, 7d"
       - name: limit
         type: integer
         required: false
         default: 100
+      - name: compact
+        type: boolean
+        required: false
+        default: true
     response_fields:
       - events
       - total
-      - query_time
+
+  # Alert summary statistics
+  get_alert_summary:
+    logical_name: get_alert_summary
+    mcp_tool: get_wazuh_alert_summary
+    description: "Alert statistics grouped by field"
+    required: false
+    parameters:
+      - name: time_range
+        type: string
+        required: false
+        default: "24h"
+        description: "Time range: 1h, 6h, 24h, 7d"
+      - name: group_by
+        type: string
+        required: false
+        default: "rule.level"
+
+  # Alert pattern analysis
+  analyze_patterns:
+    logical_name: analyze_patterns
+    mcp_tool: analyze_alert_patterns
+    description: "Identify alert trends and anomalies"
+    required: false
+    parameters:
+      - name: time_range
+        type: string
+        required: false
+        default: "24h"
+      - name: min_frequency
+        type: integer
+        required: false
+        default: 5
+        description: "Minimum alert count to report (1-1000)"
+
+# =============================================================================
+# READ OPERATIONS — Agent Management
+# =============================================================================
 
   # Get agent information
   get_agent:
     logical_name: get_agent
-    mcp_tool: wazuh_get_agent
+    mcp_tool: get_wazuh_agents
     description: "Get Wazuh agent details"
-    required: false
+    required: true
     parameters:
       - name: agent_id
         type: string
-        required: true
+        required: false
+        description: "Filter by specific agent ID"
+      - name: status
+        type: string
+        required: false
+        description: "Filter: active, disconnected, never_connected"
+      - name: limit
+        type: integer
+        required: false
+        default: 100
     response_fields:
       - id
       - name
@@ -99,34 +180,301 @@ read_operations:
       - os
       - version
 
+  # Get only running/active agents
+  get_running_agents:
+    logical_name: get_running_agents
+    mcp_tool: get_wazuh_running_agents
+    description: "List only active/running agents"
+    required: false
+    parameters: []
+
+  # Check single agent health
+  check_agent_health:
+    logical_name: check_agent_health
+    mcp_tool: check_agent_health
+    description: "Check health status of a specific agent"
+    required: false
+    parameters:
+      - name: agent_id
+        type: string
+        required: true
+
+  # Get running processes on an agent
+  get_agent_processes:
+    logical_name: get_agent_processes
+    mcp_tool: get_agent_processes
+    description: "Get running processes from agent (syscollector)"
+    required: false
+    parameters:
+      - name: agent_id
+        type: string
+        required: true
+      - name: limit
+        type: integer
+        required: false
+        default: 100
+
+  # Get open network ports on an agent
+  get_agent_ports:
+    logical_name: get_agent_ports
+    mcp_tool: get_agent_ports
+    description: "Get open network ports from agent (syscollector)"
+    required: false
+    parameters:
+      - name: agent_id
+        type: string
+        required: true
+      - name: limit
+        type: integer
+        required: false
+        default: 100
+
+  # Get agent configuration
+  get_agent_config:
+    logical_name: get_agent_config
+    mcp_tool: get_agent_configuration
+    description: "Get agent configuration settings"
+    required: false
+    parameters:
+      - name: agent_id
+        type: string
+        required: true
+
+# =============================================================================
+# READ OPERATIONS — Rule Management
+# =============================================================================
+
   # Get rule information
   get_rule_info:
     logical_name: get_rule_info
-    mcp_tool: wazuh_get_rule
-    description: "Get details of a Wazuh rule"
+    mcp_tool: get_wazuh_rules_summary
+    description: "Get Wazuh rules summary and statistics"
     required: false
-    parameters:
-      - name: rule_id
-        type: string
-        required: true
+    parameters: []
     response_fields:
-      - id
-      - description
-      - level
-      - groups
-      - mitre
+      - total
+      - active
+      - effectiveness
 
 # =============================================================================
-# ACTION OPERATIONS (Optional - enables response capabilities)
+# READ OPERATIONS — Vulnerability Management (requires Wazuh Indexer)
+# =============================================================================
+
+  # Query vulnerabilities
+  get_vulnerabilities:
+    logical_name: get_vulnerabilities
+    mcp_tool: get_wazuh_vulnerabilities
+    description: "Query vulnerabilities from Wazuh Indexer"
+    required: false
+    parameters:
+      - name: agent_id
+        type: string
+        required: false
+      - name: severity
+        type: string
+        required: false
+        description: "low, medium, high, critical"
+      - name: limit
+        type: integer
+        required: false
+        default: 100
+        description: "Max results (1-500)"
+      - name: compact
+        type: boolean
+        required: false
+        default: true
+
+  # Critical vulnerabilities only
+  get_critical_vulns:
+    logical_name: get_critical_vulns
+    mcp_tool: get_wazuh_critical_vulnerabilities
+    description: "Get critical severity vulnerabilities only"
+    required: false
+    parameters:
+      - name: limit
+        type: integer
+        required: false
+        default: 50
+      - name: compact
+        type: boolean
+        required: false
+        default: true
+
+  # Vulnerability summary statistics
+  get_vuln_summary:
+    logical_name: get_vuln_summary
+    mcp_tool: get_wazuh_vulnerability_summary
+    description: "Aggregated vulnerability statistics"
+    required: false
+    parameters:
+      - name: time_range
+        type: string
+        required: false
+        default: "7d"
+        description: "Time range: 1d, 7d, 30d"
+
+# =============================================================================
+# READ OPERATIONS — Security Analysis
+# =============================================================================
+
+  # IoC threat analysis
+  analyze_threat:
+    logical_name: analyze_threat
+    mcp_tool: analyze_security_threat
+    description: "Analyze threat indicator (IP, hash, domain, URL)"
+    required: false
+    parameters:
+      - name: indicator
+        type: string
+        required: true
+      - name: indicator_type
+        type: string
+        required: false
+        default: "ip"
+        description: "ip, hash, domain, url"
+
+  # IoC reputation check
+  check_ioc:
+    logical_name: check_ioc
+    mcp_tool: check_ioc_reputation
+    description: "Check Indicator of Compromise reputation"
+    required: false
+    parameters:
+      - name: indicator
+        type: string
+        required: true
+      - name: indicator_type
+        type: string
+        required: false
+        default: "ip"
+
+  # Risk assessment
+  risk_assessment:
+    logical_name: risk_assessment
+    mcp_tool: perform_risk_assessment
+    description: "Comprehensive risk assessment (agent or environment)"
+    required: false
+    parameters:
+      - name: agent_id
+        type: string
+        required: false
+        description: "Omit for entire environment"
+
+  # Top security threats
+  top_threats:
+    logical_name: top_threats
+    mcp_tool: get_top_security_threats
+    description: "Top threats by alert frequency/severity"
+    required: false
+    parameters:
+      - name: limit
+        type: integer
+        required: false
+        default: 10
+        description: "Max results (1-50)"
+      - name: time_range
+        type: string
+        required: false
+        default: "24h"
+
+  # Security report generation
+  security_report:
+    logical_name: security_report
+    mcp_tool: generate_security_report
+    description: "Generate comprehensive security report"
+    required: false
+    parameters:
+      - name: report_type
+        type: string
+        required: false
+        default: "daily"
+        description: "daily, weekly, monthly, incident"
+      - name: include_recommendations
+        type: boolean
+        required: false
+        default: true
+
+  # Compliance check
+  compliance_check:
+    logical_name: compliance_check
+    mcp_tool: run_compliance_check
+    description: "Run compliance framework check"
+    required: false
+    parameters:
+      - name: framework
+        type: string
+        required: false
+        default: "PCI-DSS"
+        description: "PCI-DSS, HIPAA, SOX, GDPR, NIST"
+      - name: agent_id
+        type: string
+        required: false
+
+# =============================================================================
+# READ OPERATIONS — System Monitoring
+# =============================================================================
+
+  # Wazuh system statistics
+  get_statistics:
+    logical_name: get_statistics
+    mcp_tool: get_wazuh_statistics
+    description: "Comprehensive Wazuh statistics and metrics"
+    required: false
+    parameters: []
+
+  # Cluster health
+  cluster_health:
+    logical_name: cluster_health
+    mcp_tool: get_wazuh_cluster_health
+    description: "Wazuh cluster health status"
+    required: false
+    parameters: []
+
+  # Cluster nodes
+  cluster_nodes:
+    logical_name: cluster_nodes
+    mcp_tool: get_wazuh_cluster_nodes
+    description: "List Wazuh cluster nodes"
+    required: false
+    parameters: []
+
+  # Search manager logs
+  search_manager_logs:
+    logical_name: search_manager_logs
+    mcp_tool: search_wazuh_manager_logs
+    description: "Search Wazuh manager logs"
+    required: false
+    parameters:
+      - name: query
+        type: string
+        required: true
+      - name: limit
+        type: integer
+        required: false
+        default: 100
+
+  # Manager error logs
+  get_error_logs:
+    logical_name: get_error_logs
+    mcp_tool: get_wazuh_manager_error_logs
+    description: "Recent error logs from Wazuh manager"
+    required: false
+    parameters:
+      - name: limit
+        type: integer
+        required: false
+        default: 100
+
+# =============================================================================
+# ACTION OPERATIONS (Disabled — MCP Server does not yet support action tools)
 # =============================================================================
 action_operations:
-  # Block an IP address
   block_ip:
     logical_name: block_ip
     mcp_tool: wazuh_block_ip
     description: "Block an IP address via Wazuh active response"
     required: false
-    enabled: true
+    enabled: false
     risk_level: low
     reversible: true
     parameters:
@@ -146,13 +494,12 @@ action_operations:
       field: blocked
       expected: true
 
-  # Isolate a host
   isolate_host:
     logical_name: isolate_host
     mcp_tool: wazuh_isolate_host
     description: "Isolate a host from the network"
     required: false
-    enabled: true
+    enabled: false
     risk_level: medium
     reversible: true
     parameters:
@@ -166,13 +513,12 @@ action_operations:
     rollback:
       tool: wazuh_unisolate_host
 
-  # Kill a process
   kill_process:
     logical_name: kill_process
     mcp_tool: wazuh_kill_process
     description: "Terminate a process on an agent"
     required: false
-    enabled: true
+    enabled: false
     risk_level: medium
     reversible: false
     parameters:
@@ -187,13 +533,12 @@ action_operations:
       field: running
       expected: false
 
-  # Disable a user account
   disable_user:
     logical_name: disable_user
     mcp_tool: wazuh_disable_user
     description: "Disable a user account"
     required: false
-    enabled: true
+    enabled: false
     risk_level: high
     reversible: true
     parameters:
@@ -210,13 +555,12 @@ action_operations:
     rollback:
       tool: wazuh_enable_user
 
-  # Quarantine a file
   quarantine_file:
     logical_name: quarantine_file
     mcp_tool: wazuh_quarantine_file
     description: "Quarantine a file on an agent"
     required: false
-    enabled: true
+    enabled: false
     risk_level: low
     reversible: true
     parameters:
@@ -233,7 +577,6 @@ action_operations:
     rollback:
       tool: wazuh_restore_file
 
-  # Active response execution (generic)
   active_response:
     logical_name: active_response
     mcp_tool: wazuh_active_response
@@ -253,13 +596,12 @@ action_operations:
         type: object
         required: false
 
-  # Firewall drop rule
   firewall_drop:
     logical_name: firewall_drop
     mcp_tool: wazuh_firewall_drop
     description: "Add firewall drop rule via active response"
     required: false
-    enabled: true
+    enabled: false
     risk_level: medium
     reversible: true
     parameters:
@@ -272,17 +614,15 @@ action_operations:
       - name: duration
         type: integer
         required: false
-        description: "Duration in seconds (0 = permanent)"
     rollback:
       tool: wazuh_firewall_allow
 
-  # Host deny (hosts.deny)
   host_deny:
     logical_name: host_deny
     mcp_tool: wazuh_host_deny
     description: "Add entry to hosts.deny"
     required: false
-    enabled: true
+    enabled: false
     risk_level: medium
     reversible: true
     parameters:
@@ -295,7 +635,6 @@ action_operations:
     rollback:
       tool: wazuh_host_allow
 
-  # Restart Wazuh agent/manager
   restart_wazuh:
     logical_name: restart_wazuh
     mcp_tool: wazuh_restart
@@ -314,7 +653,6 @@ action_operations:
 # UTILITY OPERATIONS
 # =============================================================================
 utility_operations:
-  # List available MCP tools (for discovery)
   list_tools:
     logical_name: list_tools
     mcp_tool: mcp_list_tools
@@ -324,32 +662,24 @@ utility_operations:
     response_fields:
       - tools
 
-  # Health check
   health_check:
     logical_name: health_check
-    mcp_tool: wazuh_health
-    description: "Check Wazuh/MCP health status"
+    mcp_tool: validate_wazuh_connection
+    description: "Validate Wazuh/MCP connectivity"
     required: false
     parameters: []
     response_fields:
       - status
       - version
-      - cluster_status
 
 # =============================================================================
 # TOOL DISCOVERY CONFIGURATION
 # =============================================================================
 discovery:
-  # How to discover available tools
-  method: mcp_list  # mcp_list | static | both
-
-  # Fallback to static list if discovery fails
+  method: mcp_list
   fallback_to_static: true
-
-  # Cache discovery results
   cache_ttl_minutes: 60
 
-  # Required tools for each autonomy level
   required_for_level:
     read-only:
       - get_alert
@@ -365,28 +695,24 @@ discovery:
       - get_alert
       - search_alerts
       - search_events
-      - block_ip  # At minimum
+      - block_ip
 
 # =============================================================================
 # TOOL CALL CONFIGURATION
 # =============================================================================
 tool_calls:
-  # Default timeout for MCP tool calls
   default_timeout_ms: 30000
 
-  # Retry configuration
   retry:
     enabled: true
     max_attempts: 3
     backoff_ms: 1000
     backoff_multiplier: 2
 
-  # Rate limiting for MCP calls
   rate_limit:
     max_per_second: 10
     max_per_minute: 300
 
-  # Circuit breaker
   circuit_breaker:
     enabled: true
     failure_threshold: 5
@@ -396,7 +722,6 @@ tool_calls:
 # RESPONSE MAPPING
 # =============================================================================
 response_mapping:
-  # How to extract common fields from MCP responses
   alert:
     id_field: _id
     timestamp_field: timestamp
@@ -420,7 +745,6 @@ response_mapping:
 # ERROR HANDLING
 # =============================================================================
 error_handling:
-  # Map MCP errors to Autopilot error codes
   error_mapping:
     401: AUTH_FAILED
     403: PERMISSION_DENIED
@@ -429,13 +753,11 @@ error_handling:
     500: MCP_ERROR
     503: MCP_UNAVAILABLE
 
-  # Default error behavior
   on_error:
     log: true
     retry: true
-    notify: false  # Don't spam Slack on every error
+    notify: false
 
-  # Critical errors that should halt processing
   critical_errors:
     - AUTH_FAILED
     - PERMISSION_DENIED

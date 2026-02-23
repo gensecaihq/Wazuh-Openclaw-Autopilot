@@ -166,7 +166,7 @@ describe("loadToolmap, resolveMcpTool, isToolEnabled", () => {
     // loadToolmap was called above, so the default config is loaded
     await loadToolmap();
     const resolved = resolveMcpTool("get_alert");
-    assert.equal(resolved, "wazuh_get_alert");
+    assert.equal(resolved, "get_wazuh_alerts");
   });
 
   it("resolveMcpTool returns the logical name unchanged for unknown tools", async () => {

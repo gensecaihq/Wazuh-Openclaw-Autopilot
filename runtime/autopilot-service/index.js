@@ -383,9 +383,8 @@ async function getMcpAuthToken() {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${config.mcpAuth}`,
       },
-      body: JSON.stringify({ grant_type: "api_key" }),
+      body: JSON.stringify({ api_key: config.mcpAuth }),
       signal: controller.signal,
     });
 
@@ -1560,11 +1559,11 @@ async function loadToolmap() {
     // Provide default tool mappings
     toolmapConfig = {
       read_operations: {
-        get_alert: { mcp_tool: "wazuh_get_alert", enabled: true },
-        search_alerts: { mcp_tool: "wazuh_search_alerts", enabled: true },
-        search_events: { mcp_tool: "wazuh_search_events", enabled: true },
-        get_agent: { mcp_tool: "wazuh_get_agent", enabled: true },
-        get_rule_info: { mcp_tool: "wazuh_get_rule", enabled: true },
+        get_alert: { mcp_tool: "get_wazuh_alerts", enabled: true },
+        search_alerts: { mcp_tool: "get_wazuh_alerts", enabled: true },
+        search_events: { mcp_tool: "search_security_events", enabled: true },
+        get_agent: { mcp_tool: "get_wazuh_agents", enabled: true },
+        get_rule_info: { mcp_tool: "get_wazuh_rules_summary", enabled: true },
       },
       action_operations: {
         block_ip: { mcp_tool: "wazuh_block_ip", enabled: false },
