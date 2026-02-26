@@ -361,9 +361,23 @@ openclaw doctor --fix
 ### Webhook Failures
 
 ```bash
-# Test webhook manually
+# Test webhook manually (must include a JSON body with "message" field)
 curl -v http://localhost:18789/webhook/wazuh-alert \
-  -H "Authorization: Bearer ${OPENCLAW_TOKEN}"
+  -H "Authorization: Bearer ${OPENCLAW_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Test alert from diagnostic"}'
+```
+
+If you get a `400 "hook mapping requires message"` error, ensure all hook mappings in `openclaw.json` include `messageTemplate` and `name`:
+
+```json
+{
+  "match": { "path": "wazuh-alert" },
+  "action": "agent",
+  "agentId": "wazuh-triage",
+  "messageTemplate": "{{message}}",
+  "name": "Wazuh Alert Triage"
+}
 ```
 
 ### Tool Permission Errors

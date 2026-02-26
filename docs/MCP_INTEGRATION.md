@@ -106,7 +106,7 @@ The runtime supports two MCP communication modes, configured via `MCP_AUTH_MODE`
 ### JSON-RPC Mode (Default)
 
 In `mcp-jsonrpc` mode, the runtime:
-1. Exchanges the API key for a JWT via `POST /auth/token` (cached for 50 min)
+1. Exchanges the API key for a JWT via `POST /auth/token` (cached for 50 min, with promise-based deduplication to prevent thundering herd on cache expiry)
 2. Sends tool calls as JSON-RPC 2.0 to `POST /mcp`:
    ```json
    {

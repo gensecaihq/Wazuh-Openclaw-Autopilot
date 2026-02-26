@@ -31,7 +31,17 @@ sudo ./install/install.sh
 For environments without internet access or during evaluation:
 
 ```bash
+sudo ./install/install.sh --mode bootstrap
+# or equivalently:
 sudo ./install/install.sh --skip-tailscale
+```
+
+### MCP Server Only
+
+If you already have OpenClaw running and only need the MCP Server:
+
+```bash
+sudo ./install/install.sh --mode mcp-only
 ```
 
 See the [Air-Gapped Deployment Guide](AIR_GAPPED_DEPLOYMENT.md) for Ollama-only setups.

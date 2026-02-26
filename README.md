@@ -273,13 +273,21 @@ For air-gapped or bootstrap environments (no Tailscale):
 
 ```bash
 sudo ./install/install.sh --skip-tailscale
+# or equivalently:
+sudo ./install/install.sh --mode bootstrap
+```
+
+For MCP-only installation (skips OpenClaw Gateway, Runtime, and Agent setup):
+
+```bash
+sudo ./install/install.sh --mode mcp-only
 ```
 
 The installer will guide you through:
-1. Tailscale setup (zero-trust networking — skippable with `--skip-tailscale`)
+1. Tailscale setup (zero-trust networking — skippable with `--skip-tailscale` or `--mode bootstrap`)
 2. MCP Server installation
-3. OpenClaw Gateway configuration
-4. Agent deployment
+3. OpenClaw Gateway configuration (skipped in `mcp-only` mode)
+4. Agent deployment (skipped in `mcp-only` mode)
 5. Slack integration (optional)
 
 ### Configuration
@@ -501,7 +509,7 @@ Features:
 │   ├── Dockerfile              # Production container
 │   ├── index.js                # Main service (3500+ LOC)
 │   ├── slack.js                # Slack Socket Mode integration
-│   └── *.test.js               # Test suite (228 tests)
+│   └── *.test.js               # Test suite (255 tests)
 ├── policies/
 │   ├── policy.yaml             # Security policies & approvers
 │   └── toolmap.yaml            # MCP tool mappings
@@ -517,7 +525,7 @@ Features:
 |--------|----------|---------|
 | **Docker Compose** | Production | `docker-compose up -d` |
 | **Docker** | Single container | `docker run -d wazuh-autopilot` |
-| **Systemd** | Native Linux | `sudo ./install/install.sh` |
+| **Systemd** | Native Linux | `sudo ./install/install.sh` (supports `--mode bootstrap\|mcp-only`) |
 | **Manual** | Development | `cd runtime/autopilot-service && npm start` |
 
 ---

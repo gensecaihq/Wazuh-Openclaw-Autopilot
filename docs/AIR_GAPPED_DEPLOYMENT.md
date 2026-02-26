@@ -62,9 +62,15 @@ ollama list
 
 ---
 
-## Step 2: Install with --skip-tailscale
+## Step 2: Install with --mode bootstrap
 
-Tailscale requires internet access and is not needed in air-gapped environments. Skip it:
+Tailscale requires internet access and is not needed in air-gapped environments. Use the `--mode` flag:
+
+```bash
+sudo ./install/install.sh --mode bootstrap
+```
+
+Or equivalently, use the legacy flag:
 
 ```bash
 sudo ./install/install.sh --skip-tailscale
@@ -81,6 +87,16 @@ The installer will:
 - Skip Tailscale installation and authentication
 - Bind all services to `127.0.0.1` (localhost)
 - Omit the `Requires=tailscaled.service` systemd dependency
+
+### MCP-Only Mode
+
+If you only need the MCP Server (e.g., you already have OpenClaw running separately), use `mcp-only` mode:
+
+```bash
+sudo ./install/install.sh --mode mcp-only
+```
+
+This installs only the Wazuh MCP Server, skipping OpenClaw Gateway, Runtime Service, and Agent deployment.
 
 ---
 
@@ -344,6 +360,37 @@ Increase the Ollama timeout in `openclaw.json` if needed:
     "timeout": 600000
   }
 }
+```
+
+### OpenClaw webhook returns 400 "hook mapping requires message"
+
+The OpenClaw Gateway requires `messageTemplate` in each hook mapping to extract the message from the POST body. Verify your `~/.openclaw/openclaw.json` hook mappings include both `messageTemplate` and `name`:
+
+```json
+{
+  "match": { "path": "wazuh-alert" },
+  "action": "agent",
+  "agentId": "wazuh-triage",
+  "messageTemplate": "{{message}}",
+  "name": "Wazuh Alert Triage"
+}
+```
+
+After updating, restart OpenClaw:
+```bash
+sudo systemctl restart openclaw
+# or
+docker restart openclaw
+```
+
+### Ollama context window is only 4096
+
+Ollama defaults to a 4096 context window regardless of the model's capability. To increase it, use the `OLLAMA_NUM_CTX` environment variable or create a custom Modelfile:
+
+```bash
+# Set globally via environment variable
+export OLLAMA_NUM_CTX=32768
+ollama serve
 ```
 
 ### Model not found

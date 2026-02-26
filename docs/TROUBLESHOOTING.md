@@ -89,6 +89,59 @@ In production mode, MCP_URL must be a Tailnet address.
    sudo systemctl restart wazuh-autopilot
    ```
 
+## OpenClaw Webhook Issues
+
+### 400 "hook mapping requires message"
+
+This error means the OpenClaw Gateway cannot extract the message from the incoming webhook POST body. The root cause is missing `messageTemplate` in the hook mappings.
+
+**Fix:** Ensure every hook mapping in `~/.openclaw/openclaw.json` includes `messageTemplate` and `name`:
+
+```json
+{
+  "match": { "path": "wazuh-alert" },
+  "action": "agent",
+  "agentId": "wazuh-triage",
+  "messageTemplate": "{{message}}",
+  "name": "Wazuh Alert Triage"
+}
+```
+
+All 6 mappings need these fields: `wazuh-alert`, `case-created`, `investigation-request`, `plan-request`, `policy-check`, `execute-action`.
+
+**Verify with a direct curl test:**
+
+```bash
+curl -X POST http://127.0.0.1:18789/webhook/wazuh-alert \
+  -H "Authorization: Bearer ${OPENCLAW_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Test alert from diagnostic"}'
+```
+
+A `200` response confirms the webhook is working. A `400` response means `messageTemplate` is still missing.
+
+**After updating**, restart OpenClaw:
+```bash
+sudo systemctl restart openclaw
+# or
+docker restart openclaw
+```
+
+### Webhook dispatch diagnostic logging
+
+If webhooks are failing, the Autopilot Runtime (v2.4.0+) logs detailed diagnostics on 4xx errors including:
+- Payload keys sent
+- Whether the `message` field was present and non-empty
+- First 80 chars of the message
+- Response body from OpenClaw
+
+Check logs with:
+```bash
+journalctl -u wazuh-autopilot | grep "dispatch"
+```
+
+---
+
 ## Connectivity Issues
 
 ### "Cannot connect to MCP"

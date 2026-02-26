@@ -11,7 +11,12 @@ Complete command-line reference for Wazuh Autopilot installer and management too
 sudo ./install/install.sh
 
 # Air-gapped / bootstrap (skip Tailscale)
+sudo ./install/install.sh --mode bootstrap
+# or equivalently:
 sudo ./install/install.sh --skip-tailscale
+
+# MCP Server only (skip OpenClaw, Runtime, Agents)
+sudo ./install/install.sh --mode mcp-only
 
 # Show help
 sudo ./install/install.sh --help
@@ -24,17 +29,27 @@ sudo ./install/install.sh --version
 
 | Option | Description | Example |
 |--------|-------------|---------|
-| `--skip-tailscale` | Skip Tailscale installation (air-gapped/bootstrap) | `--skip-tailscale` |
+| `--mode <mode>` | Installation mode: `full` (default), `bootstrap` (no Tailscale), `mcp-only` (MCP Server only) | `--mode bootstrap` |
+| `--skip-tailscale` | Skip Tailscale installation (equivalent to `--mode bootstrap`) | `--skip-tailscale` |
 | `--help` | Show help message | `--help` |
 | `--version` | Show version | `--version` |
+
+### Installation Modes
+
+| Mode | Description | What Gets Installed |
+|------|-------------|---------------------|
+| `full` | Standard production install (default) | Tailscale + MCP Server + OpenClaw + Runtime + Agents |
+| `bootstrap` | Air-gapped or evaluation install | MCP Server + OpenClaw + Runtime + Agents (no Tailscale) |
+| `mcp-only` | Minimal install for existing OpenClaw setups | MCP Server only (no OpenClaw, Runtime, or Agents) |
 
 ### Environment Variables
 
 Set these before running the installer:
 
 ```bash
-# Deployment mode
+# Deployment mode (also settable via --mode flag)
 export AUTOPILOT_MODE=bootstrap           # Skips Tailscale automatically
+export AUTOPILOT_MODE=mcp-only            # MCP Server only
 export AUTOPILOT_MODE=production          # Full install with Tailscale (default)
 
 # Slack Configuration (prompted during install if not set)
