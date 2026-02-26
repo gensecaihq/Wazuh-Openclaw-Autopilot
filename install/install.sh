@@ -614,6 +614,14 @@ setup_credentials() {
         _generated_new=true
     fi
 
+    if [[ -s "$SECRETS_DIR/openclaw_webhook_token" ]]; then
+        OPENCLAW_WEBHOOK_TOKEN=$(cat "$SECRETS_DIR/openclaw_webhook_token")
+        log_info "Reusing existing OpenClaw webhook token"
+    else
+        OPENCLAW_WEBHOOK_TOKEN=$(generate_secret 32)
+        _generated_new=true
+    fi
+
     if [[ -s "$SECRETS_DIR/pairing_code" ]]; then
         PAIRING_SECRET=$(cat "$SECRETS_DIR/pairing_code")
         log_info "Reusing existing pairing code"
@@ -636,6 +644,7 @@ setup_credentials() {
     umask 0077
     echo "$MCP_AUTH_TOKEN" > "$SECRETS_DIR/mcp_token"
     echo "$OPENCLAW_TOKEN" > "$SECRETS_DIR/openclaw_token"
+    echo "$OPENCLAW_WEBHOOK_TOKEN" > "$SECRETS_DIR/openclaw_webhook_token"
     echo "$PAIRING_SECRET" > "$SECRETS_DIR/pairing_code"
     echo "$APPROVAL_SECRET" > "$SECRETS_DIR/approval_secret"
     umask "$_old_umask"
@@ -645,10 +654,11 @@ setup_credentials() {
 
     log_security "MCP token stored: $SECRETS_DIR/mcp_token (mode 600)"
     log_security "OpenClaw token stored: $SECRETS_DIR/openclaw_token (mode 600)"
+    log_security "OpenClaw webhook token stored: $SECRETS_DIR/openclaw_webhook_token (mode 600)"
     log_security "Pairing code stored: $SECRETS_DIR/pairing_code (mode 600)"
 
     # Export for later use
-    export MCP_AUTH_TOKEN OPENCLAW_TOKEN PAIRING_SECRET APPROVAL_SECRET
+    export MCP_AUTH_TOKEN OPENCLAW_TOKEN OPENCLAW_WEBHOOK_TOKEN PAIRING_SECRET APPROVAL_SECRET
 
     if [[ "$_generated_new" == "true" ]]; then
         log_success "Credentials generated and isolated"
@@ -786,6 +796,8 @@ deploy_agents() {
     # Read secrets
     local OPENCLAW_TOKEN
     OPENCLAW_TOKEN=$(cat "$SECRETS_DIR/openclaw_token")
+    local OPENCLAW_WEBHOOK_TOKEN
+    OPENCLAW_WEBHOOK_TOKEN=$(cat "$SECRETS_DIR/openclaw_webhook_token")
 
     # Create OpenClaw configuration (JSON5 format — validated by OpenClaw's zod schema)
     cat > "$OC_DIR/openclaw.json" << EOF
@@ -957,7 +969,7 @@ deploy_agents() {
 
   "hooks": {
     "enabled": true,
-    "token": "$OPENCLAW_TOKEN",
+    "token": "$OPENCLAW_WEBHOOK_TOKEN",
     "mappings": [
       {"match": {"path": "/webhook/wazuh-alert"}, "action": "agent", "agentId": "wazuh-triage"},
       {"match": {"path": "/webhook/case-created"}, "action": "agent", "agentId": "wazuh-correlation"},
@@ -978,6 +990,7 @@ deploy_agents() {
     "OPENROUTER_API_KEY": "__OPENROUTER_API_KEY__",
     "TOGETHER_API_KEY": "__TOGETHER_API_KEY__",
     "CEREBRAS_API_KEY": "__CEREBRAS_API_KEY__",
+    "OPENCLAW_WEBHOOK_TOKEN": "$OPENCLAW_WEBHOOK_TOKEN",
     "WAZUH_MCP_URL": "__WAZUH_MCP_URL__",
     "WAZUH_MCP_TOKEN": "__MCP_AUTH_TOKEN__"
   }
@@ -1254,6 +1267,7 @@ AUTOPILOT_MCP_AUTH=__MCP_AUTH_TOKEN__
 OPENCLAW_HOST=__GATEWAY_BIND__
 OPENCLAW_PORT=__GATEWAY_PORT__
 OPENCLAW_TOKEN=__OPENCLAW_TOKEN__
+OPENCLAW_WEBHOOK_TOKEN=__OPENCLAW_WEBHOOK_TOKEN__
 
 # AI PROVIDER
 ANTHROPIC_API_KEY=__ANTHROPIC_API_KEY__
@@ -1342,6 +1356,7 @@ ENVEOF
     _safe_subst "__TAILSCALE_IP__" "TAILSCALE_IP" "$_envfile"
     _safe_subst "__MCP_AUTH_TOKEN__" "MCP_AUTH_TOKEN" "$_envfile"
     _safe_subst "__OPENCLAW_TOKEN__" "OPENCLAW_TOKEN" "$_envfile"
+    _safe_subst "__OPENCLAW_WEBHOOK_TOKEN__" "OPENCLAW_WEBHOOK_TOKEN" "$_envfile"
     _safe_subst "__ANTHROPIC_API_KEY__" "ANTHROPIC_API_KEY" "$_envfile"
     _safe_subst "__APPROVAL_SECRET__" "APPROVAL_SECRET" "$_envfile"
     _safe_subst "__PAIRING_SECRET__" "PAIRING_SECRET" "$_envfile"

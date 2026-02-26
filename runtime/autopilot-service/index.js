@@ -77,6 +77,8 @@ const config = {
   // OpenClaw Gateway dispatch (for agent pipeline handoffs)
   openclawGatewayUrl: process.env.OPENCLAW_GATEWAY_URL || "http://127.0.0.1:18789",
   openclawToken: process.env.OPENCLAW_TOKEN || "",
+  // Separate webhook token for hook validation (falls back to gateway token for backwards compat)
+  openclawWebhookToken: process.env.OPENCLAW_WEBHOOK_TOKEN || process.env.OPENCLAW_TOKEN || "",
   // MCP auth mode: "mcp-jsonrpc" (proper MCP protocol) or "legacy-rest" (backwards compat)
   mcpAuthMode: process.env.MCP_AUTH_MODE || "mcp-jsonrpc",
   mcpJwtTtlMs: parseInt(process.env.MCP_JWT_TTL_MS || "3000000", 10), // 50 min
@@ -271,8 +273,9 @@ function formatMetrics() {
  * Never throws — logs and records metrics on failure.
  */
 async function dispatchToGateway(webhookPath, payload) {
-  if (!config.openclawGatewayUrl || !config.openclawToken) {
-    log("warn", "dispatch", "Gateway dispatch skipped — OPENCLAW_TOKEN not configured. Agent pipeline is disabled.", { path: webhookPath });
+  const webhookToken = config.openclawWebhookToken || config.openclawToken;
+  if (!config.openclawGatewayUrl || !webhookToken) {
+    log("warn", "dispatch", "Gateway dispatch skipped — OPENCLAW_WEBHOOK_TOKEN/OPENCLAW_TOKEN not configured. Agent pipeline is disabled.", { path: webhookPath });
     return;
   }
 
@@ -288,7 +291,7 @@ async function dispatchToGateway(webhookPath, payload) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${config.openclawToken}`,
+          Authorization: `Bearer ${webhookToken}`,
         },
         body: JSON.stringify(outgoingPayload),
         signal: controller.signal,

@@ -217,7 +217,7 @@
   "hooks": {
     "enabled": true,
     "path": "/webhook",
-    "token": "${OPENCLAW_TOKEN}",
+    "token": "${OPENCLAW_WEBHOOK_TOKEN}",
     "mappings": [
       {
         "match": { "path": "wazuh-alert" },
@@ -268,6 +268,7 @@
   // ENVIRONMENT VARIABLES
   // ---------------------------------------------------------------------------
   "env": {
+    "OPENCLAW_WEBHOOK_TOKEN": "${OPENCLAW_WEBHOOK_TOKEN}",
     "MCP_URL": "${MCP_URL}",
     "AUTOPILOT_MCP_AUTH": "${AUTOPILOT_MCP_AUTH}",
     "OPENCLAW_GATEWAY_URL": "${OPENCLAW_GATEWAY_URL}",

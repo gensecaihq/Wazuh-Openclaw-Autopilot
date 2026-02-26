@@ -127,6 +127,30 @@ sudo systemctl restart openclaw
 docker restart openclaw
 ```
 
+### 401 Unauthorized on webhook dispatch
+
+OpenClaw requires a **separate token** for webhook endpoint validation, distinct from the gateway auth token. If you see `401 Unauthorized` on webhook dispatch:
+
+**Fix:** Set `OPENCLAW_WEBHOOK_TOKEN` in your environment:
+
+```bash
+# Generate a new webhook token
+WEBHOOK_TOKEN=$(openssl rand -hex 32)
+
+# Add to Autopilot environment
+echo "OPENCLAW_WEBHOOK_TOKEN=$WEBHOOK_TOKEN" >> /etc/wazuh-autopilot/.env
+
+# Update OpenClaw config hooks.token to match
+# In ~/.openclaw/openclaw.json, set:
+#   "hooks": { "token": "$WEBHOOK_TOKEN", ... }
+
+# Restart services
+sudo systemctl restart wazuh-autopilot
+sudo systemctl restart openclaw
+```
+
+If `OPENCLAW_WEBHOOK_TOKEN` is not set, the runtime falls back to `OPENCLAW_TOKEN` for backwards compatibility.
+
 ### Webhook dispatch diagnostic logging
 
 If webhooks are failing, the Autopilot Runtime (v2.4.0+) logs detailed diagnostics on 4xx errors including:

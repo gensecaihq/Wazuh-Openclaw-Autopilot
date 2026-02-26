@@ -620,7 +620,8 @@ All responses include security headers:
 | `CORS_ENABLED` | true | Enable CORS headers |
 | `SHUTDOWN_TIMEOUT_MS` | 30000 | Graceful shutdown timeout |
 | `OPENCLAW_GATEWAY_URL` | http://127.0.0.1:18789 | OpenClaw Gateway URL for webhook dispatch |
-| `OPENCLAW_TOKEN` | (none) | Bearer token for Gateway webhook auth |
+| `OPENCLAW_TOKEN` | (none) | Bearer token for Gateway internal auth |
+| `OPENCLAW_WEBHOOK_TOKEN` | (none) | Dedicated token for webhook endpoint validation (falls back to `OPENCLAW_TOKEN`) |
 | `MCP_AUTH_MODE` | mcp-jsonrpc | MCP protocol mode: `mcp-jsonrpc` or `legacy-rest` |
 | `MCP_JWT_TTL_MS` | 3000000 | JWT cache TTL (50 min default) |
 | `ENRICHMENT_ENABLED` | false | Enable IP enrichment via AbuseIPDB |

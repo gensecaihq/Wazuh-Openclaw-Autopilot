@@ -11,15 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **OpenClaw webhook 400 error**: Added required `messageTemplate` and `name` fields to all 6 hook mappings in both `openclaw.json` and `openclaw-airgapped.json`. Without `messageTemplate`, the OpenClaw Gateway could not extract the message body from incoming webhook POSTs, returning `400 "hook mapping requires message"`.
+- **OpenClaw webhook 401 error**: Separated `OPENCLAW_WEBHOOK_TOKEN` from `OPENCLAW_TOKEN`. OpenClaw requires a dedicated hook token for webhook endpoint validation, distinct from the gateway auth token. The runtime now uses `OPENCLAW_WEBHOOK_TOKEN` for webhook dispatch (falls back to `OPENCLAW_TOKEN` for backwards compatibility).
 - **MCP JWT cache race condition**: Added promise-based deduplication to `getMcpAuthToken()` to prevent thundering herd when JWT cache expires. Multiple concurrent callers now share a single in-flight JWT exchange instead of triggering parallel requests.
 
 ### Added
+- **Separate webhook token**: `OPENCLAW_WEBHOOK_TOKEN` environment variable for dedicated webhook endpoint authentication. Generated automatically by the installer and stored in `/etc/wazuh-autopilot/secrets/openclaw_webhook_token`.
 - **Installer `--mode` flag**: `install.sh` now supports `--mode full|bootstrap|mcp-only`. `bootstrap` skips Tailscale (equivalent to `--skip-tailscale`). `mcp-only` installs only the MCP Server, skipping OpenClaw Gateway, Runtime Service, and Agent deployment.
 - **Webhook dispatch diagnostic logging**: On 400 errors from OpenClaw Gateway, the runtime now logs payload keys, `message` field presence, and a message preview to aid troubleshooting.
 - 27 new tests (255 total): Webhook payload shape validation, JWT deduplication under concurrency, and getMcpAuthToken edge cases.
 
 ### Changed
+- `dispatchToGateway()` now uses `OPENCLAW_WEBHOOK_TOKEN` (with `OPENCLAW_TOKEN` fallback) instead of `OPENCLAW_TOKEN` directly
 - `dispatchToGateway()` now logs detailed diagnostic info (payload keys, message presence, response body preview) on 4xx errors instead of just the status code
+- `hooks.token` in both OpenClaw configs changed from `${OPENCLAW_TOKEN}` to `${OPENCLAW_WEBHOOK_TOKEN}`
 
 ## [2.3.0] - 2026-02-22
 
