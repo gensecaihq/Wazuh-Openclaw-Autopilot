@@ -50,6 +50,7 @@ RUNTIME_PORT="9090"
 
 # Flags (set by parse_args or environment)
 SKIP_TAILSCALE=false
+INSTALL_MODE="full"  # full | bootstrap | mcp-only
 
 # Colors
 RED='\033[0;31m'
@@ -104,18 +105,25 @@ show_help() {
     echo "Usage: sudo ./install.sh [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --skip-tailscale    Skip Tailscale installation (for air-gapped/bootstrap)"
-    echo "  --help              Show this help message"
-    echo "  --version           Show version"
+    echo "  --skip-tailscale          Skip Tailscale installation (for air-gapped/bootstrap)"
+    echo "  --mode <mode>             Installation mode: full, bootstrap, or mcp-only"
+    echo "    full                      Standard installation with all components (default)"
+    echo "    bootstrap                 Skip Tailscale, use localhost bindings"
+    echo "    mcp-only                  Install only the MCP Server (no Runtime, no OpenClaw)"
+    echo "  --help                    Show this help message"
+    echo "  --version                 Show version"
     echo ""
     echo "Environment Variables:"
-    echo "  AUTOPILOT_MODE=bootstrap    Automatically skip Tailscale requirement"
-    echo "  AUTOPILOT_MODE=production   Full installation with Tailscale (default)"
+    echo "  AUTOPILOT_MODE=bootstrap          Automatically skip Tailscale requirement"
+    echo "  AUTOPILOT_MODE=mcp-only           Install MCP Server only"
+    echo "  AUTOPILOT_REQUIRE_TAILSCALE=false  Skip Tailscale requirement"
     echo ""
     echo "Examples:"
     echo "  sudo ./install.sh                          # Standard installation"
     echo "  sudo ./install.sh --skip-tailscale         # Air-gapped / no Tailscale"
-    echo "  AUTOPILOT_MODE=bootstrap sudo ./install.sh # Bootstrap mode (skips Tailscale)"
+    echo "  sudo ./install.sh --mode bootstrap         # Bootstrap mode (skips Tailscale)"
+    echo "  sudo ./install.sh --mode mcp-only          # MCP Server only"
+    echo "  AUTOPILOT_MODE=bootstrap sudo ./install.sh # Bootstrap mode via env var"
     echo ""
     exit 0
 }
@@ -125,6 +133,30 @@ parse_args() {
         case "$1" in
             --skip-tailscale)
                 SKIP_TAILSCALE=true
+                shift
+                ;;
+            --mode)
+                shift
+                case "${1:-}" in
+                    full)
+                        INSTALL_MODE="full"
+                        log_info "Install mode: full (all components)"
+                        ;;
+                    bootstrap)
+                        INSTALL_MODE="bootstrap"
+                        SKIP_TAILSCALE=true
+                        log_info "Install mode: bootstrap (Tailscale skipped, localhost bindings)"
+                        ;;
+                    mcp-only)
+                        INSTALL_MODE="mcp-only"
+                        SKIP_TAILSCALE=true
+                        log_info "Install mode: mcp-only (MCP Server only, no Runtime or OpenClaw)"
+                        ;;
+                    *)
+                        log_error "Unknown mode: ${1:-}. Valid modes: full, bootstrap, mcp-only"
+                        exit 1
+                        ;;
+                esac
                 shift
                 ;;
             --help|-h)
@@ -141,10 +173,20 @@ parse_args() {
         esac
     done
 
-    # Read AUTOPILOT_MODE from environment
-    if [[ "${AUTOPILOT_MODE:-}" == "bootstrap" ]]; then
-        SKIP_TAILSCALE=true
-        log_info "AUTOPILOT_MODE=bootstrap detected — Tailscale will be skipped"
+    # Read AUTOPILOT_MODE from environment (CLI --mode takes precedence)
+    if [[ "$INSTALL_MODE" == "full" && -n "${AUTOPILOT_MODE:-}" ]]; then
+        case "${AUTOPILOT_MODE}" in
+            bootstrap)
+                INSTALL_MODE="bootstrap"
+                SKIP_TAILSCALE=true
+                log_info "AUTOPILOT_MODE=bootstrap detected — Tailscale will be skipped"
+                ;;
+            mcp-only)
+                INSTALL_MODE="mcp-only"
+                SKIP_TAILSCALE=true
+                log_info "AUTOPILOT_MODE=mcp-only detected — MCP Server only"
+                ;;
+        esac
     fi
 
     # Support AUTOPILOT_REQUIRE_TAILSCALE=false as alternative
@@ -1905,6 +1947,14 @@ main() {
     setup_secure_directories
     setup_credentials
     install_mcp_server
+
+    if [[ "$INSTALL_MODE" == "mcp-only" ]]; then
+        log_step "MCP-only mode: skipping OpenClaw, Runtime, and Agent installation"
+        start_services
+        print_summary
+        return 0
+    fi
+
     install_openclaw
     deploy_agents
     install_runtime_service

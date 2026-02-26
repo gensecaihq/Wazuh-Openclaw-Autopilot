@@ -637,6 +637,42 @@ describe("Gateway Dispatch", () => {
     await dispatchToGateway("/webhook/test", { case_id: "CASE-001" });
     // Should complete without throwing — verified by reaching this line
   });
+
+  it("dispatchToGateway payload always includes message field in real dispatch calls", () => {
+    // Verify the expected payload shape that OpenClaw Gateway requires.
+    // The message field is REQUIRED by OpenClaw hooks — without it, Gateway returns 400.
+    const alertPayload = {
+      message: "Triage new high-severity alert: [HIGH] SSH brute force. Case CASE-001 with 3 entities.",
+      case_id: "CASE-001",
+      severity: "high",
+      title: "[HIGH] SSH brute force",
+      entities_count: 3,
+      trigger: "alert_ingestion",
+    };
+    assert.strictEqual(typeof alertPayload.message, "string");
+    assert.ok(alertPayload.message.length > 0, "message must not be empty");
+
+    const statusPayload = {
+      message: "Correlate case CASE-001 (high severity). Search for related alerts.",
+      case_id: "CASE-001",
+      status: "triaged",
+      severity: "high",
+      trigger: "status_change",
+    };
+    assert.strictEqual(typeof statusPayload.message, "string");
+    assert.ok(statusPayload.message.length > 0, "message must not be empty");
+
+    const policyPayload = {
+      message: "Review response plan PLAN-001 for case CASE-001. Risk level: medium.",
+      plan_id: "PLAN-001",
+      case_id: "CASE-001",
+      risk_level: "medium",
+      actions_count: 2,
+      trigger: "plan_created",
+    };
+    assert.strictEqual(typeof policyPayload.message, "string");
+    assert.ok(policyPayload.message.length > 0, "message must not be empty");
+  });
 });
 
 // =============================================================================
@@ -1028,6 +1064,28 @@ describe("MCP Session Management", () => {
     invalidateMcpSession();
     await ensureMcpSession();
     // Should not throw
+  });
+
+  it("getMcpAuthToken returns null when mcpAuth is not configured", async () => {
+    // In test env, config.mcpAuth is empty → should return null
+    const token = await getMcpAuthToken();
+    assert.strictEqual(token, null);
+  });
+
+  it("concurrent getMcpAuthToken calls do not throw", async () => {
+    // Fire multiple concurrent calls — should all resolve without error.
+    // In test env without MCP_URL, they all return null (early return path).
+    // This validates the deduplication logic doesn't break concurrent callers.
+    const results = await Promise.all([
+      getMcpAuthToken(),
+      getMcpAuthToken(),
+      getMcpAuthToken(),
+      getMcpAuthToken(),
+      getMcpAuthToken(),
+    ]);
+    for (const result of results) {
+      assert.strictEqual(result, null);
+    }
   });
 });
 

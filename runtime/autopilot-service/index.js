@@ -277,6 +277,7 @@ async function dispatchToGateway(webhookPath, payload) {
   }
 
   const url = `${config.openclawGatewayUrl}${webhookPath}`;
+  const outgoingPayload = { ...payload, dispatched_at: new Date().toISOString() };
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -289,7 +290,7 @@ async function dispatchToGateway(webhookPath, payload) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${config.openclawToken}`,
         },
-        body: JSON.stringify({ ...payload, dispatched_at: new Date().toISOString() }),
+        body: JSON.stringify(outgoingPayload),
         signal: controller.signal,
       });
 
@@ -306,13 +307,17 @@ async function dispatchToGateway(webhookPath, payload) {
       }
 
       if (response.status < 500) {
-        // Client error (401, 403, 404) — log as failure, don't retry
+        // Client error (400, 401, 403, 404) — log as failure with diagnostic detail, don't retry
         incrementMetric("webhook_dispatch_failures_total");
         const errBody = await response.text().catch(() => "");
         log("warn", "dispatch", "Webhook dispatch client error", {
           path: webhookPath,
+          url,
           status: response.status,
-          body: errBody.substring(0, 200),
+          response_body: errBody.substring(0, 200),
+          payload_keys: Object.keys(outgoingPayload),
+          has_message: typeof outgoingPayload.message === "string" && outgoingPayload.message.length > 0,
+          message_preview: typeof outgoingPayload.message === "string" ? outgoingPayload.message.substring(0, 80) : "(missing)",
         });
         return;
       }
@@ -349,12 +354,14 @@ async function dispatchToGateway(webhookPath, payload) {
 
 let mcpJwtCache = { token: null, expiresAt: 0 };
 let mcpAuthNegativeCache = 0; // timestamp when negative cache expires
+let mcpJwtExchangePromise = null; // dedup: only one JWT exchange in-flight at a time
 
 /**
  * Get an auth token for MCP calls.
  * - legacy-rest mode: returns the raw API key as Bearer token
  * - mcp-jsonrpc mode: exchanges API key for JWT via /auth/token, caches result
  * - Negative cache: skips JWT exchange for 60s after failure to avoid latency loops
+ * - Deduplication: concurrent callers share a single in-flight exchange to avoid thundering herd
  */
 async function getMcpAuthToken() {
   if (!config.mcpAuth) return null;
@@ -374,45 +381,58 @@ async function getMcpAuthToken() {
     return config.mcpAuth;
   }
 
-  // Exchange API key for JWT
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+  // Dedup: if an exchange is already in-flight, await it instead of starting another
+  if (mcpJwtExchangePromise) {
+    return mcpJwtExchangePromise;
+  }
 
-    const response = await fetch(`${config.mcpUrl}/auth/token`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ api_key: config.mcpAuth }),
-      signal: controller.signal,
-    });
+  // Exchange API key for JWT (single in-flight request)
+  mcpJwtExchangePromise = (async () => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-    clearTimeout(timeoutId);
+      const response = await fetch(`${config.mcpUrl}/auth/token`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ api_key: config.mcpAuth }),
+        signal: controller.signal,
+      });
 
-    if (!response.ok) {
-      log("warn", "mcp", "JWT exchange failed, falling back to raw key", { status: response.status });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        log("warn", "mcp", "JWT exchange failed, falling back to raw key", { status: response.status });
+        mcpAuthNegativeCache = Date.now() + 60000;
+        return config.mcpAuth;
+      }
+
+      const data = await response.json();
+      const token = data.access_token || data.token;
+      if (token) {
+        mcpAuthNegativeCache = 0; // Clear negative cache on success
+        mcpJwtCache = {
+          token,
+          expiresAt: Date.now() + config.mcpJwtTtlMs,
+        };
+        return token;
+      }
+
+      mcpAuthNegativeCache = Date.now() + 60000;
+      return config.mcpAuth;
+    } catch (err) {
+      log("warn", "mcp", "JWT exchange error, falling back to raw key", { error: err.message });
       mcpAuthNegativeCache = Date.now() + 60000;
       return config.mcpAuth;
     }
+  })();
 
-    const data = await response.json();
-    const token = data.access_token || data.token;
-    if (token) {
-      mcpAuthNegativeCache = 0; // Clear negative cache on success
-      mcpJwtCache = {
-        token,
-        expiresAt: Date.now() + config.mcpJwtTtlMs,
-      };
-      return token;
-    }
-
-    mcpAuthNegativeCache = Date.now() + 60000;
-    return config.mcpAuth;
-  } catch (err) {
-    log("warn", "mcp", "JWT exchange error, falling back to raw key", { error: err.message });
-    mcpAuthNegativeCache = Date.now() + 60000;
-    return config.mcpAuth;
+  try {
+    return await mcpJwtExchangePromise;
+  } finally {
+    mcpJwtExchangePromise = null;
   }
 }
 
