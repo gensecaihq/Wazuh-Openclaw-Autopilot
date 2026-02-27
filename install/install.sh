@@ -374,6 +374,8 @@ install_dependencies() {
                 curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null 2>&1
                 ;;
         esac
+        # Refresh package index after adding nodesource repo
+        $PKG_UPDATE
         $PKG_INSTALL nodejs
     fi
 
@@ -824,7 +826,9 @@ deploy_agents() {
       },
       "models": {
         "anthropic/claude-sonnet-4-5": {"alias": "sonnet"},
-        "anthropic/claude-haiku-4-5": {"alias": "haiku"}
+        "anthropic/claude-haiku-4-5": {"alias": "haiku"},
+        "openai/gpt-4o": {"alias": "gpt4o"},
+        "groq/llama-3.3-70b-versatile": {"alias": "groq"}
       },
       "sandbox": {
         "mode": "all",
@@ -851,8 +855,8 @@ deploy_agents() {
         "agentDir": "~/.openclaw/wazuh-autopilot/agents/triage",
         "tools": {
           "profile": "minimal",
-          "allow": ["read", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["write", "edit", "exec", "delete", "browser"]
+          "allow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "exec", "delete", "browser"]
         },
         "heartbeat": {"every": "10m"}
       },
@@ -862,8 +866,8 @@ deploy_agents() {
         "agentDir": "~/.openclaw/wazuh-autopilot/agents/correlation",
         "tools": {
           "profile": "minimal",
-          "allow": ["read", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["write", "edit", "exec", "delete", "browser"]
+          "allow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "exec", "delete", "browser"]
         },
         "heartbeat": {"every": "5m"}
       },
@@ -873,8 +877,8 @@ deploy_agents() {
         "agentDir": "~/.openclaw/wazuh-autopilot/agents/investigation",
         "tools": {
           "profile": "minimal",
-          "allow": ["read", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["write", "edit", "exec", "delete", "browser"]
+          "allow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "exec", "delete", "browser"]
         }
       },
       {
@@ -893,8 +897,8 @@ deploy_agents() {
         "agentDir": "~/.openclaw/wazuh-autopilot/agents/policy-guard",
         "tools": {
           "profile": "minimal",
-          "allow": ["read", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
-          "deny": ["write", "edit", "exec", "delete", "browser"]
+          "allow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "exec", "delete", "browser"]
         }
       },
       {
@@ -935,8 +939,7 @@ deploy_agents() {
       "enabled": true,
       "botToken": "__SLACK_BOT_TOKEN__",
       "appToken": "__SLACK_APP_TOKEN__",
-      "dmPolicy": "allowlist",
-      "allowFrom": [],
+      "dmPolicy": "open",
       "groupPolicy": "allowlist"
     }
   },
@@ -954,7 +957,7 @@ deploy_agents() {
 
   "tools": {
     "profile": "minimal",
-    "allow": ["read", "sessions_list", "sessions_history"],
+    "allow": ["read", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
     "deny": ["browser", "canvas"],
     "web": {
       "search": {"enabled": false},
@@ -969,14 +972,15 @@ deploy_agents() {
 
   "hooks": {
     "enabled": true,
+    "path": "/webhook",
     "token": "$OPENCLAW_WEBHOOK_TOKEN",
     "mappings": [
-      {"match": {"path": "/webhook/wazuh-alert"}, "action": "agent", "agentId": "wazuh-triage"},
-      {"match": {"path": "/webhook/case-created"}, "action": "agent", "agentId": "wazuh-correlation"},
-      {"match": {"path": "/webhook/investigation-request"}, "action": "agent", "agentId": "wazuh-investigation"},
-      {"match": {"path": "/webhook/plan-request"}, "action": "agent", "agentId": "wazuh-response-planner"},
-      {"match": {"path": "/webhook/policy-check"}, "action": "agent", "agentId": "wazuh-policy-guard"},
-      {"match": {"path": "/webhook/execute-action"}, "action": "agent", "agentId": "wazuh-responder"}
+      {"match": {"path": "wazuh-alert"}, "action": "agent", "agentId": "wazuh-triage", "messageTemplate": "{{message}}", "name": "Wazuh Alert Triage"},
+      {"match": {"path": "case-created"}, "action": "agent", "agentId": "wazuh-correlation", "messageTemplate": "{{message}}", "name": "Wazuh Correlation"},
+      {"match": {"path": "investigation-request"}, "action": "agent", "agentId": "wazuh-investigation", "messageTemplate": "{{message}}", "name": "Wazuh Investigation"},
+      {"match": {"path": "plan-request"}, "action": "agent", "agentId": "wazuh-response-planner", "messageTemplate": "{{message}}", "name": "Wazuh Response Planning"},
+      {"match": {"path": "policy-check"}, "action": "agent", "agentId": "wazuh-policy-guard", "messageTemplate": "{{message}}", "name": "Wazuh Policy Check"},
+      {"match": {"path": "execute-action"}, "action": "agent", "agentId": "wazuh-responder", "messageTemplate": "{{message}}", "name": "Wazuh Action Execution"}
     ]
   },
 
@@ -991,8 +995,10 @@ deploy_agents() {
     "TOGETHER_API_KEY": "__TOGETHER_API_KEY__",
     "CEREBRAS_API_KEY": "__CEREBRAS_API_KEY__",
     "OPENCLAW_WEBHOOK_TOKEN": "$OPENCLAW_WEBHOOK_TOKEN",
-    "WAZUH_MCP_URL": "__WAZUH_MCP_URL__",
-    "WAZUH_MCP_TOKEN": "__MCP_AUTH_TOKEN__"
+    "MCP_URL": "__WAZUH_MCP_URL__",
+    "AUTOPILOT_MCP_AUTH": "__MCP_AUTH_TOKEN__",
+    "OPENCLAW_GATEWAY_URL": "http://127.0.0.1:$GATEWAY_PORT",
+    "AUTOPILOT_RUNTIME_URL": "http://127.0.0.1:$RUNTIME_PORT"
   }
 }
 EOF
@@ -1087,7 +1093,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-ReadWritePaths=$DATA_DIR $LOG_DIR
+ReadWritePaths=$DATA_DIR $LOG_DIR $RUNTIME_DST
 
 [Install]
 WantedBy=multi-user.target
@@ -1281,7 +1287,7 @@ AUTOPILOT_CONFIG_DIR=__CONFIG_DIR__
 # AUTOPILOT MODE
 # bootstrap = permissive (localhost auth bypass, relaxed policy)
 # production = strict (all requests require token, Tailscale enforced)
-AUTOPILOT_MODE=bootstrap
+AUTOPILOT_MODE=__AUTOPILOT_MODE__
 
 # MCP PROTOCOL MODE
 # mcp-jsonrpc = standard MCP protocol (JWT exchange at /auth/token, JSON-RPC at /mcp)
@@ -1364,6 +1370,14 @@ ENVEOF
     _safe_subst "__SLACK_BOT_TOKEN__" "SLACK_BOT_TOKEN" "$_envfile"
     _safe_subst "__SLACK_ALERTS_CHANNEL__" "SLACK_ALERTS_CHANNEL" "$_envfile"
     _safe_subst "__SLACK_APPROVALS_CHANNEL__" "SLACK_APPROVALS_CHANNEL" "$_envfile"
+
+    # Set AUTOPILOT_MODE based on install mode (full → production, bootstrap/mcp-only → bootstrap)
+    if [[ "$INSTALL_MODE" == "full" ]]; then
+        export COMPUTED_AUTOPILOT_MODE="production"
+    else
+        export COMPUTED_AUTOPILOT_MODE="bootstrap"
+    fi
+    _safe_subst "__AUTOPILOT_MODE__" "COMPUTED_AUTOPILOT_MODE" "$_envfile"
 
     umask "$_old_umask"
 
@@ -1736,19 +1750,21 @@ start_services() {
         _services_ok=false
     fi
 
-    # Start Runtime Service
-    log_info "Starting Runtime Service..."
-    systemctl enable wazuh-autopilot >/dev/null 2>&1
-    systemctl start wazuh-autopilot
+    # Start Runtime Service (skip in mcp-only mode — service not installed)
+    if [[ "$INSTALL_MODE" != "mcp-only" ]]; then
+        log_info "Starting Runtime Service..."
+        systemctl enable wazuh-autopilot >/dev/null 2>&1
+        systemctl start wazuh-autopilot
 
-    sleep 3
+        sleep 3
 
-    if systemctl is-active --quiet wazuh-autopilot; then
-        log_success "Runtime Service running (localhost only)"
-    else
-        log_error "Runtime Service failed to start"
-        echo "  Check: journalctl -u wazuh-autopilot -n 50"
-        _services_ok=false
+        if systemctl is-active --quiet wazuh-autopilot; then
+            log_success "Runtime Service running (localhost only)"
+        else
+            log_error "Runtime Service failed to start"
+            echo "  Check: journalctl -u wazuh-autopilot -n 50"
+            _services_ok=false
+        fi
     fi
 
     if [[ "$_services_ok" == "false" ]]; then
@@ -1936,6 +1952,8 @@ main() {
         exit "$_exit_code"
     }
 
+    check_root
+
     show_security_banner
 
     if ! confirm "Continue with security-hardened installation?" "y"; then
@@ -1944,8 +1962,6 @@ main() {
     fi
 
     show_security_guidance
-
-    check_root
     check_os
     check_wazuh
     install_dependencies

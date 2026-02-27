@@ -216,7 +216,7 @@ function registerSlashCommands(runtime) {
               await postApprovalNotification(client, approvedPlan, userId, "approved");
             }
           } catch (err) {
-            await respond({ text: `Error: ${err.message}` });
+            await respond({ text: `Error: ${safeErrorMessage(err)}` });
           }
           break;
         }
@@ -237,7 +237,7 @@ function registerSlashCommands(runtime) {
               await postExecutionNotification(client, executedPlan, userId);
             }
           } catch (err) {
-            await respond({ text: `Error: ${err.message}` });
+            await respond({ text: `Error: ${safeErrorMessage(err)}` });
           }
           break;
         }
@@ -256,7 +256,7 @@ function registerSlashCommands(runtime) {
               await postApprovalNotification(client, rejectedPlan, userId, "rejected");
             }
           } catch (err) {
-            await respond({ text: `Error: ${err.message}` });
+            await respond({ text: `Error: ${safeErrorMessage(err)}` });
           }
           break;
         }
@@ -302,7 +302,8 @@ const SAFE_ERROR_PATTERNS = [
   /^Plan not found/,
   /^Cannot (approve|reject|execute) plan/,
   /^Plan has expired/,
-  /^Tier 1 required/,
+  /Tier 1 required/,
+  /^Plan must be approved/,
   /^Plan is already being executed/,
   /^Cannot reject plan that is currently executing/,
   /^Responder capability is DISABLED/,
@@ -554,7 +555,7 @@ function formatPlansMessage(plans, state) {
 
   const planList = plans.map((p) => {
     const actionCount = Array.isArray(p.actions) ? p.actions.length : 0;
-    return `• \`${p.plan_id}\` - ${p.title} (${p.risk_level} risk) - ${actionCount} actions`;
+    return `• \`${p.plan_id}\` - ${escapeMrkdwn(p.title)} (${escapeMrkdwn(p.risk_level)} risk) - ${actionCount} actions`;
   }).join("\n");
 
   return {
@@ -903,7 +904,7 @@ async function postCaseAlert(caseData) {
         {
           type: "context",
           elements: [
-            { type: "mrkdwn", text: `Created at <!date^${Math.floor(new Date(caseData.created_at).getTime() / 1000)}^{date_short_pretty} at {time}|${caseData.created_at}>` },
+            { type: "mrkdwn", text: (() => { const ts = Math.floor(new Date(caseData.created_at).getTime() / 1000); return isNaN(ts) ? `Created at ${caseData.created_at || "unknown"}` : `Created at <!date^${ts}^{date_short_pretty} at {time}|${caseData.created_at}>`; })() },
           ],
         },
       ],

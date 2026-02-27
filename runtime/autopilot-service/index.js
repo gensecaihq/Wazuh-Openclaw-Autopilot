@@ -137,7 +137,6 @@ const metrics = {
   triage_latency_seconds: {}, // Object with keys mapping to arrays (Bug #8 fix)
   mcp_tool_calls_total: {},
   mcp_tool_call_latency_seconds: {},
-  action_plans_proposed_total: 0,
   approvals_requested_total: 0,
   approvals_granted_total: 0,
   // Two-tier approval metrics
@@ -208,7 +207,7 @@ function formatMetrics() {
   // Simple counters
   [
     "cases_created_total", "cases_updated_total", "alerts_ingested_total",
-    "action_plans_proposed_total", "approvals_requested_total", "approvals_granted_total",
+    "approvals_requested_total", "approvals_granted_total",
     // Two-tier approval metrics
     "plans_created_total", "plans_approved_total", "plans_executed_total",
     "plans_rejected_total", "plans_expired_total",
@@ -386,7 +385,7 @@ async function getMcpAuthToken() {
 
   // Dedup: if an exchange is already in-flight, await it instead of starting another
   if (mcpJwtExchangePromise) {
-    return mcpJwtExchangePromise;
+    return await mcpJwtExchangePromise;
   }
 
   // Exchange API key for JWT (single in-flight request)
@@ -449,6 +448,9 @@ let mcpSessionId = null;
 // Whether we've completed the MCP initialize handshake for the current session
 let mcpSessionInitialized = false;
 
+// Dedup guard: in-flight session init promise (prevents concurrent callers from racing)
+let mcpSessionInitPromise = null;
+
 // MCP protocol version to negotiate with the server
 const MCP_PROTOCOL_VERSION = "2025-03-26";
 
@@ -462,6 +464,20 @@ async function ensureMcpSession() {
   if (mcpSessionInitialized && mcpSessionId) return;
   if (!config.mcpUrl) return;
 
+  // Dedup: if an init is already in-flight, await it instead of starting another
+  if (mcpSessionInitPromise) {
+    return await mcpSessionInitPromise;
+  }
+
+  mcpSessionInitPromise = _doMcpSessionInit();
+  try {
+    return await mcpSessionInitPromise;
+  } finally {
+    mcpSessionInitPromise = null;
+  }
+}
+
+async function _doMcpSessionInit() {
   const authToken = await getMcpAuthToken();
 
   try {
@@ -549,6 +565,7 @@ async function ensureMcpSession() {
 function invalidateMcpSession() {
   mcpSessionId = null;
   mcpSessionInitialized = false;
+  mcpSessionInitPromise = null;
 }
 
 // =============================================================================
@@ -774,70 +791,73 @@ async function createCase(caseId, data) {
   if (!isValidCaseId(caseId)) {
     throw new Error(`Invalid case ID: ${caseId}`);
   }
-  const caseDir = path.join(config.dataDir, "cases", caseId);
-  await ensureDir(caseDir);
 
-  const now = new Date().toISOString();
+  return withCaseLock(caseId, async () => {
+    const caseDir = path.join(config.dataDir, "cases", caseId);
+    await ensureDir(caseDir);
 
-  const evidencePack = {
-    schema_version: EVIDENCE_PACK_SCHEMA_VERSION,
-    case_id: caseId,
-    created_at: now,
-    updated_at: now,
-    title: data.title || "",
-    summary: data.summary || "",
-    severity: data.severity || "medium",
-    confidence: data.confidence || 0,
-    entities: data.entities || [],
-    timeline: data.timeline || [],
-    mitre: data.mitre || [],
-    mcp_calls: [],
-    evidence_refs: data.evidence_refs || [],
-    plans: [],
-    approvals: [],
-    actions: [],
-    status: "open",
-    feedback: [],
-  };
+    const now = new Date().toISOString();
 
-  await atomicWriteFile(
-    path.join(caseDir, "evidence-pack.json"),
-    JSON.stringify(evidencePack, null, 2),
-  );
-
-  // Also create a lightweight summary (Bug #10 fix: add defaults)
-  const caseSummary = {
-    case_id: caseId,
-    created_at: now,
-    updated_at: now,
-    title: data.title || "",
-    severity: data.severity || "medium",
-    status: "open",
-  };
-
-  await atomicWriteFile(
-    path.join(caseDir, "case.json"),
-    JSON.stringify(caseSummary, null, 2),
-  );
-
-  incrementMetric("cases_created_total");
-  log("info", "evidence-pack", "Case created", { case_id: caseId });
-
-  // Post to Slack alerts channel (async, don't await)
-  if (slack && slack.isInitialized()) {
-    slack.postCaseAlert({
+    const evidencePack = {
+      schema_version: EVIDENCE_PACK_SCHEMA_VERSION,
       case_id: caseId,
-      title: data.title,
-      summary: data.summary,
-      severity: data.severity,
-      entities: data.entities || [],
       created_at: now,
-    }).catch((err) => {
-      log("warn", "evidence-pack", "Failed to post case to Slack", { error: err.message, case_id: caseId });
-    });
-  }
+      updated_at: now,
+      title: data.title || "",
+      summary: data.summary || "",
+      severity: data.severity || "medium",
+      confidence: data.confidence || 0,
+      entities: data.entities || [],
+      timeline: data.timeline || [],
+      mitre: data.mitre || [],
+      mcp_calls: [],
+      evidence_refs: data.evidence_refs || [],
+      plans: [],
+      approvals: [],
+      actions: [],
+      status: "open",
+      feedback: [],
+    };
 
-  return evidencePack;
+    await atomicWriteFile(
+      path.join(caseDir, "evidence-pack.json"),
+      JSON.stringify(evidencePack, null, 2),
+    );
+
+    // Also create a lightweight summary (Bug #10 fix: add defaults)
+    const caseSummary = {
+      case_id: caseId,
+      created_at: now,
+      updated_at: now,
+      title: data.title || "",
+      severity: data.severity || "medium",
+      status: "open",
+    };
+
+    await atomicWriteFile(
+      path.join(caseDir, "case.json"),
+      JSON.stringify(caseSummary, null, 2),
+    );
+
+    incrementMetric("cases_created_total");
+    log("info", "evidence-pack", "Case created", { case_id: caseId });
+
+    // Post to Slack alerts channel (async, don't await)
+    if (slack && slack.isInitialized()) {
+      slack.postCaseAlert({
+        case_id: caseId,
+        title: data.title,
+        summary: data.summary,
+        severity: data.severity,
+        entities: data.entities || [],
+        created_at: now,
+      }).catch((err) => {
+        log("warn", "evidence-pack", "Failed to post case to Slack", { error: err.message, case_id: caseId });
+      });
+    }
+
+    return evidencePack;
+  });
 }
 
 async function updateCase(caseId, updates) {
@@ -1305,13 +1325,16 @@ function listPlans(options = {}) {
   const plans = [];
   const { state, case_id, limit = 100, offset = 0 } = options;
 
-  for (const plan of responsePlans.values()) {
-    // Filter by state
-    if (state && plan.state !== state) continue;
+  for (const [planId, plan] of responsePlans.entries()) {
+    // Trigger expiry check via getPlan (updates stale PROPOSED/APPROVED → EXPIRED)
+    const freshPlan = getPlan(planId, { updateExpiry: true });
+    if (!freshPlan) continue;
+    // Filter by state (after expiry update)
+    if (state && freshPlan.state !== state) continue;
     // Filter by case
-    if (case_id && plan.case_id !== case_id) continue;
+    if (case_id && freshPlan.case_id !== case_id) continue;
 
-    plans.push(plan);
+    plans.push(freshPlan);
   }
 
   // Issue #13 fix: More efficient date sorting
@@ -1554,6 +1577,12 @@ async function executePlan(planId, executorId) {
   } finally {
     // Bug #7 fix: Always remove from executing set
     executingPlans.delete(planId);
+    // If plan is still EXECUTING (unexpected throw before state update), mark as FAILED
+    if (plan.state === PLAN_STATES.EXECUTING) {
+      plan.state = PLAN_STATES.FAILED;
+      plan.updated_at = new Date().toISOString();
+      incrementMetric("executions_failed_total");
+    }
   }
 }
 
@@ -2077,7 +2106,12 @@ async function callMcpTool(toolName, params, correlationId) {
         if (responseData.jsonrpc === "2.0") {
           if (responseData.error) {
             const rpcError = responseData.error;
-            throw new Error(`MCP RPC error ${rpcError.code}: ${rpcError.message}`);
+            // Correct the metric we already recorded (was "success" based on HTTP status)
+            incrementMetric("mcp_tool_calls_total", { tool: toolName, status: "rpc_error" });
+            incrementMetric("errors_total", { component: "mcp" });
+            const rpcErr = new Error(`MCP RPC error ${rpcError.code}: ${rpcError.message}`);
+            rpcErr._metricsRecorded = true;
+            throw rpcErr;
           }
           responseData = responseData.result || responseData;
         }
@@ -2126,11 +2160,13 @@ async function callMcpTool(toolName, params, correlationId) {
     }
   }
 
-  // All attempts exhausted
-  const latencySeconds = (Date.now() - startTime) / 1000;
-  incrementMetric("mcp_tool_calls_total", { tool: toolName, status: "error" });
-  incrementMetric("errors_total", { component: "mcp" });
-  recordLatency("mcp_tool_call_latency_seconds", latencySeconds, { tool: toolName });
+  // All attempts exhausted — skip metric recording if already done (e.g., RPC errors)
+  if (!lastError._metricsRecorded) {
+    const latencySeconds = (Date.now() - startTime) / 1000;
+    incrementMetric("mcp_tool_calls_total", { tool: toolName, status: "error" });
+    incrementMetric("errors_total", { component: "mcp" });
+    recordLatency("mcp_tool_call_latency_seconds", latencySeconds, { tool: toolName });
+  }
 
   log("error", "mcp", "Tool call failed after retries", {
     tool: toolName,
@@ -2297,6 +2333,9 @@ function sendAuthError(res, authResult, requestId) {
     res.setHeader("Retry-After", authResult.retryAfter);
     res.writeHead(429, { "Content-Type": JSON_CONTENT_TYPE });
     res.end(JSON.stringify({ error: authResult.reason, retry_after: authResult.retryAfter, request_id: requestId }));
+  } else if (authResult.forbidden) {
+    res.writeHead(403, { "Content-Type": JSON_CONTENT_TYPE });
+    res.end(JSON.stringify({ error: authResult.reason, request_id: requestId }));
   } else {
     res.writeHead(401, { "Content-Type": JSON_CONTENT_TYPE });
     res.end(JSON.stringify({ error: authResult.reason, request_id: requestId }));
@@ -2346,7 +2385,7 @@ function validateAuthorization(req, requiredScope = "write") {
                             directIp === "::ffff:127.0.0.1";
   const forwardedFor = req.headers["x-forwarded-for"];
   const clientIp = (isDirectLocalhost && forwardedFor)
-    ? forwardedFor.split(",").pop().trim()
+    ? forwardedFor.split(",")[0].trim()
     : directIp;
   const isLocalhost = clientIp === "127.0.0.1" || clientIp === "::1" ||
                       clientIp === "::ffff:127.0.0.1";
@@ -2365,7 +2404,7 @@ function validateAuthorization(req, requiredScope = "write") {
   // Allow requests from localhost without auth ONLY in bootstrap mode
   // Production mode always requires token auth to prevent co-located process abuse
   if (isLocalhost && !authHeader && config.mode === "bootstrap") {
-    return { valid: true, source: "localhost", scope: "read" };
+    return { valid: true, source: "localhost", scope: "write" };
   }
 
   // Require authorization for non-localhost requests
@@ -2401,7 +2440,7 @@ function validateAuthorization(req, requiredScope = "write") {
     clearAuthFailures(clientIp); // Clear on success
     const tokenScope = "read";
     if (requiredScope === "write" && tokenScope !== "write") {
-      return { valid: false, reason: "Insufficient scope: write access required" };
+      return { valid: false, reason: "Insufficient scope: write access required", forbidden: true };
     }
     return { valid: true, source: "service_token", scope: tokenScope };
   }
@@ -2485,7 +2524,7 @@ function createServer() {
                             directIpRL === "::ffff:127.0.0.1";
     const forwardedForRL = req.headers["x-forwarded-for"];
     const clientIp = (isDirectLocalRL && forwardedForRL)
-      ? forwardedForRL.split(",").pop().trim()
+      ? forwardedForRL.split(",")[0].trim()
       : directIpRL;
 
     // Security headers

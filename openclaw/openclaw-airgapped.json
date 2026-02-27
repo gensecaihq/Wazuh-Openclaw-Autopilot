@@ -195,7 +195,7 @@
   // ---------------------------------------------------------------------------
   "tools": {
     "profile": "minimal",
-    "allow": ["read", "sessions_list", "sessions_history"],
+    "allow": ["read", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
     "deny": ["browser", "canvas"],
     "web": {
       "search": { "enabled": false },
