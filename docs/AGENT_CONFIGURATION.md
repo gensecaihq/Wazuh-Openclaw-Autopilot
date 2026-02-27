@@ -126,7 +126,7 @@ openclaw cron add --schedule "0 9 * * 1" --agent wazuh-reporting --name "weekly-
 
 ### Agent API Access
 
-Agents use `web.fetch` (enabled in `openclaw.json`) to call the Runtime Service API at `${AUTOPILOT_RUNTIME_URL}` (default `http://127.0.0.1:9090`). Agents do **not** connect to the Wazuh MCP Server directly — the Runtime Service acts as the intermediary for all MCP calls.
+Agents use `web_fetch` (enabled in `openclaw.json`) to call the Runtime Service API at `${AUTOPILOT_RUNTIME_URL}` (default `http://127.0.0.1:9090`). Agents do **not** connect to the Wazuh MCP Server directly — the Runtime Service acts as the intermediary for all MCP calls.
 
 ---
 

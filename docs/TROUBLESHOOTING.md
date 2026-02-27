@@ -164,6 +164,45 @@ Check logs with:
 journalctl -u wazuh-autopilot | grep "dispatch"
 ```
 
+### "allowlist contains unknown entries (web.fetch)"
+
+OpenClaw uses **snake_case** tool identifiers in per-agent allow/deny lists. The correct tool name is `web_fetch`, not `web.fetch`. Dot notation is only valid in the global config path (`tools.web.fetch.enabled`).
+
+**Fix:** In your `openclaw.json`, change every occurrence of `"web.fetch"` to `"web_fetch"` in agent `tools.allow` arrays:
+
+```json
+"tools": {
+  "allow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"]
+}
+```
+
+Also ensure the global web fetch is enabled:
+```json
+"tools": {
+  "web": {
+    "fetch": { "enabled": true }
+  }
+}
+```
+
+After updating, restart the gateway:
+```bash
+systemctl restart openclaw-gateway
+```
+
+### Pipeline stalls after triage (agents don't advance)
+
+If triage processes alerts but no downstream agents (correlation, investigation, etc.) activate, the most common cause is agents unable to call the Runtime API to transition case status.
+
+**Check:**
+1. `web_fetch` is in each agent's `tools.allow` list (not `web.fetch`)
+2. Global `tools.web.fetch.enabled` is `true`
+3. OpenClaw gateway logs show no "unknown entries" warnings
+
+```bash
+journalctl -u openclaw-gateway | grep "unknown entries"
+```
+
 ---
 
 ## Connectivity Issues

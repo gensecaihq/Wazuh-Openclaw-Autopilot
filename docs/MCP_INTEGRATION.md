@@ -20,10 +20,10 @@ The Model Context Protocol (MCP) provides a standardized interface for AI agents
 │  │   Agent     │  │   Agent     │  │    Agent     │                     │
 │  └──────┬──────┘  └──────┬──────┘  └──────┬───────┘                     │
 │         │                │                │                              │
-│         └────── web.fetch (HTTP) ─────────┘                              │
+│         └────── web_fetch (HTTP) ─────────┘                              │
 │                          │                                               │
 │                   ┌──────▼──────┐                                        │
-│                   │  Runtime    │  Agents call Runtime API via web.fetch  │
+│                   │  Runtime    │  Agents call Runtime API via web_fetch  │
 │                   │  Service    │  Runtime calls MCP via callMcpTool()   │
 │                   │  :9090      │                                        │
 │                   └──────┬──────┘                                        │

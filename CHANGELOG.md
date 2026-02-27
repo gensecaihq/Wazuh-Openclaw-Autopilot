@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-02-27
+
+### Fixed
+- **OpenClaw tool name format**: Changed `web.fetch` to `web_fetch` in all agent `tools.allow` lists. OpenClaw uses snake_case identifiers (`web_fetch`) in per-agent allow/deny lists — dot notation (`web.fetch`) is only valid for global config paths (e.g., `tools.web.fetch.enabled`). The incorrect format caused OpenClaw to log "unknown entries (web.fetch)" warnings and agents could not make HTTP requests.
+- **Correlation agent missing `web_fetch`**: Added `web_fetch` to the correlation agent's allow list in `openclaw.json` (was present in air-gapped config but missing from reference template).
+- **Installer global `web_fetch` disabled**: Changed `"fetch": {"enabled": false}` to `{"enabled": true}` in the installer-generated `openclaw.json`. Without this, the `web_fetch` tool was globally disabled even when listed in agent allow lists.
+
 ## [2.4.0] - 2026-02-26
 
 ### Fixed
@@ -62,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Policy Guard role**: Primary enforcement is now inline at the runtime level; the Policy Guard agent provides supplementary LLM-based analysis
-- `web.fetch` enabled in both `openclaw.json` and `openclaw-airgapped.json` so agents can call the runtime API
+- `web_fetch` enabled in both `openclaw.json` and `openclaw-airgapped.json` so agents can call the runtime API
 - Bootstrap mode: Policy enforcement is fail-open (warns but allows) for easier testing
 - Production mode: Policy enforcement is fail-closed (denies if policy cannot be loaded)
 

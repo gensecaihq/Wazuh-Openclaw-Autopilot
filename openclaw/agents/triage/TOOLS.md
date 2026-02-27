@@ -55,7 +55,7 @@ Sort by `rule.level` descending so critical alerts are processed first.
 
 ## Runtime API Access
 
-The Triage Agent can call the runtime REST API at `http://localhost:9090` using `web.fetch`. All requests require Bearer authentication.
+The Triage Agent can call the runtime REST API at `http://localhost:9090` using `web_fetch`. All requests require Bearer authentication.
 
 ```
 Authorization: Bearer ${AUTOPILOT_MCP_AUTH}

@@ -90,7 +90,7 @@ Count distinct kill chain phases present in the cluster. Score:
 
 ## Runtime API Access
 
-The Correlation Agent can call the runtime REST API at `http://localhost:9090` using `web.fetch`. All requests require Bearer authentication.
+The Correlation Agent can call the runtime REST API at `http://localhost:9090` using `web_fetch`. All requests require Bearer authentication.
 
 ```
 Authorization: Bearer ${AUTOPILOT_MCP_AUTH}

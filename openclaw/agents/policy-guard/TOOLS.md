@@ -95,7 +95,7 @@ Count the evidence items attached to the case. A minimum of 3 evidence items is 
 
 ## Runtime API Access
 
-All runtime API requests use `web.fetch` and require Bearer authentication.
+All runtime API requests use `web_fetch` and require Bearer authentication.
 
 ```
 Authorization: Bearer ${AUTOPILOT_MCP_AUTH}

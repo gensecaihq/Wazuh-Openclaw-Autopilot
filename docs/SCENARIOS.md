@@ -324,7 +324,7 @@ Run the standard installer in the cloud, then configure `MCP_URL` to point to th
 |------|-----|------|----------|---------|
 | Runtime | MCP Server | 3000 | HTTPS | `callMcpTool()` — Wazuh data queries and actions |
 | Runtime | OpenClaw Gateway | 18789 | HTTP | Webhook dispatch — trigger downstream agents |
-| OpenClaw Agents | Runtime | 9090 | HTTP | `web.fetch` — case/plan CRUD, metrics |
+| OpenClaw Agents | Runtime | 9090 | HTTP | `web_fetch` — case/plan CRUD, metrics |
 | MCP Server | Wazuh API | 55000 | HTTPS | Wazuh Manager queries |
 | Runtime | Slack | 443 | HTTPS | Socket Mode notifications |
 | Prometheus | Runtime | 9090 | HTTP | Metrics scraping |

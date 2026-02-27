@@ -84,7 +84,7 @@ Match the investigation's attack classification to the appropriate playbook (bru
 
 ## Runtime API Access
 
-The Response Planner can call the runtime REST API at `http://localhost:9090` using `web.fetch`. All requests require Bearer authentication.
+The Response Planner can call the runtime REST API at `http://localhost:9090` using `web_fetch`. All requests require Bearer authentication.
 
 ```
 Authorization: Bearer ${AUTOPILOT_MCP_AUTH}
