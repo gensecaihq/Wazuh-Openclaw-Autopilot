@@ -3323,6 +3323,256 @@ function createServer() {
       }
 
       // =================================================================
+      // AGENT ACTION ENDPOINTS — GET-based write-back for OpenClaw agents
+      // OpenClaw's web_fetch tool is GET-only (no method/body/headers params).
+      // These endpoints let agents advance the pipeline via GET + query params.
+      // Same auth & validation as POST/PUT counterparts.
+      // =================================================================
+
+      // Agent action: update case status (replaces PUT /api/cases/:id)
+      if (url.pathname === "/api/agent-action/update-case" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "write");
+        if (!authResult.valid) {
+          sendAuthError(res, authResult, requestId);
+          return;
+        }
+
+        const caseId = url.searchParams.get("case_id");
+        const status = url.searchParams.get("status");
+        const dataParam = url.searchParams.get("data");
+
+        if (!caseId || !isValidCaseId(caseId)) {
+          sendJsonError(res, 400, "Invalid or missing case_id", requestId);
+          return;
+        }
+
+        const updates = {};
+        if (status) updates.status = status;
+        if (dataParam) {
+          try {
+            Object.assign(updates, JSON.parse(dataParam));
+          } catch {
+            sendJsonError(res, 400, "Invalid JSON in data parameter", requestId);
+            return;
+          }
+        }
+
+        if (Object.keys(updates).length === 0) {
+          sendJsonError(res, 400, "No updates provided (use status and/or data params)", requestId);
+          return;
+        }
+
+        try {
+          const updatedCase = await updateCase(caseId, updates);
+          log("info", "agent-action", "Case updated via agent action", { case_id: caseId, status });
+          res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
+          res.end(JSON.stringify({ ok: true, case_id: caseId, status: updatedCase.status }));
+        } catch (err) {
+          if (err.message.includes("not found")) {
+            sendJsonError(res, 404, "Case not found", requestId);
+          } else if (err.message.includes("Invalid status transition")) {
+            sendJsonError(res, 400, err.message, requestId);
+          } else {
+            throw err;
+          }
+        }
+        return;
+      }
+
+      // Agent action: create response plan (replaces POST /api/plans)
+      if (url.pathname === "/api/agent-action/create-plan" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "write");
+        if (!authResult.valid) {
+          sendAuthError(res, authResult, requestId);
+          return;
+        }
+
+        const caseId = url.searchParams.get("case_id");
+        const title = url.searchParams.get("title");
+        const description = url.searchParams.get("description") || "";
+        const riskLevel = url.searchParams.get("risk_level") || "medium";
+        const actionsParam = url.searchParams.get("actions");
+
+        if (!caseId || !isValidCaseId(caseId)) {
+          sendJsonError(res, 400, "Invalid or missing case_id", requestId);
+          return;
+        }
+        if (!title) {
+          sendJsonError(res, 400, "Missing title parameter", requestId);
+          return;
+        }
+
+        let actions;
+        try {
+          actions = JSON.parse(actionsParam || "[]");
+        } catch {
+          sendJsonError(res, 400, "Invalid JSON in actions parameter", requestId);
+          return;
+        }
+        if (!Array.isArray(actions) || actions.length === 0) {
+          sendJsonError(res, 400, "actions parameter must be a non-empty JSON array", requestId);
+          return;
+        }
+
+        // Verify case exists
+        try {
+          await getCase(caseId);
+        } catch {
+          sendJsonError(res, 404, `Case ${caseId} not found — cannot create plan for non-existent case`, requestId);
+          return;
+        }
+
+        try {
+          const planData = { case_id: caseId, title, description, risk_level: riskLevel, actions };
+          const plan = createResponsePlan(planData);
+
+          try {
+            await updateCase(caseId, {
+              plans: [{
+                plan_id: plan.plan_id,
+                state: plan.state,
+                created_at: plan.created_at,
+                title: plan.title,
+                risk_level: plan.risk_level,
+                actions_count: plan.actions.length,
+              }],
+            });
+          } catch (err) {
+            log("warn", "plans", "Failed to update case with plan", {
+              plan_id: plan.plan_id,
+              case_id: caseId,
+              error: err.message,
+            });
+          }
+
+          log("info", "agent-action", "Plan created via agent action", { plan_id: plan.plan_id, case_id: caseId });
+          res.writeHead(201, { "Content-Type": JSON_CONTENT_TYPE });
+          res.end(JSON.stringify({
+            ok: true,
+            plan_id: plan.plan_id,
+            state: plan.state,
+            message: "Plan created in PROPOSED state. Requires Tier 1 approval before execution.",
+          }));
+        } catch (err) {
+          sendJsonError(res, 400, err.message, requestId);
+        }
+        return;
+      }
+
+      // Agent action: approve plan (replaces POST /api/plans/:id/approve)
+      if (url.pathname === "/api/agent-action/approve-plan" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "write");
+        if (!authResult.valid) {
+          sendAuthError(res, authResult, requestId);
+          return;
+        }
+
+        const planId = url.searchParams.get("plan_id");
+        const approverId = url.searchParams.get("approver_id");
+        const decision = url.searchParams.get("decision") || "allow";
+        const reason = url.searchParams.get("reason") || "";
+
+        if (!planId || !isValidPlanId(planId)) {
+          sendJsonError(res, 400, "Invalid or missing plan_id", requestId);
+          return;
+        }
+        if (!approverId || !isValidIdentityId(approverId)) {
+          sendJsonError(res, 400, "Invalid or missing approver_id", requestId);
+          return;
+        }
+
+        try {
+          if (decision === "deny" || decision === "escalate") {
+            const plan = rejectPlan(planId, approverId, reason || decision);
+            log("info", "agent-action", "Plan rejected via agent action", { plan_id: planId, decision });
+            res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
+            res.end(JSON.stringify({ ok: true, plan_id: planId, state: plan.state, decision }));
+            return;
+          }
+
+          // Policy enforcement: check approver authorization
+          const planForCheck = getPlan(planId, { updateExpiry: false });
+          const actionTypes = (planForCheck.actions || []).map((a) => a.type);
+          const approverResult = policyCheckApprover(approverId, actionTypes, planForCheck.risk_level);
+          if (!approverResult.authorized) {
+            incrementMetric("policy_denies_total", { reason: "approver_denied" });
+            sendJsonError(res, 403, `Approver not authorized: ${approverResult.reason}`, requestId);
+            return;
+          }
+
+          const plan = approvePlan(planId, approverId, reason);
+          log("info", "agent-action", "Plan approved via agent action", { plan_id: planId, approver_id: approverId });
+          res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
+          res.end(JSON.stringify({
+            ok: true,
+            plan_id: planId,
+            state: plan.state,
+            message: "Plan APPROVED (Tier 1 complete). Ready for execution.",
+          }));
+        } catch (err) {
+          sendJsonError(res, err.message.includes("not found") ? 404 : 400, err.message, requestId);
+        }
+        return;
+      }
+
+      // Agent action: execute plan (replaces POST /api/plans/:id/execute)
+      if (url.pathname === "/api/agent-action/execute-plan" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "write");
+        if (!authResult.valid) {
+          sendAuthError(res, authResult, requestId);
+          return;
+        }
+
+        const planId = url.searchParams.get("plan_id");
+        const executorId = url.searchParams.get("executor_id");
+
+        if (!planId || !isValidPlanId(planId)) {
+          sendJsonError(res, 400, "Invalid or missing plan_id", requestId);
+          return;
+        }
+        if (!executorId || !isValidIdentityId(executorId)) {
+          sendJsonError(res, 400, "Invalid or missing executor_id", requestId);
+          return;
+        }
+
+        try {
+          // Policy enforcement: check evidence sufficiency
+          const planForEvidence = getPlan(planId, { updateExpiry: false });
+          const evidenceResult = await policyCheckEvidence(planForEvidence.actions, planForEvidence.case_id);
+          if (!evidenceResult.sufficient) {
+            incrementMetric("policy_denies_total", { reason: "insufficient_evidence" });
+            sendJsonError(res, 403, `Insufficient evidence: ${evidenceResult.reason}`, requestId);
+            return;
+          }
+
+          const plan = await executePlan(planId, executorId);
+          const statusCode = plan.state === PLAN_STATES.COMPLETED ? 200 : 207;
+          log("info", "agent-action", "Plan executed via agent action", { plan_id: planId, state: plan.state });
+          res.writeHead(statusCode, { "Content-Type": JSON_CONTENT_TYPE });
+          res.end(JSON.stringify({
+            ok: true,
+            plan_id: planId,
+            state: plan.state,
+            message: plan.state === PLAN_STATES.COMPLETED
+              ? "Plan EXECUTED successfully."
+              : "Plan execution completed with some failures.",
+          }));
+        } catch (err) {
+          if (err.message.includes("Responder capability is DISABLED")) {
+            res.writeHead(403, { "Content-Type": JSON_CONTENT_TYPE });
+            res.end(JSON.stringify({
+              error: err.message,
+              request_id: requestId,
+              responder_status: getResponderStatus(),
+            }));
+            return;
+          }
+          sendJsonError(res, err.message.includes("not found") ? 404 : 400, err.message, requestId);
+        }
+        return;
+      }
+
+      // =================================================================
       // RESPONSE PLANS API - Two-Tier Human-in-the-Loop
       // =================================================================
 

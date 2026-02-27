@@ -55,11 +55,9 @@ Sort by `rule.level` descending so critical alerts are processed first.
 
 ## Runtime API Access
 
-The Triage Agent can call the runtime REST API at `http://localhost:9090` using `web_fetch`. All requests require Bearer authentication.
+The Triage Agent calls the runtime REST API at `http://localhost:9090` using `web_fetch`. All requests require the auth token as a query parameter.
 
-```
-Authorization: Bearer ${AUTOPILOT_MCP_AUTH}
-```
+> **Note**: These endpoints use GET with query parameters because OpenClaw's `web_fetch` tool only supports GET requests. The original REST endpoints (PUT/POST) still work for direct API consumers.
 
 ### List Existing Cases
 
@@ -69,35 +67,24 @@ Check for duplicates before creating a new case.
 GET http://localhost:9090/api/cases
 ```
 
-### Create a New Case
+### Read a Case
 
 ```
-POST http://localhost:9090/api/cases
-Content-Type: application/json
-
-{
-  "case_id": "CASE-YYYYMMDD-xxxxxxxx",
-  "title": "Short case title",
-  "summary": "Case summary text",
-  "severity": "low|medium|high|critical",
-  "entities": { ... },
-  "timeline": [ ... ],
-  "mitre": { ... },
-  "evidence_refs": [ ... ]
-}
+GET http://localhost:9090/api/cases/{case_id}
 ```
 
 ### Update Case Status
 
-Set `status: "triaged"` to hand off to the Correlation Agent.
+Set `status=triaged` to hand off to the Correlation Agent. The runtime automatically dispatches a webhook to trigger the next agent.
 
 ```
-PUT http://localhost:9090/api/cases/{case_id}
-Content-Type: application/json
-
-{
-  "status": "triaged"
-}
+GET http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=triaged
 ```
 
-**Note**: Setting `status: "triaged"` automatically triggers the Correlation Agent.
+To include additional data (e.g., entities, timeline), URL-encode a JSON object in the `data` parameter:
+
+```
+GET http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=triaged&data={url_encoded_json}
+```
+
+**Note**: Setting `status=triaged` automatically triggers the Correlation Agent.

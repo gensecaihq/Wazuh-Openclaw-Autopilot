@@ -101,11 +101,7 @@ Example: `reports/daily_digest/2026-02-17/daily_digest_2026-02-17T08:00:00Z.json
 
 ## Runtime API Access
 
-The Reporting Agent can call the runtime REST API at `http://localhost:9090` using `web_fetch`. All requests require Bearer authentication.
-
-```
-Authorization: Bearer ${AUTOPILOT_MCP_AUTH}
-```
+The Reporting Agent calls the runtime REST API at `http://localhost:9090` using `web_fetch`. All endpoints are GET-based.
 
 ### Prometheus Metrics
 

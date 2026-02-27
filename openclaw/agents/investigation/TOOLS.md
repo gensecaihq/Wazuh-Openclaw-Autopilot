@@ -98,11 +98,9 @@ Sysmon process creation events (rule ID 92001, 92002) contain `processGuid` and 
 
 ## Runtime API Access
 
-The Investigation Agent can call the runtime REST API at `http://localhost:9090` using `web_fetch`. All requests require Bearer authentication.
+The Investigation Agent calls the runtime REST API at `http://localhost:9090` using `web_fetch`. All endpoints use GET requests with query parameters.
 
-```
-Authorization: Bearer ${AUTOPILOT_MCP_AUTH}
-```
+> **Note**: These endpoints use GET with query parameters because OpenClaw's `web_fetch` tool only supports GET requests.
 
 ### Read Case for Deep Investigation
 
@@ -117,13 +115,19 @@ Returns the full case object including triage data, correlation results, entitie
 After completing all pivot queries, baseline comparisons, and IOC extraction, write the findings back and advance the case status.
 
 ```
-PUT http://localhost:9090/api/cases/{case_id}
-Content-Type: application/json
+GET http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=investigated&data={url_encoded_json}
+```
 
+The `data` parameter is a URL-encoded JSON object containing your investigation findings:
+
+```json
 {
-  "investigation": { ... },
-  "status": "investigated"
+  "investigation": {
+    "findings": "...",
+    "iocs": [...],
+    "baseline_comparison": {...}
+  }
 }
 ```
 
-Setting `status: "investigated"` automatically triggers the Response Planner.
+Setting `status=investigated` automatically triggers the Response Planner.

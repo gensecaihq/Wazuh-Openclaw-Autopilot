@@ -4,6 +4,8 @@
 
 The Runtime Service runs on port 9090 by default (configurable via `RUNTIME_PORT` env var).
 
+> **Note**: These endpoints use GET with query parameters because OpenClaw's `web_fetch` tool only supports GET requests.
+
 ### Retrieve a Plan for Evaluation
 
 ```
@@ -15,29 +17,19 @@ Returns the full plan object including `case_id`, `risk_level`, `actions`, and c
 ### Submit Approval Decision
 
 ```
-POST http://localhost:9090/api/plans/{plan_id}/approve
-Content-Type: application/json
-
-{
-  "token": "approval-token-string",
-  "approver_id": "U12345678",
-  "decision": "allow|deny|escalate",
-  "reason_code": "REASON_CODE_HERE",
-  "reason_message": "Human-readable explanation",
-  "evaluation_details": { ... }
-}
+GET http://localhost:9090/api/agent-action/approve-plan?plan_id={plan_id}&approver_id={approver_id}&decision=allow&reason={reason}
 ```
+
+Parameters:
+- `plan_id` (required) — The plan to approve
+- `approver_id` (required) — Your approver identity
+- `decision` (required) — `allow`, `deny`, or `escalate`
+- `reason` (optional) — Human-readable explanation
 
 ### Submit Execution Authorization (Tier 2)
 
 ```
-POST http://localhost:9090/api/plans/{plan_id}/execute
-Content-Type: application/json
-
-{
-  "token": "execution-token-string",
-  "approver_id": "U12345678"
-}
+GET http://localhost:9090/api/agent-action/execute-plan?plan_id={plan_id}&executor_id={executor_id}
 ```
 
 ## Token Validation Flow
@@ -95,11 +87,7 @@ Count the evidence items attached to the case. A minimum of 3 evidence items is 
 
 ## Runtime API Access
 
-All runtime API requests use `web_fetch` and require Bearer authentication.
-
-```
-Authorization: Bearer ${AUTOPILOT_MCP_AUTH}
-```
+All runtime API requests use `web_fetch` with GET endpoints.
 
 **Note on inline policy enforcement**: Policy enforcement is now handled inline by the runtime service at plan creation, approval, and execution time. The runtime reads `policy.yaml` and enforces action allowlists, confidence thresholds, approver authorization, and evidence requirements automatically.
 

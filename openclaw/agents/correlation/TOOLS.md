@@ -90,11 +90,9 @@ Count distinct kill chain phases present in the cluster. Score:
 
 ## Runtime API Access
 
-The Correlation Agent can call the runtime REST API at `http://localhost:9090` using `web_fetch`. All requests require Bearer authentication.
+The Correlation Agent calls the runtime REST API at `http://localhost:9090` using `web_fetch`. All endpoints use GET requests with query parameters.
 
-```
-Authorization: Bearer ${AUTOPILOT_MCP_AUTH}
-```
+> **Note**: These endpoints use GET with query parameters because OpenClaw's `web_fetch` tool only supports GET requests.
 
 ### List Cases (Find Triaged Cases)
 
@@ -117,13 +115,19 @@ Returns the complete case object including entities, timeline, MITRE mappings, a
 After computing entity overlaps, temporal clusters, and attack chain scores, write the correlation results back and advance the case status.
 
 ```
-PUT http://localhost:9090/api/cases/{case_id}
-Content-Type: application/json
+GET http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=correlated&data={url_encoded_json}
+```
 
+The `data` parameter is a URL-encoded JSON object containing your correlation results:
+
+```json
 {
-  "correlation": { ... },
-  "status": "correlated"
+  "correlation": {
+    "correlated_alert_ids": ["..."],
+    "attack_chain": "brute_force",
+    "score": 0.85
+  }
 }
 ```
 
-Setting `status: "correlated"` automatically triggers the Investigation Agent.
+Setting `status=correlated` automatically triggers the Investigation Agent.

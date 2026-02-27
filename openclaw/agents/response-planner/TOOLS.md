@@ -2,29 +2,39 @@
 
 ## Runtime API: Submit Plans
 
-**Endpoint**: `POST http://localhost:9090/api/plans`
+**Endpoint**: `GET http://localhost:9090/api/agent-action/create-plan`
 
-The Runtime Service port defaults to 9090 but is configurable via the `RUNTIME_PORT` environment variable. Always check this variable before making requests.
+The Runtime Service port defaults to 9090 but is configurable via the `RUNTIME_PORT` environment variable.
 
-### Request Structure
+> **Note**: This endpoint uses GET with query parameters because OpenClaw's `web_fetch` tool only supports GET requests.
+
+### Submitting a Plan
+
+Build the request URL with these query parameters:
+
+- `case_id` (required) — The case this plan responds to
+- `title` (required) — Short description of the response action
+- `description` (optional) — Detailed explanation
+- `risk_level` (optional, default: "medium") — `low|medium|high|critical`
+- `actions` (required) — URL-encoded JSON array of actions
+
+```
+GET http://localhost:9090/api/agent-action/create-plan?case_id={case_id}&title={url_encoded_title}&risk_level={level}&actions={url_encoded_json_array}
+```
+
+**Actions JSON structure** (URL-encode this array):
 
 ```json
-{
-  "case_id": "CASE-YYYYMMDD-xxxxxxxx",
-  "title": "Short description of the response action",
-  "description": "Detailed explanation of what the plan does and why",
-  "risk_level": "low|medium|high|critical",
-  "actions": [
-    {
-      "type": "block_ip|host_deny|restart_wazuh|kill_process|quarantine_file|isolate_host|disable_user",
-      "target": "IP address, hostname, process name, or file path",
-      "params": {
-        "duration": "24h",
-        "reason": "Human-readable justification"
-      }
+[
+  {
+    "type": "block_ip|host_deny|restart_wazuh|kill_process|quarantine_file|isolate_host|disable_user",
+    "target": "IP address, hostname, process name, or file path",
+    "params": {
+      "duration": "24h",
+      "reason": "Human-readable justification"
     }
-  ]
-}
+  }
+]
 ```
 
 ### Validating Your Request
@@ -37,7 +47,7 @@ Before submitting, verify:
 
 ### Response Handling
 
-- **201 Created**: Plan accepted, enters `proposed` state, Slack notification sent
+- **201 Created**: Plan accepted, enters `proposed` state
 - **400 Bad Request**: Invalid plan structure -- fix and resubmit
 - **500 Server Error**: Runtime Service issue -- retry after delay
 
@@ -84,11 +94,7 @@ Match the investigation's attack classification to the appropriate playbook (bru
 
 ## Runtime API Access
 
-The Response Planner can call the runtime REST API at `http://localhost:9090` using `web_fetch`. All requests require Bearer authentication.
-
-```
-Authorization: Bearer ${AUTOPILOT_MCP_AUTH}
-```
+The Response Planner calls the runtime REST API at `http://localhost:9090` using `web_fetch`.
 
 ### Read Case for Context
 
@@ -98,4 +104,4 @@ Before building a response plan, fetch the full case to review investigation fin
 GET http://localhost:9090/api/cases/{case_id}
 ```
 
-The `POST /api/plans` endpoint for submitting plans is documented above in the "Runtime API: Submit Plans" section.
+The `GET /api/agent-action/create-plan` endpoint for submitting plans is documented above in the "Runtime API: Submit Plans" section.

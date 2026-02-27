@@ -4,13 +4,10 @@
 
 Trigger execution of an approved plan via the Runtime Service API.
 
-```
-POST http://localhost:9090/api/plans/{plan_id}/execute
-Content-Type: application/json
+> **Note**: This endpoint uses GET with query parameters because OpenClaw's `web_fetch` tool only supports GET requests.
 
-{
-  "executor_id": "U1234567890"
-}
+```
+GET http://localhost:9090/api/agent-action/execute-plan?plan_id={plan_id}&executor_id={executor_id}
 ```
 
 **Preconditions checked by the service**:

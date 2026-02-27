@@ -526,6 +526,101 @@ Required fields: `executor_id`.
 
 ---
 
+### Agent Action Endpoints (GET-based)
+
+OpenClaw's `web_fetch` tool only supports GET requests — it has no `method`, `body`, or `headers` parameters. These endpoints let OpenClaw agents perform write operations via GET with query parameters. They have the same auth requirements and call the same underlying functions as the standard REST endpoints.
+
+> These are internal endpoints for AI agent use. The standard PUT/POST endpoints remain available for direct API consumers.
+
+#### GET /api/agent-action/update-case
+
+Updates a case's status and/or data. Equivalent to `PUT /api/cases/:caseId`.
+
+**Query Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `case_id` | Yes | The case ID to update |
+| `status` | No | New status: `triaged`, `correlated`, `investigated` |
+| `data` | No | URL-encoded JSON object of additional fields to merge |
+
+**Example:**
+```bash
+# Advance case to triaged (triggers correlation agent)
+curl "http://127.0.0.1:9090/api/agent-action/update-case?case_id=CASE-20260217-abc12345&status=triaged"
+
+# Update with correlation data
+curl "http://127.0.0.1:9090/api/agent-action/update-case?case_id=CASE-20260217-abc12345&status=correlated&data=%7B%22correlation%22%3A%7B%22score%22%3A0.85%7D%7D"
+```
+
+**Response** (200 OK):
+```json
+{"ok": true, "case_id": "CASE-20260217-abc12345", "status": "triaged"}
+```
+
+Status transitions trigger the same webhook dispatches as `PUT /api/cases/:caseId`:
+| Status | Webhook | Agent Triggered |
+|--------|---------|-----------------|
+| `triaged` | `/webhook/case-created` | Correlation |
+| `correlated` | `/webhook/investigation-request` | Investigation |
+| `investigated` | `/webhook/plan-request` | Response Planner |
+
+#### GET /api/agent-action/create-plan
+
+Creates a response plan. Equivalent to `POST /api/plans`.
+
+**Query Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `case_id` | Yes | The case this plan responds to |
+| `title` | Yes | Short description of the response |
+| `description` | No | Detailed explanation |
+| `risk_level` | No | `low`/`medium`/`high`/`critical` (default: `medium`) |
+| `actions` | Yes | URL-encoded JSON array of actions |
+
+**Example:**
+```bash
+curl "http://127.0.0.1:9090/api/agent-action/create-plan?case_id=CASE-20260217-abc12345&title=Block%20attacker&risk_level=low&actions=%5B%7B%22type%22%3A%22block_ip%22%2C%22target%22%3A%221.2.3.4%22%7D%5D"
+```
+
+**Response** (201 Created):
+```json
+{"ok": true, "plan_id": "PLAN-1708171800000-abcd1234", "state": "proposed", "message": "..."}
+```
+
+#### GET /api/agent-action/approve-plan
+
+Approves or denies a plan (Tier 1). Equivalent to `POST /api/plans/:planId/approve` and `POST /api/plans/:planId/reject`.
+
+**Query Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `plan_id` | Yes | The plan to approve/deny |
+| `approver_id` | Yes | Approver identity |
+| `decision` | No | `allow` (default), `deny`, or `escalate` |
+| `reason` | No | Human-readable explanation |
+
+**Response** (200 OK):
+```json
+{"ok": true, "plan_id": "PLAN-...", "state": "approved"}
+```
+
+#### GET /api/agent-action/execute-plan
+
+Executes an approved plan (Tier 2). Equivalent to `POST /api/plans/:planId/execute`.
+
+**Query Parameters:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `plan_id` | Yes | The plan to execute |
+| `executor_id` | Yes | Executor identity |
+
+**Response** (200 OK or 207 Multi-Status):
+```json
+{"ok": true, "plan_id": "PLAN-...", "state": "completed"}
+```
+
+---
+
 ## Error Responses
 
 ### 400 Bad Request
