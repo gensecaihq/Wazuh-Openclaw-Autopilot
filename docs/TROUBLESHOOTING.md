@@ -196,12 +196,32 @@ If triage processes alerts but no downstream agents (correlation, investigation,
 
 **Check:**
 1. `web_fetch` is in each agent's `tools.allow` list (not `web.fetch`)
-2. Global `tools.web.fetch.enabled` is `true`
-3. OpenClaw gateway logs show no "unknown entries" warnings
+2. `web_fetch` and `sessions_send` are in the **global** `tools.allow` list — agent-level overrides cannot re-add tools blocked at global level
+3. Global `tools.web.fetch.enabled` is `true`
+4. OpenClaw gateway logs show no "unknown entries" warnings
+
+The global `tools.allow` must include every tool that any agent needs:
+```json
+"tools": {
+  "profile": "minimal",
+  "allow": ["read", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+  "deny": ["browser", "canvas"],
+  "web": {
+    "search": { "enabled": false },
+    "fetch": { "enabled": true }
+  }
+}
+```
+
+If `web_fetch` is only in agent allow lists but missing from the global allow list, agents silently cannot make HTTP requests — the pipeline stalls with no error.
 
 ```bash
 journalctl -u openclaw-gateway | grep "unknown entries"
 ```
+
+### Unknown keys cause OpenClaw startup failure
+
+OpenClaw validates its config with a strict zod schema. Unknown keys like `"mode": "local"` in the `gateway` section will cause validation errors. Only use keys documented in the reference templates (`openclaw.json` and `openclaw-airgapped.json`).
 
 ---
 

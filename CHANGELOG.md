@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-02-27
+
+### Fixed
+- **Global `tools.allow` missing `web_fetch` and `sessions_send`**: Added both to the global `tools.allow` list in `openclaw.json`, `openclaw-airgapped.json`, and the installer. Agent-level allow lists cannot override the global policy — if `web_fetch` was missing from the global list, agents silently could not make HTTP requests, causing the pipeline to stall after triage with no error.
+- **JWT exchange race condition**: Concurrent callers of `getMcpAuthToken()` received the raw Promise object instead of the resolved token string, causing `[object Promise]` to be sent as the Bearer token. Added `await` to the dedup return path.
+- **MCP session init race condition**: Added dedup guard (`mcpSessionInitPromise`) to `ensureMcpSession()` to prevent concurrent callers from racing to initialize the MCP session. Uses the same pattern as the JWT exchange dedup.
+- **X-Forwarded-For IP extraction**: Changed from `.pop()` (last/proxy IP) to `[0]` (first/client IP) in both auth validation and rate limiting. The previous behavior allowed attackers to spoof their IP by adding an X-Forwarded-For header, bypassing rate limiting and auth lockout.
+- **Localhost bootstrap scope**: Changed `scope: "read"` to `scope: "write"` for localhost requests in bootstrap mode, matching the documented and actual behavior (write endpoints only checked `authResult.valid`, not scope).
+- **`createCase()` race condition**: Wrapped in `withCaseLock()` to prevent concurrent create+update on the same case ID from causing lost updates.
+- **HTTP 401 for scope-insufficient tokens**: Service tokens with read-only scope hitting write endpoints now correctly return 403 Forbidden instead of 401 Unauthorized.
+- **MCP RPC error double-counts metrics**: JSON-RPC errors from successful HTTP responses no longer count as both "success" and "error" in Prometheus metrics.
+- **Plan stuck in EXECUTING state**: Plans that encounter an unexpected throw during execution are now marked as FAILED in the `finally` block instead of remaining in EXECUTING state permanently.
+- **`listPlans()` stale expiry state**: Now calls `getPlan()` per entry to trigger expiry checks, ensuring expired plans are correctly reflected in list responses.
+- **Dead metric `action_plans_proposed_total`**: Removed unused metric that was always 0 (replaced by `plans_created_total`).
+- **Installer `AUTOPILOT_MODE=bootstrap` hardcoded**: The `.env` template always set bootstrap mode regardless of install mode. Now uses a placeholder substituted based on `$INSTALL_MODE` (full → production, bootstrap/mcp-only → bootstrap).
+- **Installer `mcp-only` mode crash**: `start_services()` unconditionally tried to start `wazuh-autopilot.service` which doesn't exist in mcp-only mode. Now guarded.
+- **Installer missing `apt-get update`**: Added package index refresh after adding the nodesource repository, fixing Node.js install failures on Debian/Ubuntu when other dependencies were already present.
+- **Installer runtime `ReadWritePaths`**: Added `$RUNTIME_DST` to the systemd service `ReadWritePaths` under `ProtectSystem=strict` so Node.js can write to its working directory.
+- **Installer `check_root` ordering**: Moved root check before interactive prompts so non-root users aren't forced through the consent flow before being told they need root.
+- **Installer hook mappings**: Added `"path": "/webhook"`, `messageTemplate`, and `name` to all 6 hook mappings; changed absolute paths to relative.
+- **Installer agent tool permissions**: Moved `edit` from deny to allow lists for triage, correlation, investigation, and policy-guard agents to match reference templates.
+- **Installer missing env vars**: Added `OPENCLAW_GATEWAY_URL` and `AUTOPILOT_RUNTIME_URL` to the generated `openclaw.json` env section.
+- **Slack slash command error leak**: Replaced raw `err.message` with `safeErrorMessage()` in approve/execute/reject catch blocks to prevent internal details from being exposed in Slack.
+- **Slack `safeErrorMessage` pattern mismatch**: The pattern `/^Tier 1 required/` did not match the actual error `"Plan must be approved before execution (Tier 1 required)"`. Added matching pattern.
+- **Slack `formatPlansMessage` unescaped**: Added `escapeMrkdwn()` to plan title and risk level in the plans list message.
+- **Slack `postCaseAlert` NaN timestamp**: Added `isNaN` guard with fallback text when `created_at` is invalid or missing.
+
 ## [2.4.1] - 2026-02-27
 
 ### Fixed
