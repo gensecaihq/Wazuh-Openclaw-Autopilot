@@ -37,10 +37,15 @@
   },
 
   // ---------------------------------------------------------------------------
-  // CUSTOM MODEL PROVIDERS — Ollama via OpenAI-compatible API
+  // CUSTOM MODEL PROVIDERS — Ollama via native API
   // ---------------------------------------------------------------------------
   // Ollama is not a built-in provider; register it here as a custom provider.
-  // The baseUrl points to Ollama's OpenAI-compatible endpoint.
+  // The baseUrl points to Ollama's native API endpoint (port 11434, no /v1).
+  //
+  // WARNING: Do NOT use "api": "openai-completions" with baseUrl ending in /v1.
+  // The OpenAI-compatible endpoint breaks tool calling — models output raw tool
+  // JSON as plain text instead of invoking tools. Use "api": "ollama" with the
+  // native endpoint for reliable tool invocation (web_fetch, etc.).
   //
   // IMPORTANT: "reasoning" must be false for standard models (Llama, Mistral,
   // Qwen, CodeLlama). Set true ONLY for models with native thinking support
@@ -50,9 +55,8 @@
   "models": {
     "providers": {
       "ollama": {
-        "baseUrl": "http://127.0.0.1:11434/v1",
-        "apiKey": "ollama",
-        "api": "openai-completions",
+        "baseUrl": "http://127.0.0.1:11434",
+        "api": "ollama",
         "models": [
           { "id": "llama3.3", "name": "Llama 3.3 70B", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 },
           { "id": "mistral", "name": "Mistral 7B", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 32768, "maxTokens": 4096 },

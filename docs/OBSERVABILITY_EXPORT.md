@@ -133,6 +133,16 @@ autopilot_feedback_submitted_total{verdict="false_positive"}
 autopilot_feedback_submitted_total{verdict="needs_review"}
 ```
 
+#### Stalled Pipeline Metrics
+
+```prometheus
+# Counter: Number of stalled cases detected
+autopilot_stalled_pipeline_detected_total
+
+# Counter: Number of webhooks re-dispatched for stalled cases
+autopilot_stalled_pipeline_redispatched_total
+```
+
 #### Error Metrics
 
 ```prometheus

@@ -738,6 +738,9 @@ All responses include security headers:
 | `MCP_MAX_RETRIES` | 3 | Max retries for MCP tool calls |
 | `AUTOPILOT_DATA_DIR` | /var/lib/wazuh-autopilot | Data directory for cases and plans |
 | `AUTOPILOT_CONFIG_DIR` | /etc/wazuh-autopilot | Config directory for policies |
+| `STALLED_PIPELINE_ENABLED` | true | Enable stalled-pipeline detection and re-dispatch |
+| `STALLED_PIPELINE_THRESHOLD_MINUTES` | 30 | Minutes before a case is considered stalled |
+| `STALLED_PIPELINE_CHECK_INTERVAL_MS` | 300000 | Interval between stall checks (5 min) |
 | `SLACK_APP_TOKEN` | (none) | Slack app-level token (xapp-...) for Socket Mode |
 | `SLACK_BOT_TOKEN` | (none) | Slack bot token (xoxb-...) for API calls |
 | `SLACK_CHANNEL_ALERTS` | (none) | Slack channel ID for alert notifications |

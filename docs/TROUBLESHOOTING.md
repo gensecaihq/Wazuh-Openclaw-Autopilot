@@ -221,6 +221,22 @@ If agent sessions fail with `400 "llama3.1:8b" does not support thinking`, the m
 
 Only set `"reasoning": true` for models with native structured thinking output: `deepseek-r1`, `qwq`, and similar reasoning-specific models. After updating, restart OpenClaw.
 
+### Tool calls not working / agents output raw JSON text (Ollama)
+
+If agents produce output tokens but never actually invoke tools like `web_fetch`, the Ollama provider is likely configured with the OpenAI-compatible API mode. This breaks tool calling — models output raw tool JSON as plain text.
+
+**Fix:** In `~/.openclaw/openclaw.json`, ensure the Ollama provider uses the native API:
+
+```json
+"ollama": {
+  "baseUrl": "http://127.0.0.1:11434",
+  "api": "ollama",
+  ...
+}
+```
+
+Do **not** use `"api": "openai-completions"` with `"baseUrl": "http://127.0.0.1:11434/v1"`. After updating, restart OpenClaw.
+
 ### Pipeline stalls after triage (agents don't advance)
 
 If triage processes alerts but no downstream agents (correlation, investigation, etc.) activate, the most common cause is agents unable to call the Runtime API to transition case status.
@@ -249,6 +265,29 @@ If `web_fetch` is only in agent allow lists but missing from the global allow li
 ```bash
 journalctl -u openclaw-gateway | grep "unknown entries"
 ```
+
+### Stalled pipeline detector (automatic recovery)
+
+The runtime includes a stalled-pipeline detector that automatically re-dispatches webhooks for cases stuck in transient statuses (`open`, `triaged`, `correlated`, `investigated`, `planned`, `approved`). If a case remains in one of these statuses longer than the threshold, the detector re-sends the appropriate webhook to give the agent another chance.
+
+**Configuration (environment variables):**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STALLED_PIPELINE_ENABLED` | `true` | Enable/disable the detector |
+| `STALLED_PIPELINE_THRESHOLD_MINUTES` | `30` | Minutes before a case is considered stalled |
+| `STALLED_PIPELINE_CHECK_INTERVAL_MS` | `300000` | Interval between checks (5 min) |
+
+**Check logs for stalled-pipeline detections:**
+```bash
+journalctl -u wazuh-autopilot | grep "stalled-pipeline"
+```
+
+**Metrics:**
+- `autopilot_stalled_pipeline_detected_total` — number of stalled cases found
+- `autopilot_stalled_pipeline_redispatched_total` — number of webhooks re-dispatched
+
+To test quickly, set `STALLED_PIPELINE_THRESHOLD_MINUTES=1` and ingest an alert without advancing it past `open`. After 1 minute + the check interval, you should see re-dispatch logs.
 
 ### Gateway start blocked: `set gateway.mode=local`
 

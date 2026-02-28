@@ -114,12 +114,14 @@ chmod 600 ~/.openclaw/openclaw.json
 ```
 
 The air-gapped config (`openclaw/openclaw-airgapped.json`) sets:
-- Ollama as the sole LLM provider
+- Ollama as the sole LLM provider via the **native Ollama API** (`"api": "ollama"`)
 - All cloud providers (Anthropic, OpenAI, Google, etc.) disabled
 - Memory enabled with local GGUF embeddings (no cloud API needed)
 - `llama3.3` as the primary model, `mistral` for heartbeats/reporting
 - Web search disabled
 - No external network calls required
+
+> **Important:** The Ollama provider must use `"api": "ollama"` with `"baseUrl": "http://127.0.0.1:11434"` (no `/v1` suffix). Using `"api": "openai-completions"` with the `/v1` endpoint breaks tool calling — models output raw tool JSON as plain text instead of invoking tools like `web_fetch`, causing the agent pipeline to stall.
 
 ### Customizing Models
 
@@ -391,6 +393,32 @@ Ollama defaults to a 4096 context window regardless of the model's capability. T
 # Set globally via environment variable
 export OLLAMA_NUM_CTX=32768
 ollama serve
+```
+
+### Tool calls not working / agents output raw JSON text
+
+If agents produce output but never invoke `web_fetch` (or other tools), the most likely cause is using the OpenAI-compatible API mode instead of the native Ollama API.
+
+**Symptoms:**
+- Triage agent produces tokens but pipeline stalls after triage
+- Agent output contains raw JSON like `{"name": "web_fetch", "arguments": {...}}` as plain text
+- No webhook dispatches in runtime logs
+
+**Fix:** In `~/.openclaw/openclaw.json`, change the Ollama provider config:
+
+```json
+"ollama": {
+  "baseUrl": "http://127.0.0.1:11434",
+  "api": "ollama",
+  ...
+}
+```
+
+Do **not** use `"api": "openai-completions"` or `"baseUrl": "http://127.0.0.1:11434/v1"`. The `/v1` OpenAI-compatible endpoint does not reliably support tool calling.
+
+After updating, restart OpenClaw:
+```bash
+sudo systemctl restart openclaw
 ```
 
 ### 400 "does not support thinking"

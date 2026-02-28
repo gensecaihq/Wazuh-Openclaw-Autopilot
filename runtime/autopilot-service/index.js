@@ -91,6 +91,10 @@ const config = {
   // Alert grouping
   alertGroupEnabled: process.env.ALERT_GROUP_ENABLED !== "false",
   alertGroupWindowMs: parseInt(process.env.ALERT_GROUP_WINDOW_MS || "3600000", 10),
+  // Stalled pipeline detection
+  stalledPipelineEnabled: process.env.STALLED_PIPELINE_ENABLED !== "false",
+  stalledPipelineThresholdMs: parseInt(process.env.STALLED_PIPELINE_THRESHOLD_MINUTES || "30", 10) * 60 * 1000,
+  stalledPipelineCheckIntervalMs: parseInt(process.env.STALLED_PIPELINE_CHECK_INTERVAL_MS || "300000", 10),
 };
 
 // =============================================================================
@@ -160,6 +164,9 @@ const metrics = {
   feedback_submitted_total: {},
   policy_denies_total: {},
   errors_total: {},
+  // Stalled pipeline metrics
+  stalled_pipeline_detected_total: 0,
+  stalled_pipeline_redispatched_total: 0,
 };
 
 function incrementMetric(name, labels = {}) {
@@ -216,6 +223,7 @@ function formatMetrics() {
     "webhook_dispatches_total", "webhook_dispatch_failures_total",
     "enrichment_requests_total", "enrichment_cache_hits_total", "enrichment_errors_total",
     "false_positives_total",
+    "stalled_pipeline_detected_total", "stalled_pipeline_redispatched_total",
   ].forEach((name) => {
     lines.push(`# TYPE autopilot_${name} counter`);
     lines.push(`autopilot_${name} ${metrics[name] || 0}`);
@@ -4240,10 +4248,119 @@ module.exports = {
   parseJsonBody,
   createServer,
   sendJsonError,
+  // Stalled pipeline
+  checkStalledPipeline,
   // Utilities
   parseSimpleYaml,
   sanitizeMetricLabelName,
 };
+
+// =============================================================================
+// STALLED PIPELINE DETECTION
+// =============================================================================
+
+async function checkStalledPipeline() {
+  if (!config.stalledPipelineEnabled) return;
+
+  const now = Date.now();
+  const threshold = config.stalledPipelineThresholdMs;
+
+  // Statuses that should transition — if stuck here, something failed
+  const transientStatuses = ["open", "triaged", "correlated", "investigated", "planned", "approved"];
+
+  // The webhook paths for re-dispatch (same as statusWebhooks in updateCase)
+  const redispatchWebhooks = {
+    open: "/webhook/wazuh-alert",
+    triaged: "/webhook/case-created",
+    correlated: "/webhook/investigation-request",
+    investigated: "/webhook/plan-request",
+    planned: "/webhook/policy-check",
+    approved: "/webhook/execute-action",
+  };
+
+  try {
+    const cases = await listCases({ limit: 500 });
+    let detected = 0;
+
+    for (const caseSummary of cases) {
+      if (!transientStatuses.includes(caseSummary.status)) continue;
+
+      const updatedAt = new Date(caseSummary.updated_at).getTime();
+      const age = now - updatedAt;
+
+      if (age < threshold) continue;
+
+      detected++;
+      incrementMetric("stalled_pipeline_detected_total");
+
+      const webhookPath = redispatchWebhooks[caseSummary.status];
+      if (!webhookPath) continue;
+
+      const ageMinutes = Math.round(age / 60000);
+      log("warn", "stalled-pipeline", `Case stalled in ${caseSummary.status} for ${ageMinutes}m, re-dispatching`, {
+        case_id: caseSummary.case_id,
+        status: caseSummary.status,
+        age_minutes: ageMinutes,
+        severity: caseSummary.severity,
+      });
+
+      try {
+        const evidencePack = await getCase(caseSummary.case_id);
+        const statusMessages = {
+          open: `[RETRY] Triage alert for case ${caseSummary.case_id}`,
+          triaged: `[RETRY] Correlate case ${caseSummary.case_id}`,
+          correlated: `[RETRY] Investigate case ${caseSummary.case_id}`,
+          investigated: `[RETRY] Plan response for case ${caseSummary.case_id}`,
+          planned: `[RETRY] Evaluate plan for case ${caseSummary.case_id}`,
+          approved: `[RETRY] Execute plan for case ${caseSummary.case_id}`,
+        };
+        const callbackUrls = {
+          open: `http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseSummary.case_id}&status=triaged`,
+          triaged: `http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseSummary.case_id}&status=correlated`,
+          correlated: `http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseSummary.case_id}&status=investigated`,
+          investigated: `http://localhost:${config.metricsPort}/api/agent-action/create-plan?case_id=${caseSummary.case_id}&title=Response%20Plan&risk_level=medium&actions=%5B%5D`,
+          planned: `http://localhost:${config.metricsPort}/api/agent-action/approve-plan?plan_id={plan_id}&approver_id=policy-guard&decision=allow`,
+          approved: `http://localhost:${config.metricsPort}/api/agent-action/execute-plan?plan_id={plan_id}&executor_id=responder`,
+        };
+
+        const msg = `${statusMessages[caseSummary.status]} (${evidencePack.severity || caseSummary.severity} severity, stalled ${ageMinutes}m). Use web_fetch to call: ${callbackUrls[caseSummary.status]}`;
+
+        dispatchToGateway(webhookPath, {
+          message: msg,
+          case_id: caseSummary.case_id,
+          status: caseSummary.status,
+          severity: evidencePack.severity || caseSummary.severity,
+          trigger: "stalled_pipeline_redispatch",
+        }).catch(() => {});
+
+        incrementMetric("stalled_pipeline_redispatched_total");
+
+        // Touch updated_at so we don't re-dispatch every check interval
+        evidencePack.updated_at = new Date(now).toISOString();
+        const caseDir = path.join(config.dataDir, "cases", caseSummary.case_id);
+        await atomicWriteFile(path.join(caseDir, "evidence-pack.json"), JSON.stringify(evidencePack, null, 2));
+        try {
+          const summaryPath = path.join(caseDir, "case.json");
+          const summary = JSON.parse(await fs.readFile(summaryPath, "utf8"));
+          summary.updated_at = new Date(now).toISOString();
+          await atomicWriteFile(summaryPath, JSON.stringify(summary, null, 2));
+        } catch { /* ok — summary may not exist */ }
+
+      } catch (err) {
+        log("warn", "stalled-pipeline", "Failed to re-dispatch stalled case", {
+          case_id: caseSummary.case_id,
+          error: err.message,
+        });
+      }
+    }
+
+    if (detected > 0) {
+      log("info", "stalled-pipeline", `Stalled pipeline check: ${detected} case(s) detected`, { detected });
+    }
+  } catch (err) {
+    log("error", "stalled-pipeline", "Stalled pipeline check failed", { error: err.message });
+  }
+}
 
 function setupCleanupIntervals() {
   // Approval token cleanup
@@ -4414,6 +4531,20 @@ function setupCleanupIntervals() {
     }
   }, 300000);
   cleanupIntervals.push(dedupCleanup);
+
+  // Stalled pipeline detection
+  if (config.stalledPipelineEnabled) {
+    const stalledCheck = setInterval(() => {
+      checkStalledPipeline().catch((err) => {
+        log("error", "stalled-pipeline", "Unhandled error in stalled pipeline check", { error: err.message });
+      });
+    }, config.stalledPipelineCheckIntervalMs);
+    cleanupIntervals.push(stalledCheck);
+    log("info", "startup", "Stalled pipeline detector enabled", {
+      threshold_minutes: config.stalledPipelineThresholdMs / 60000,
+      check_interval_ms: config.stalledPipelineCheckIntervalMs,
+    });
+  }
 }
 
 // Issue #12 fix: Add configurable shutdown timeout with force kill
