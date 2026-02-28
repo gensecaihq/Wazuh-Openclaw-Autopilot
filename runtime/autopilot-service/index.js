@@ -299,6 +299,7 @@ async function dispatchToGateway(webhookPath, payload) {
       clearTimeout(timeoutId);
 
       if (response.ok) {
+        await response.text().catch(() => ""); // drain response body
         incrementMetric("webhook_dispatches_total");
         log("info", "dispatch", "Webhook dispatched", {
           path: webhookPath,
@@ -535,7 +536,7 @@ async function _doMcpSessionInit() {
     const controller2 = new AbortController();
     const timeoutId2 = setTimeout(() => controller2.abort(), 5000);
 
-    await fetch(`${config.mcpUrl}/mcp`, {
+    const notifResp = await fetch(`${config.mcpUrl}/mcp`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -549,6 +550,7 @@ async function _doMcpSessionInit() {
       }),
       signal: controller2.signal,
     });
+    await notifResp.text().catch(() => ""); // drain response body
 
     clearTimeout(timeoutId2);
 
@@ -591,6 +593,10 @@ function isPrivateIp(ip) {
   if (a === 127) return true;
   // 0.0.0.0/8
   if (a === 0) return true;
+  // 169.254.0.0/16 (link-local / APIPA)
+  if (a === 169 && b === 254) return true;
+  // 100.64.0.0/10 (CGNAT / Tailscale)
+  if (a === 100 && b >= 64 && b <= 127) return true;
   return false;
 }
 
@@ -894,6 +900,7 @@ async function updateCase(caseId, updates) {
         executed: ["closed", "false_positive"],
         rejected: ["open", "closed"],
         false_positive: ["open"],
+        closed: [], // Terminal state — no transitions allowed
       };
       const currentStatus = evidencePack.status || "open";
       const allowed = VALID_STATUS_TRANSITIONS[currentStatus];
@@ -980,13 +987,17 @@ async function updateCase(caseId, updates) {
         triaged: "/webhook/case-created",       // → correlation agent
         correlated: "/webhook/investigation-request", // → investigation agent
         investigated: "/webhook/plan-request",   // → response-planner agent
+        planned: "/webhook/policy-check",        // → policy-guard agent
+        approved: "/webhook/execute-action",     // → responder agent
       };
       const webhookPath = statusWebhooks[updates.status];
       if (webhookPath) {
         const statusMessages = {
-          triaged: `Correlate case ${caseId} (${evidencePack.severity} severity). Search for related alerts, identify attack patterns, then use web_fetch to call: http://localhost:${config.port}/api/agent-action/update-case?case_id=${caseId}&status=correlated`,
-          correlated: `Investigate case ${caseId} (${evidencePack.severity} severity). Perform deep analysis using MCP tools: check agent health, search security events, analyze threat indicators. Then use web_fetch to call: http://localhost:${config.port}/api/agent-action/update-case?case_id=${caseId}&status=investigated`,
-          investigated: `Plan response for case ${caseId} (${evidencePack.severity} severity). Review investigation findings and create a response plan. Then use web_fetch to submit the plan: http://localhost:${config.port}/api/agent-action/create-plan?case_id=${caseId}&title={url_encoded_title}&risk_level={risk_level}&actions={url_encoded_actions_json}`,
+          triaged: `Correlate case ${caseId} (${evidencePack.severity} severity). Search for related alerts, identify attack patterns, then use web_fetch to call: http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseId}&status=correlated`,
+          correlated: `Investigate case ${caseId} (${evidencePack.severity} severity). Perform deep analysis using MCP tools: check agent health, search security events, analyze threat indicators. Then use web_fetch to call: http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseId}&status=investigated`,
+          investigated: `Plan response for case ${caseId} (${evidencePack.severity} severity). Review investigation findings and create a response plan. Then use web_fetch to submit the plan: http://localhost:${config.metricsPort}/api/agent-action/create-plan?case_id=${caseId}&title={url_encoded_title}&risk_level={risk_level}&actions={url_encoded_actions_json}`,
+          planned: `Evaluate proposed plan for case ${caseId} (${evidencePack.severity} severity). Check all policy rules, risk levels, and approval requirements. Then use web_fetch to submit your decision: http://localhost:${config.metricsPort}/api/agent-action/approve-plan?plan_id={plan_id}&approver_id=policy-guard&decision={allow|deny|escalate}&reason={url_encoded_reason}`,
+          approved: `Execute approved plan for case ${caseId} (${evidencePack.severity} severity). Check responder status, then execute the plan. Use web_fetch to call: http://localhost:${config.metricsPort}/api/agent-action/execute-plan?plan_id={plan_id}&executor_id=responder-agent`,
         };
         dispatchToGateway(webhookPath, {
           message: statusMessages[updates.status] || `Process case ${caseId} — status changed to ${updates.status}.`,
@@ -1335,8 +1346,12 @@ function listPlans(options = {}) {
 
   for (const [planId, plan] of responsePlans.entries()) {
     // Trigger expiry check via getPlan (updates stale PROPOSED/APPROVED → EXPIRED)
-    const freshPlan = getPlan(planId, { updateExpiry: true });
-    if (!freshPlan) continue;
+    let freshPlan;
+    try {
+      freshPlan = getPlan(planId, { updateExpiry: true });
+    } catch {
+      continue; // Plan was deleted during iteration
+    }
     // Filter by state (after expiry update)
     if (state && freshPlan.state !== state) continue;
     // Filter by case
@@ -1519,6 +1534,7 @@ async function executePlan(planId, executorId) {
         // Policy enforcement: idempotency check
         const idempResult = policyCheckIdempotency(action.type, action.target);
         if (!idempResult.allowed) {
+          allSuccess = false;
           incrementMetric("policy_denies_total", { reason: "duplicate_action", action: action.type });
           log("warn", "policy", "Action denied by idempotency check", {
             plan_id: planId, action_type: action.type, target: action.target, reason: idempResult.reason,
@@ -1536,6 +1552,7 @@ async function executePlan(planId, executorId) {
         // Policy enforcement: rate limit check
         const rlResult = policyCheckActionRateLimit(action.type);
         if (!rlResult.allowed) {
+          allSuccess = false;
           const rlReason = rlResult.reason.includes("global") ? "global_rate_limited" : "action_rate_limited";
           incrementMetric("policy_denies_total", { reason: rlReason, action: action.type });
           log("warn", "policy", "Action denied by rate limit", {
@@ -2273,7 +2290,7 @@ async function callMcpTool(toolName, params, correlationId) {
   const mcpToolName = resolveMcpTool(toolName);
 
   // Validate tool name to prevent path traversal (SSRF)
-  if (!/^[a-zA-Z0-9_-]+$/.test(mcpToolName)) {
+  if (!/^[a-zA-Z0-9_.\-]+$/.test(mcpToolName)) {
     incrementMetric("errors_total", { component: "mcp" });
     throw new Error(`Invalid tool name: contains disallowed characters`);
   }
@@ -2443,7 +2460,7 @@ async function callMcpTool(toolName, params, correlationId) {
   }
 
   // All attempts exhausted — skip metric recording if already done (e.g., RPC errors)
-  if (!lastError._metricsRecorded) {
+  if (lastError && !lastError._metricsRecorded) {
     const latencySeconds = (Date.now() - startTime) / 1000;
     incrementMetric("mcp_tool_calls_total", { tool: toolName, status: "error" });
     incrementMetric("errors_total", { component: "mcp" });
@@ -3279,7 +3296,7 @@ function createServer() {
 
           // Dispatch to triage agent via OpenClaw gateway
           dispatchToGateway("/webhook/wazuh-alert", {
-            message: `Triage new ${severity}-severity alert: ${caseData.title}. Case ${caseId} with ${entities.length} entities extracted. Analyze the alert, assess threat level, then use web_fetch to call: http://localhost:${config.port}/api/agent-action/update-case?case_id=${caseId}&status=triaged`,
+            message: `Triage new ${severity}-severity alert: ${caseData.title}. Case ${caseId} with ${entities.length} entities extracted. Analyze the alert, assess threat level, then use web_fetch to call: http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseId}&status=triaged`,
             case_id: caseId,
             severity,
             title: caseData.title,
@@ -3346,11 +3363,23 @@ function createServer() {
           return;
         }
 
+        const VALID_AGENT_STATUSES = ["triaged", "correlated", "investigated", "planned", "approved", "executed", "closed", "false_positive"];
+        if (status && !VALID_AGENT_STATUSES.includes(status)) {
+          sendJsonError(res, 400, `Invalid status: must be one of ${VALID_AGENT_STATUSES.join(", ")}`, requestId);
+          return;
+        }
+
+        const ALLOWED_DATA_FIELDS = ["title", "summary", "severity", "confidence", "correlation", "findings", "recommended_response", "iocs", "enrichment_data", "mitre", "entities", "timeline"];
         const updates = {};
         if (status) updates.status = status;
         if (dataParam) {
           try {
-            Object.assign(updates, JSON.parse(dataParam));
+            const parsed = JSON.parse(dataParam);
+            for (const key of Object.keys(parsed)) {
+              if (ALLOWED_DATA_FIELDS.includes(key)) {
+                updates[key] = parsed[key];
+              }
+            }
           } catch {
             sendJsonError(res, 400, "Invalid JSON in data parameter", requestId);
             return;
@@ -3392,6 +3421,12 @@ function createServer() {
         const description = url.searchParams.get("description") || "";
         const riskLevel = url.searchParams.get("risk_level") || "medium";
         const actionsParam = url.searchParams.get("actions");
+
+        const VALID_RISK_LEVELS = ["low", "medium", "high", "critical"];
+        if (!VALID_RISK_LEVELS.includes(riskLevel)) {
+          sendJsonError(res, 400, `Invalid risk_level: must be one of ${VALID_RISK_LEVELS.join(", ")}`, requestId);
+          return;
+        }
 
         if (!caseId || !isValidCaseId(caseId)) {
           sendJsonError(res, 400, "Invalid or missing case_id", requestId);

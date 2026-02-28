@@ -160,7 +160,7 @@ Emit a JSON object for each triaged alert. Example:
       {"value": "admin", "type": "target", "privileged": true}
     ],
     "hosts": [
-      {"value": "prod-web-01", "criticality": "critical", "os": "linux"}
+      {"value": "prod-web-01", "criticality": "high", "os": "linux"}
     ],
     "processes": [],
     "hashes": [],

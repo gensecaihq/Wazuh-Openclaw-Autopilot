@@ -65,8 +65,9 @@ Characteristics: Enterprise blast radius, severe service impact
 |---------|-------------|------------------|
 | `^(dc\|ad\|ldap)-.*` | Critical | Admin |
 | `^(prod\|prd)-.*` | High | Elevated |
-| `^(db\|sql\|mongo\|redis)-.*` | High | Elevated |
-| `^(staging\|stg)-.*` | Medium | Standard |
+| `^(db\|sql\|mongo\|redis\|elastic)-.*` | High | Elevated |
+| `^(app\|web\|api)-.*` | Medium | Elevated |
+| `^(staging\|stg\|stage)-.*` | Medium | Standard |
 | `^(dev\|test\|sandbox)-.*` | Low | Standard |
 
 ## Privileged User Patterns

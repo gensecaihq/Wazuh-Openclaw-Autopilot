@@ -111,7 +111,8 @@ Build chronological timelines and tag each event with its MITRE kill chain phase
 8. Lateral Movement (TA0008)
 9. Collection (TA0009)
 10. Exfiltration (TA0010)
-11. Impact (TA0040)
+11. Command and Control (TA0011)
+12. Impact (TA0040)
 
 The presence of 3+ kill chain phases in a single cluster is a strong indicator of a coordinated attack and should boost the overall severity.
 
@@ -149,8 +150,8 @@ Classify hostnames by regex match:
 |---|---|
 | `^dc-\|^ad-\|^ldap-` | CRITICAL |
 | `^prod-\|^prd-` | HIGH |
-| `^db-\|^sql-\|^mongo-\|^redis-` | HIGH |
-| `^app-\|^web-\|^api-` | HIGH |
+| `^db-\|^sql-\|^mongo-\|^redis-\|^elastic-` | HIGH |
+| `^app-\|^web-\|^api-` | MEDIUM |
 | `^stage-\|^staging-\|^stg-` | MEDIUM |
 | `^dev-\|^test-\|^sandbox-` | LOW |
 
