@@ -35,11 +35,13 @@ GET /api/agent-action/update-case?status=investigated
 webhook → Response Planner Agent
     ↓
 GET /api/agent-action/create-plan?case_id=...&actions=...
-    ↓ (runtime dispatches webhook)
+    ↓ (sets status=planned, runtime dispatches webhook)
 webhook → Policy Guard Agent
     ↓
 GET /api/agent-action/approve-plan?decision=allow
-    ↓ (human Tier 2 trigger)
+    ↓ (sets status=approved, runtime dispatches webhook)
+webhook → Responder Agent / Human Tier 2
+    ↓
 GET /api/agent-action/execute-plan?plan_id=...
 ```
 

@@ -34,7 +34,7 @@ Returns service health status. Exempt from rate limiting and authentication.
 ```json
 {
   "status": "healthy",
-  "version": "2.1.0",
+  "version": "2.3.0",
   "mode": "bootstrap",
   "uptime_seconds": 3600,
   "checks": {
@@ -75,8 +75,8 @@ Returns service version information. Exempt from rate limiting and authenticatio
 ```json
 {
   "service": "wazuh-openclaw-autopilot",
-  "version": "2.1.0",
-  "node": "v18.19.0"
+  "version": "2.3.0",
+  "node": "v20.x.x"
 }
 ```
 
@@ -308,6 +308,8 @@ When a case status is updated via `PUT /api/cases/:id`, the runtime automaticall
 | `triaged` | `/webhook/case-created` | Correlation |
 | `correlated` | `/webhook/investigation-request` | Investigation |
 | `investigated` | `/webhook/plan-request` | Response Planner |
+| `planned` | `/webhook/policy-check` | Policy Guard |
+| `approved` | `/webhook/execute-action` | Responder |
 
 Dispatches are fire-and-forget (async, never block the API response).
 
@@ -540,7 +542,7 @@ Updates a case's status and/or data. Equivalent to `PUT /api/cases/:caseId`.
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `case_id` | Yes | The case ID to update |
-| `status` | No | New status: `triaged`, `correlated`, `investigated` |
+| `status` | No | New status: `triaged`, `correlated`, `investigated`, `planned`, `approved`, `executed`, `closed`, `false_positive` |
 | `data` | No | URL-encoded JSON object of additional fields to merge |
 
 **Example:**
@@ -563,6 +565,8 @@ Status transitions trigger the same webhook dispatches as `PUT /api/cases/:caseI
 | `triaged` | `/webhook/case-created` | Correlation |
 | `correlated` | `/webhook/investigation-request` | Investigation |
 | `investigated` | `/webhook/plan-request` | Response Planner |
+| `planned` | `/webhook/policy-check` | Policy Guard |
+| `approved` | `/webhook/execute-action` | Responder |
 
 #### GET /api/agent-action/create-plan
 
@@ -728,3 +732,13 @@ All responses include security headers:
 | `ENRICHMENT_TIMEOUT_MS` | 5000 | Enrichment request timeout |
 | `ALERT_GROUP_ENABLED` | true | Enable entity-based alert grouping |
 | `ALERT_GROUP_WINDOW_MS` | 3600000 | Alert grouping time window (1 hour) |
+| `LOG_LEVEL` | info | Log level: debug, info, warn, error |
+| `LOG_FORMAT` | json | Log format: json or text |
+| `MAX_CONCURRENT_EXECUTIONS` | 5 | Max concurrent plan executions |
+| `MCP_MAX_RETRIES` | 3 | Max retries for MCP tool calls |
+| `AUTOPILOT_DATA_DIR` | /var/lib/wazuh-autopilot | Data directory for cases and plans |
+| `AUTOPILOT_CONFIG_DIR` | /etc/wazuh-autopilot | Config directory for policies |
+| `SLACK_APP_TOKEN` | (none) | Slack app-level token (xapp-...) for Socket Mode |
+| `SLACK_BOT_TOKEN` | (none) | Slack bot token (xoxb-...) for API calls |
+| `SLACK_CHANNEL_ALERTS` | (none) | Slack channel ID for alert notifications |
+| `SLACK_CHANNEL_APPROVALS` | (none) | Slack channel ID for approval requests |

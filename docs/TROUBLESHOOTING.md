@@ -221,7 +221,7 @@ The global `tools.allow` must include every tool that any agent needs:
 ```json
 "tools": {
   "profile": "minimal",
-  "allow": ["read", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+  "allow": ["read", "edit", "write", "exec", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
   "deny": ["browser", "canvas"],
   "web": {
     "search": { "enabled": false },
@@ -392,7 +392,7 @@ df -h
 
 **Check Node.js:**
 ```bash
-node --version  # Should be 18+
+node --version  # Should be 20+
 ```
 
 **View crash logs:**

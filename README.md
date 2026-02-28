@@ -136,12 +136,14 @@ Alert Ingestion ──▶ Triage ──▶ Correlation ──▶ Investigation
      │                                                │
      │              ┌─────────────────────────────────┘
      │              ▼
-     │        Response Planner ──▶ Policy Enforcement ──▶ Human Approval ──▶ Responder
-     │                                  (inline)              │
-     │                             action allowlist     [Approve] [Execute]
-     │                             time windows         evidence check
-     │                             approver auth        rate limits
-     │                             evidence check       idempotency
+     │        Response Planner ──▶ Policy Guard ──▶ Human Approval ──▶ Responder
+     │              (auto)          (auto)               │
+     │              status:         status:        [Approve] [Execute]
+     │              planned         approved       evidence check
+     │                                             rate limits
+     │           Policy Enforcement (inline at each step):
+     │           action allowlist, time windows, approver auth,
+     │           evidence check, rate limits, idempotency
      ▼
   Webhook ──▶ OpenClaw Gateway ──▶ Agent
 ```
@@ -261,7 +263,7 @@ Tested via [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) v4
 | [Wazuh Manager](https://wazuh.com) | SIEM platform (installed and running, 4.8.0+) |
 | [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) | MCP bridge for Wazuh API access |
 | [OpenClaw](https://github.com/openclaw/openclaw) | AI agent framework ([docs](https://openclaw.ai)) |
-| Node.js 18+ | Runtime for autopilot service |
+| Node.js 20+ | Runtime for autopilot service |
 | LLM API Key | Claude, GPT, Groq, Mistral, or [Ollama](https://ollama.com) (local/free) |
 
 ### Installation
@@ -513,9 +515,9 @@ Features:
 │   └── agents/                 # 7 SOC agents + _shared/ (AGENTS.md, IDENTITY.md, TOOLS.md, HEARTBEAT.md, MEMORY.md)
 ├── runtime/autopilot-service/
 │   ├── Dockerfile              # Production container
-│   ├── index.js                # Main service (4100+ LOC)
+│   ├── index.js                # Main service (4300+ LOC)
 │   ├── slack.js                # Slack Socket Mode integration
-│   └── *.test.js               # Test suite (276 tests)
+│   └── *.test.js               # Test suite (296 tests)
 ├── policies/
 │   ├── policy.yaml             # Security policies & approvers
 │   └── toolmap.yaml            # MCP tool mappings
@@ -553,6 +555,7 @@ Features:
 | [SCENARIOS.md](docs/SCENARIOS.md) | Deployment scenarios |
 | [TAILSCALE_MANDATORY.md](docs/TAILSCALE_MANDATORY.md) | Tailscale zero-trust networking |
 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Troubleshooting guide |
+| [AGENT_COMMUNICATION.md](docs/AGENT_COMMUNICATION.md) | Agent-to-runtime communication architecture |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
 ---

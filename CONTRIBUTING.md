@@ -82,7 +82,7 @@ feat: Add Teams integration support
 ### Prerequisites
 
 - Ubuntu 22.04 or 24.04 (or macOS for development)
-- Node.js 18+
+- Node.js 20+
 - Docker (for testing OpenClaw integration)
 
 ### Local Development

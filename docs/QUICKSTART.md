@@ -5,7 +5,7 @@ Get Wazuh OpenClaw Autopilot running in under 15 minutes.
 ## Prerequisites
 
 - **Ubuntu 22.04 or 24.04** (other Linux distros may work)
-- **Node.js 18+** for runtime service
+- **Node.js 20+** for runtime service
 - **Wazuh Manager** installed and running
 - **Wazuh MCP Server** deployed - [gensecaihq/Wazuh-MCP-Server](https://github.com/gensecaihq/Wazuh-MCP-Server)
 - **OpenClaw** for agent orchestration - [openclaw/openclaw](https://github.com/openclaw/openclaw)
@@ -125,7 +125,7 @@ Expected response:
 ```json
 {
   "status": "healthy",
-  "version": "2.1.0",
+  "version": "2.3.0",
   "mode": "bootstrap"
 }
 ```
