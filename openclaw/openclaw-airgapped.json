@@ -41,6 +41,11 @@
   // ---------------------------------------------------------------------------
   // Ollama is not a built-in provider; register it here as a custom provider.
   // The baseUrl points to Ollama's OpenAI-compatible endpoint.
+  //
+  // IMPORTANT: "reasoning" must be false for standard models (Llama, Mistral,
+  // Qwen, CodeLlama). Set true ONLY for models with native thinking support
+  // (deepseek-r1, qwq). If set incorrectly, agents fail with:
+  //   400 "model_name" does not support thinking
   // ---------------------------------------------------------------------------
   "models": {
     "providers": {
@@ -49,11 +54,14 @@
         "apiKey": "ollama",
         "api": "openai-completions",
         "models": [
-          { "id": "llama3.3", "name": "Llama 3.3 70B", "reasoning": true, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 },
+          { "id": "llama3.3", "name": "Llama 3.3 70B", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 },
           { "id": "mistral", "name": "Mistral 7B", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 32768, "maxTokens": 4096 },
           { "id": "codellama", "name": "Code Llama 13B", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 16384, "maxTokens": 4096 },
-          { "id": "llama3.1", "name": "Llama 3.1", "reasoning": true, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 },
-          { "id": "qwen2.5", "name": "Qwen 2.5", "reasoning": true, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 }
+          { "id": "llama3.1", "name": "Llama 3.1", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 },
+          { "id": "llama3.1:8b", "name": "Llama 3.1 8B", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 },
+          { "id": "qwen2.5", "name": "Qwen 2.5", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 },
+          { "id": "deepseek-r1", "name": "DeepSeek R1", "reasoning": true, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 },
+          { "id": "qwq", "name": "QwQ 32B", "reasoning": true, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 }
         ]
       }
     }

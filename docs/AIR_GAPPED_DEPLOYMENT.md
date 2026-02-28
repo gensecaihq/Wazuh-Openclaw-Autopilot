@@ -393,6 +393,24 @@ export OLLAMA_NUM_CTX=32768
 ollama serve
 ```
 
+### 400 "does not support thinking"
+
+If agent sessions fail with `400 "llama3.1:8b" does not support thinking`, the model is registered with `"reasoning": true` in `openclaw.json`. OpenClaw sends a `thinking_level` parameter to models marked as reasoning-capable, but standard Ollama models (Llama 3.x, Mistral, Qwen 2.5, CodeLlama) don't support this.
+
+**Fix:** Set `"reasoning": false` for all standard models in the `models.providers.ollama.models` array:
+
+```json
+{ "id": "llama3.1:8b", "name": "Llama 3.1 8B", "reasoning": false, ... }
+{ "id": "llama3.3", "name": "Llama 3.3 70B", "reasoning": false, ... }
+```
+
+Only set `"reasoning": true` for models that actually support structured thinking output: `deepseek-r1`, `qwq`, and similar reasoning-specific models.
+
+After updating, restart OpenClaw:
+```bash
+sudo systemctl restart openclaw
+```
+
 ### Model not found
 
 If agents report model errors, verify the exact model name:
