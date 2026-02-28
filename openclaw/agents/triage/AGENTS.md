@@ -172,3 +172,23 @@ Emit a JSON object for each triaged alert. Example:
   "timestamp": "2026-02-17T10:32:00Z"
 }
 ```
+
+---
+
+## MANDATORY: Update Case Status via API
+
+**After completing triage, you MUST call the Runtime API to advance the pipeline.** If you skip this step, the pipeline stalls and no downstream agents are triggered.
+
+Use `web_fetch` to call the agent-action endpoint. Replace `{case_id}` with the actual case ID from the webhook message:
+
+```
+http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=triaged
+```
+
+You can also attach your triage results as URL-encoded JSON in the `data` parameter:
+
+```
+http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=triaged&data=%7B%22summary%22%3A%22your+triage+summary%22%7D
+```
+
+**This is not optional.** The runtime uses your status update to dispatch the webhook that activates the Correlation Agent. Without this call, the case sits in `open` state forever.

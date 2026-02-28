@@ -984,9 +984,9 @@ async function updateCase(caseId, updates) {
       const webhookPath = statusWebhooks[updates.status];
       if (webhookPath) {
         const statusMessages = {
-          triaged: `Correlate case ${caseId} (${evidencePack.severity} severity). Search for related alerts, identify attack patterns, and update case status to "correlated" when complete.`,
-          correlated: `Investigate case ${caseId} (${evidencePack.severity} severity). Perform deep analysis using MCP tools: check agent health, search security events, analyze threat indicators. Update case status to "investigated" when complete.`,
-          investigated: `Plan response for case ${caseId} (${evidencePack.severity} severity). Review investigation findings and create a response plan with recommended actions. Submit the plan for approval.`,
+          triaged: `Correlate case ${caseId} (${evidencePack.severity} severity). Search for related alerts, identify attack patterns, then use web_fetch to call: http://localhost:${config.port}/api/agent-action/update-case?case_id=${caseId}&status=correlated`,
+          correlated: `Investigate case ${caseId} (${evidencePack.severity} severity). Perform deep analysis using MCP tools: check agent health, search security events, analyze threat indicators. Then use web_fetch to call: http://localhost:${config.port}/api/agent-action/update-case?case_id=${caseId}&status=investigated`,
+          investigated: `Plan response for case ${caseId} (${evidencePack.severity} severity). Review investigation findings and create a response plan. Then use web_fetch to submit the plan: http://localhost:${config.port}/api/agent-action/create-plan?case_id=${caseId}&title={url_encoded_title}&risk_level={risk_level}&actions={url_encoded_actions_json}`,
         };
         dispatchToGateway(webhookPath, {
           message: statusMessages[updates.status] || `Process case ${caseId} — status changed to ${updates.status}.`,
@@ -3279,7 +3279,7 @@ function createServer() {
 
           // Dispatch to triage agent via OpenClaw gateway
           dispatchToGateway("/webhook/wazuh-alert", {
-            message: `Triage new ${severity}-severity alert: ${caseData.title}. Case ${caseId} with ${entities.length} entities extracted. Analyze the alert, assess threat level, and update case status to "triaged" when complete.`,
+            message: `Triage new ${severity}-severity alert: ${caseData.title}. Case ${caseId} with ${entities.length} entities extracted. Analyze the alert, assess threat level, then use web_fetch to call: http://localhost:${config.port}/api/agent-action/update-case?case_id=${caseId}&status=triaged`,
             case_id: caseId,
             severity,
             title: caseData.title,

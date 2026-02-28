@@ -194,3 +194,23 @@ Emit an enriched case JSON. Example:
   }
 }
 ```
+
+---
+
+## MANDATORY: Update Case Status via API
+
+**After completing correlation, you MUST call the Runtime API to advance the pipeline.** If you skip this step, the pipeline stalls and the Investigation Agent is never triggered.
+
+Use `web_fetch` to call the agent-action endpoint. Replace `{case_id}` with the actual case ID from the webhook message:
+
+```
+http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=correlated
+```
+
+You can also attach your correlation results as URL-encoded JSON in the `data` parameter:
+
+```
+http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=correlated&data=%7B%22correlation_score%22%3A0.85%7D
+```
+
+**This is not optional.** The runtime uses your status update to dispatch the webhook that activates the Investigation Agent. Without this call, the case sits in `triaged` state forever.

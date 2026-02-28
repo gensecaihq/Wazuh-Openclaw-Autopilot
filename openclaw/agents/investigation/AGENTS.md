@@ -188,3 +188,23 @@ Emit a fully investigated case JSON. Example:
   "timestamp": "2026-02-17T10:45:00Z"
 }
 ```
+
+---
+
+## MANDATORY: Update Case Status via API
+
+**After completing investigation, you MUST call the Runtime API to advance the pipeline.** If you skip this step, the pipeline stalls and the Response Planner Agent is never triggered.
+
+Use `web_fetch` to call the agent-action endpoint. Replace `{case_id}` with the actual case ID from the webhook message:
+
+```
+http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=investigated
+```
+
+You can also attach your investigation findings as URL-encoded JSON in the `data` parameter:
+
+```
+http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=investigated&data=%7B%22recommended_response%22%3A%5B%22Block+attacker+IP%22%5D%7D
+```
+
+**This is not optional.** The runtime uses your status update to dispatch the webhook that activates the Response Planner Agent. Without this call, the case sits in `correlated` state forever.

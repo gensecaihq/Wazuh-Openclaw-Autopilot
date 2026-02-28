@@ -27,19 +27,27 @@ Every response plan requires TWO separate human approvals before execution:
 
 This separation prevents accidental execution -- a human must consciously make two separate decisions.
 
-## Submitting Plans
+## MANDATORY: Submit Plan via API
 
-Submit plans to the Runtime Service (default port 9090, configurable via `RUNTIME_PORT` env var):
+**After creating your plan, you MUST submit it using `web_fetch`.** If you skip this step, no plan is registered and no Slack approval request is posted.
+
+Use `web_fetch` to call the agent-action endpoint with your plan details as query parameters:
 
 ```
-POST http://localhost:9090/api/plans
-Content-Type: application/json
+http://localhost:9090/api/agent-action/create-plan?case_id={case_id}&title={url_encoded_title}&risk_level={risk_level}&actions={url_encoded_actions_json}
+```
+
+**Example:**
+```
+http://localhost:9090/api/agent-action/create-plan?case_id=CASE-20260217-abc12345&title=Block%20brute%20force%20attacker&risk_level=low&actions=%5B%7B%22type%22%3A%22block_ip%22%2C%22target%22%3A%22203.0.113.42%22%7D%5D
 ```
 
 The plan will be:
 1. Created in `proposed` state
 2. Posted to Slack for human review
 3. Waiting for human to click Approve then Execute
+
+**This is not optional.** Without this call, your plan only exists in your output text — the runtime never sees it, no Slack notification is sent, and no human approval can happen.
 
 ## Plan Output Format
 
