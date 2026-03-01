@@ -150,14 +150,41 @@ If using lighter models, edit `~/.openclaw/openclaw.json`:
 
 ---
 
-## Step 4: Verify Ollama is Running
+## Step 4: Configure and Verify Ollama
+
+### Critical: Set Context Window
+
+Ollama defaults to **2048 tokens** for context, but OpenClaw injects ~12,000 tokens of system prompt (tool definitions, safety guidelines, agent instructions). Without increasing the context window, the system prompt gets **silently truncated** — the model receives garbage input, hangs, and times out with `"fetch failed"`.
+
+```bash
+# For systemd-managed Ollama:
+sudo systemctl edit ollama
+```
+
+Add:
+```ini
+[Service]
+Environment="OLLAMA_NUM_CTX=32768"
+Environment="OLLAMA_KEEP_ALIVE=24h"
+Environment="OLLAMA_FLASH_ATTENTION=1"
+Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+```
+
+> **Note:** `OLLAMA_NUM_CTX` set in your shell profile is NOT inherited by the systemd service. You must set it in the systemd unit override.
+
+### Verify Ollama is Running
 
 ```bash
 # Check Ollama service
 systemctl status ollama
 
 # Or if running manually
-ollama serve &
+OLLAMA_NUM_CTX=32768 OLLAMA_KEEP_ALIVE=24h ollama serve &
 
 # Test a model
 ollama run mistral "Hello, respond with OK"
@@ -167,6 +194,13 @@ Ensure Ollama is accessible at `http://127.0.0.1:11434`:
 
 ```bash
 curl http://127.0.0.1:11434/api/tags
+```
+
+Verify the context window is applied:
+
+```bash
+ollama ps
+# The CONTEXT column should show your configured value (32768), not 2048
 ```
 
 ---
@@ -385,15 +419,24 @@ sudo systemctl restart openclaw
 docker restart openclaw
 ```
 
-### Ollama context window is only 4096
+### Ollama context window too small (2048 default)
 
-Ollama defaults to a 4096 context window regardless of the model's capability. To increase it, use the `OLLAMA_NUM_CTX` environment variable or create a custom Modelfile:
+Ollama defaults to a **2048 token** context window regardless of the model's capability. OpenClaw requires at least 16,000 tokens (it injects ~12K of system prompt). With 2048 tokens, the system prompt is silently truncated and agents produce garbage or hang.
+
+**Important:** Setting `OLLAMA_NUM_CTX` in your shell profile does NOT affect the systemd service. You must set it in the systemd unit:
 
 ```bash
-# Set globally via environment variable
-export OLLAMA_NUM_CTX=32768
-ollama serve
+sudo systemctl edit ollama
+# Add: Environment="OLLAMA_NUM_CTX=32768"
+sudo systemctl daemon-reload && sudo systemctl restart ollama
 ```
+
+Or for manual runs:
+```bash
+OLLAMA_NUM_CTX=32768 ollama serve
+```
+
+Verify with `ollama ps` — the CONTEXT column should show your configured value.
 
 ### Tool calls not working / agents output raw JSON text
 
@@ -441,13 +484,37 @@ sudo systemctl restart openclaw
 
 ### "fetch failed" with 0 tokens (5-minute timeout)
 
-If agents fail with `error=fetch failed` and `input: 0, output: 0` after exactly 5 minutes, Node.js's built-in `fetch()` (undici) is killing the connection before Ollama responds. This happens because undici has a hardcoded 300-second `headersTimeout` — on CPU-only inference with large context windows, Ollama can take longer than 5 minutes to start sending response headers.
+If agents fail with `error=fetch failed` and `input: 0, output: 0` after exactly 5 minutes, there are usually **three compounding issues**. You need to fix all of them.
 
 **Symptoms:**
 - Session logs show `"errorMessage": "fetch failed"` with `"output": 0`
 - Exactly 5 minutes between request and error (e.g., 05:29:06 → 05:34:06)
 - Gateway journal shows `embedded run agent end: ... error=fetch failed`
 - `ollama ps` shows the model is loaded and `curl http://127.0.0.1:11434/api/tags` works fine
+
+#### Cause 1: Ollama context window too small (most common)
+
+Ollama defaults to **2048 tokens** context (`OLLAMA_NUM_CTX`). OpenClaw injects ~12,000 tokens of system prompt. With a 2048 window, the prompt gets **silently truncated** — the model receives garbage, hangs, and times out. Setting `OLLAMA_NUM_CTX` in your shell does NOT affect the systemd service.
+
+```bash
+sudo systemctl edit ollama
+# Add:
+# [Service]
+# Environment="OLLAMA_NUM_CTX=32768"
+# Environment="OLLAMA_KEEP_ALIVE=24h"
+# Environment="OLLAMA_FLASH_ATTENTION=1"
+# Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
+
+sudo systemctl daemon-reload && sudo systemctl restart ollama
+```
+
+Verify: `ollama ps` should show your configured context value, not 2048.
+
+See [openclaw/openclaw#24068](https://github.com/openclaw/openclaw/issues/24068), [openclaw/openclaw#7725](https://github.com/openclaw/openclaw/issues/7725).
+
+#### Cause 2: undici 300-second headersTimeout
+
+Node.js's built-in `fetch()` (undici) has a hardcoded 300-second `headersTimeout`. On CPU-only inference, Ollama may not start sending response headers within 5 minutes. **There is no OpenClaw config to change this** — `timeoutSeconds` controls agent session duration, not HTTP call timeouts.
 
 **Fix — override undici timeout with a preload script:**
 
@@ -468,29 +535,28 @@ SCRIPT
 Inject into the gateway systemd service:
 
 ```bash
-sudo systemctl edit openclaw-gateway.service
+systemctl edit --user openclaw-gateway
 # Add under [Service]:
 # Environment="NODE_OPTIONS=--require /root/undici-timeout-fix.cjs"
 
-sudo systemctl daemon-reload
-sudo systemctl restart openclaw-gateway.service
+systemctl --user daemon-reload && systemctl --user restart openclaw-gateway
 ```
 
-**Also recommended for CPU-only deployments:**
+See [openclaw/openclaw#13336](https://github.com/openclaw/openclaw/issues/13336) and [openclaw/openclaw#29120](https://github.com/openclaw/openclaw/issues/29120).
 
-1. Reduce Ollama context window (128K on CPU is overkill):
-   ```bash
-   # In Ollama's systemd override:
-   Environment="OLLAMA_NUM_CTX=8192"
-   ```
+#### Cause 3: Provider cooldown after timeout
 
-2. Disable provider cooldown (prevents exponential backoff after timeouts):
-   ```json
-   // In openclaw.json under models.providers.ollama:
-   "retry": { "attempts": 1 }
-   ```
+After the first timeout, OpenClaw incorrectly treats it as a rate limit and puts Ollama into exponential cooldown (1m → 5m → 25m → 1hr). All subsequent requests fail with 0 tokens instantly.
 
-See [openclaw/openclaw#13336](https://github.com/openclaw/openclaw/issues/13336) and [openclaw/openclaw#29120](https://github.com/openclaw/openclaw/issues/29120) for upstream tracking.
+```bash
+# Check for stale cooldown state
+find ~/.openclaw -name "auth-profiles.json" -exec grep -l "disabledUntil" {} \;
+# If found, edit and remove the usageStats/disabledUntil section
+
+# Prevent future cooldowns
+openclaw config set models.providers.ollama.retry '{"attempts": 1}' --json
+openclaw gateway restart
+```
 
 ### Model not found
 

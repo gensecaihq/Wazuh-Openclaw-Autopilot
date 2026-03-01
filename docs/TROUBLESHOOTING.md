@@ -291,17 +291,22 @@ To test quickly, set `STALLED_PIPELINE_THRESHOLD_MINUTES=1` and ingest an alert 
 
 ### "fetch failed" with 0 tokens / 5-minute timeout (Ollama)
 
-If Ollama agents fail with `error=fetch failed` and `input: 0, output: 0` after exactly 5 minutes, Node.js's built-in `fetch()` (powered by undici) is timing out. undici has a hardcoded 300-second `headersTimeout` — on CPU-only inference, Ollama may not start sending response headers within that window.
+If Ollama agents fail with `error=fetch failed` and `input: 0, output: 0` after exactly 5 minutes, three issues are usually compounding:
 
-**Symptoms:**
-- Session logs: `"errorMessage": "fetch failed"` with `"output": 0`
-- Exactly 5 minutes between request and error
-- `curl http://127.0.0.1:11434/api/tags` works fine, `ollama ps` shows model loaded
+1. **Ollama context window too small** (most common) — Ollama defaults to 2048 tokens. OpenClaw injects ~12K tokens of system prompt. The prompt gets silently truncated, the model hangs, and times out.
+2. **undici 300-second headersTimeout** — Node.js `fetch()` kills connections after 5 minutes. No OpenClaw config can change this.
+3. **Provider cooldown** — After the first timeout, OpenClaw marks Ollama as rate-limited with exponential backoff (1m→5m→25m→1hr).
 
-**Fix — override undici timeout:**
+**Fix all three:**
 
 ```bash
-# Create preload script
+# 1. Set Ollama context window (CRITICAL — most common cause)
+sudo systemctl edit ollama
+# Add: Environment="OLLAMA_NUM_CTX=32768"
+# Add: Environment="OLLAMA_KEEP_ALIVE=24h"
+sudo systemctl daemon-reload && sudo systemctl restart ollama
+
+# 2. Override undici timeout
 cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
 const undici = require("undici");
 const OPTS = { headersTimeout: 30 * 60 * 1000, bodyTimeout: 0 };
@@ -311,13 +316,18 @@ enforce();
 undici.setGlobalDispatcher = function () { enforce(); };
 SCRIPT
 
-# Inject into gateway systemd service
-sudo systemctl edit openclaw-gateway.service
+systemctl edit --user openclaw-gateway
 # Add: Environment="NODE_OPTIONS=--require /root/undici-timeout-fix.cjs"
-sudo systemctl daemon-reload && sudo systemctl restart openclaw-gateway.service
+systemctl --user daemon-reload && systemctl --user restart openclaw-gateway
+
+# 3. Clear cooldown and prevent future cooldowns
+find ~/.openclaw -name "auth-profiles.json" -exec grep -l "disabledUntil" {} \;
+# If found, edit and remove usageStats/disabledUntil section
+openclaw config set models.providers.ollama.retry '{"attempts": 1}' --json
+openclaw gateway restart
 ```
 
-Also reduce Ollama context window for CPU-only (`OLLAMA_NUM_CTX=8192`) and disable provider cooldown (`"retry": {"attempts": 1}` in the Ollama provider config). See [AIR_GAPPED_DEPLOYMENT.md](./AIR_GAPPED_DEPLOYMENT.md#fetch-failed-with-0-tokens-5-minute-timeout) for full details.
+See [AIR_GAPPED_DEPLOYMENT.md](./AIR_GAPPED_DEPLOYMENT.md#fetch-failed-with-0-tokens-5-minute-timeout) for the full breakdown.
 
 ### Gateway start blocked: `set gateway.mode=local`
 
