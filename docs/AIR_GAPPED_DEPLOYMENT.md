@@ -512,37 +512,71 @@ Verify: `ollama ps` should show your configured context value, not 2048.
 
 See [openclaw/openclaw#24068](https://github.com/openclaw/openclaw/issues/24068), [openclaw/openclaw#7725](https://github.com/openclaw/openclaw/issues/7725).
 
-#### Cause 2: undici 300-second headersTimeout
+#### Cause 2: Proxy environment variables + undici timeout
 
-Node.js's built-in `fetch()` (undici) has a hardcoded 300-second `headersTimeout`. On CPU-only inference, Ollama may not start sending response headers within 5 minutes. **There is no OpenClaw config to change this** — `timeoutSeconds` controls agent session duration, not HTTP call timeouts.
+OpenClaw's gateway uses undici's `EnvHttpProxyAgent` as its global HTTP dispatcher. This agent reads `http_proxy`, `https_proxy`, `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` from the process environment. If ANY of these are set (even inherited from a desktop session or previous configuration), **all HTTP requests — including to localhost Ollama — are routed through that proxy**. If the proxy is unreachable, the connection hangs for 300 seconds (undici's hardcoded `headersTimeout`) and fails with "fetch failed".
 
-**Fix — override undici timeout with a preload script:**
+Unlike curl, undici does NOT automatically bypass localhost. You must explicitly clear proxy vars or set `NO_PROXY`.
+
+Additionally, `timeoutSeconds` in OpenClaw config controls agent session duration, NOT HTTP call timeouts. There is no OpenClaw config to change the HTTP timeout.
+
+**Fix — create a bulletproof preload script that strips proxy vars AND extends timeouts:**
 
 ```bash
 cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
+// Strip ALL proxy environment variables BEFORE undici reads them
+// This prevents EnvHttpProxyAgent from routing localhost requests through a proxy
+delete process.env.http_proxy;
+delete process.env.https_proxy;
+delete process.env.HTTP_PROXY;
+delete process.env.HTTPS_PROXY;
+delete process.env.ALL_PROXY;
+delete process.env.all_proxy;
+
 const undici = require("undici");
 const OPTS = {
   headersTimeout: 30 * 60 * 1000,  // 30 minutes
-  bodyTimeout: 0,
+  bodyTimeout: 0,                   // no body timeout
+  noProxy: "localhost,127.0.0.1,::1",
 };
 const realSet = undici.setGlobalDispatcher.bind(undici);
 function enforce() { realSet(new undici.EnvHttpProxyAgent(OPTS)); }
 enforce();
+// Monkey-patch so internal libraries can't reset the dispatcher
 undici.setGlobalDispatcher = function () { enforce(); };
 SCRIPT
+```
+
+**Important:** The preload script requires undici as a module. If you get `Cannot find module 'undici'`, install it globally and set NODE_PATH:
+
+```bash
+npm install -g undici
 ```
 
 Inject into the gateway systemd service:
 
 ```bash
 systemctl edit --user openclaw-gateway
-# Add under [Service]:
-# Environment="NODE_OPTIONS=--require /root/undici-timeout-fix.cjs"
+```
 
+Add:
+```ini
+[Service]
+Environment="NODE_OPTIONS=--require /root/undici-timeout-fix.cjs"
+Environment="NODE_PATH=/usr/lib/node_modules"
+UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+```
+
+```bash
 systemctl --user daemon-reload && systemctl --user restart openclaw-gateway
 ```
 
-See [openclaw/openclaw#13336](https://github.com/openclaw/openclaw/issues/13336) and [openclaw/openclaw#29120](https://github.com/openclaw/openclaw/issues/29120).
+**Diagnostic — check if proxy vars are inherited:**
+```bash
+systemctl --user show-environment | grep -i proxy
+```
+
+See [openclaw/openclaw#28368](https://github.com/openclaw/openclaw/issues/28368), [openclaw/openclaw#13336](https://github.com/openclaw/openclaw/issues/13336), [openclaw/openclaw#29120](https://github.com/openclaw/openclaw/issues/29120).
 
 #### Cause 3: Provider cooldown after timeout
 

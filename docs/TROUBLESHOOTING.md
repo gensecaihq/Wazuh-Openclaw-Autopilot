@@ -293,39 +293,54 @@ To test quickly, set `STALLED_PIPELINE_THRESHOLD_MINUTES=1` and ingest an alert 
 
 If Ollama agents fail with `error=fetch failed` and `input: 0, output: 0` after exactly 5 minutes, three issues are usually compounding:
 
-1. **Ollama context window too small** (most common) — Ollama defaults to 2048 tokens. OpenClaw injects ~12K tokens of system prompt. The prompt gets silently truncated, the model hangs, and times out.
-2. **undici 300-second headersTimeout** — Node.js `fetch()` kills connections after 5 minutes. No OpenClaw config can change this.
-3. **Provider cooldown** — After the first timeout, OpenClaw marks Ollama as rate-limited with exponential backoff (1m→5m→25m→1hr).
+1. **Proxy environment variables** (most common on servers with desktop sessions or prior proxy config) — OpenClaw's `EnvHttpProxyAgent` reads `http_proxy`/`HTTPS_PROXY`/etc from the environment and routes ALL fetch() calls through the proxy, including localhost. Unlike curl, undici does NOT auto-bypass localhost.
+2. **Ollama context window too small** — Ollama defaults to 2048 tokens. OpenClaw injects ~12K tokens of system prompt.
+3. **undici 300-second headersTimeout** — Node.js `fetch()` kills connections after 5 minutes. No OpenClaw config can change this.
+4. **Provider cooldown** — After the first timeout, OpenClaw marks Ollama as rate-limited with exponential backoff.
 
-**Fix all three:**
+**Fix all of them:**
 
 ```bash
-# 1. Set Ollama context window (CRITICAL — most common cause)
+# 1. Set Ollama context window
 sudo systemctl edit ollama
 # Add: Environment="OLLAMA_NUM_CTX=32768"
 # Add: Environment="OLLAMA_KEEP_ALIVE=24h"
 sudo systemctl daemon-reload && sudo systemctl restart ollama
 
-# 2. Override undici timeout
+# 2. Create bulletproof preload script (strips proxy vars + extends timeout)
 cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
+delete process.env.http_proxy;
+delete process.env.https_proxy;
+delete process.env.HTTP_PROXY;
+delete process.env.HTTPS_PROXY;
+delete process.env.ALL_PROXY;
+delete process.env.all_proxy;
 const undici = require("undici");
-const OPTS = { headersTimeout: 30 * 60 * 1000, bodyTimeout: 0 };
+const OPTS = { headersTimeout: 30 * 60 * 1000, bodyTimeout: 0, noProxy: "localhost,127.0.0.1,::1" };
 const realSet = undici.setGlobalDispatcher.bind(undici);
 function enforce() { realSet(new undici.EnvHttpProxyAgent(OPTS)); }
 enforce();
 undici.setGlobalDispatcher = function () { enforce(); };
 SCRIPT
 
+# 3. Install undici globally (preload needs it as a module)
+npm install -g undici
+
+# 4. Inject into gateway systemd service
 systemctl edit --user openclaw-gateway
-# Add: Environment="NODE_OPTIONS=--require /root/undici-timeout-fix.cjs"
+# Add:
+# [Service]
+# Environment="NODE_OPTIONS=--require /root/undici-timeout-fix.cjs"
+# Environment="NODE_PATH=/usr/lib/node_modules"
+# UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 systemctl --user daemon-reload && systemctl --user restart openclaw-gateway
 
-# 3. Clear cooldown and prevent future cooldowns
+# 5. Clear cooldown state
 find ~/.openclaw -name "auth-profiles.json" -exec grep -l "disabledUntil" {} \;
 # If found, edit and remove usageStats/disabledUntil section
-openclaw config set models.providers.ollama.retry '{"attempts": 1}' --json
-openclaw gateway restart
 ```
+
+**Diagnostic:** `systemctl --user show-environment | grep -i proxy` — if this shows ANY proxy vars, that's your blocker.
 
 See [AIR_GAPPED_DEPLOYMENT.md](./AIR_GAPPED_DEPLOYMENT.md#fetch-failed-with-0-tokens-5-minute-timeout) for the full breakdown.
 
