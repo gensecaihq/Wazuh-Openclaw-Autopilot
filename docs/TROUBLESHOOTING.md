@@ -307,20 +307,27 @@ sudo systemctl edit ollama
 # Add: Environment="OLLAMA_KEEP_ALIVE=24h"
 sudo systemctl daemon-reload && sudo systemctl restart ollama
 
-# 2. Create bulletproof preload script (strips proxy vars + extends timeout)
+# 2. Create preload script (locks undici dispatcher with extended timeouts)
 cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
+"use strict";
 delete process.env.http_proxy;
 delete process.env.https_proxy;
 delete process.env.HTTP_PROXY;
 delete process.env.HTTPS_PROXY;
 delete process.env.ALL_PROXY;
 delete process.env.all_proxy;
-const undici = require("undici");
-const OPTS = { headersTimeout: 30 * 60 * 1000, bodyTimeout: 0, noProxy: "localhost,127.0.0.1,::1" };
-const realSet = undici.setGlobalDispatcher.bind(undici);
-function enforce() { realSet(new undici.EnvHttpProxyAgent(OPTS)); }
-enforce();
-undici.setGlobalDispatcher = function () { enforce(); };
+const { Agent, setGlobalDispatcher } = require("undici");
+const agent = new Agent({
+  headersTimeout: 30 * 60 * 1000,
+  bodyTimeout: 0,
+  connect: { timeout: 30 * 60 * 1000 },
+});
+setGlobalDispatcher(agent);
+// Lock via cross-module Symbol — prevents ESM imports from resetting the dispatcher
+const SYM = Symbol.for("undici.globalDispatcher.1");
+Object.defineProperty(globalThis, SYM, {
+  value: agent, writable: false, enumerable: false, configurable: false,
+});
 SCRIPT
 
 # 3. Install undici globally (preload needs it as a module)
