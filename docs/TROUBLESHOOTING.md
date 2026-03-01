@@ -289,6 +289,36 @@ journalctl -u wazuh-autopilot | grep "stalled-pipeline"
 
 To test quickly, set `STALLED_PIPELINE_THRESHOLD_MINUTES=1` and ingest an alert without advancing it past `open`. After 1 minute + the check interval, you should see re-dispatch logs.
 
+### "fetch failed" with 0 tokens / 5-minute timeout (Ollama)
+
+If Ollama agents fail with `error=fetch failed` and `input: 0, output: 0` after exactly 5 minutes, Node.js's built-in `fetch()` (powered by undici) is timing out. undici has a hardcoded 300-second `headersTimeout` — on CPU-only inference, Ollama may not start sending response headers within that window.
+
+**Symptoms:**
+- Session logs: `"errorMessage": "fetch failed"` with `"output": 0`
+- Exactly 5 minutes between request and error
+- `curl http://127.0.0.1:11434/api/tags` works fine, `ollama ps` shows model loaded
+
+**Fix — override undici timeout:**
+
+```bash
+# Create preload script
+cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
+const undici = require("undici");
+const OPTS = { headersTimeout: 30 * 60 * 1000, bodyTimeout: 0 };
+const realSet = undici.setGlobalDispatcher.bind(undici);
+function enforce() { realSet(new undici.EnvHttpProxyAgent(OPTS)); }
+enforce();
+undici.setGlobalDispatcher = function () { enforce(); };
+SCRIPT
+
+# Inject into gateway systemd service
+sudo systemctl edit openclaw-gateway.service
+# Add: Environment="NODE_OPTIONS=--require /root/undici-timeout-fix.cjs"
+sudo systemctl daemon-reload && sudo systemctl restart openclaw-gateway.service
+```
+
+Also reduce Ollama context window for CPU-only (`OLLAMA_NUM_CTX=8192`) and disable provider cooldown (`"retry": {"attempts": 1}` in the Ollama provider config). See [AIR_GAPPED_DEPLOYMENT.md](./AIR_GAPPED_DEPLOYMENT.md#fetch-failed-with-0-tokens-5-minute-timeout) for full details.
+
 ### Gateway start blocked: `set gateway.mode=local`
 
 OpenClaw v2026.2.17 requires `gateway.mode` to be set. Without it, the gateway refuses to start:

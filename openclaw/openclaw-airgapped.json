@@ -57,6 +57,7 @@
       "ollama": {
         "baseUrl": "http://127.0.0.1:11434",
         "api": "ollama",
+        "apiKey": "ollama",
         "models": [
           { "id": "llama3.3", "name": "Llama 3.3 70B", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 131072, "maxTokens": 4096 },
           { "id": "mistral", "name": "Mistral 7B", "reasoning": false, "input": ["text"], "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }, "contextWindow": 32768, "maxTokens": 4096 },

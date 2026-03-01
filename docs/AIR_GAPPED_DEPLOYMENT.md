@@ -439,6 +439,59 @@ After updating, restart OpenClaw:
 sudo systemctl restart openclaw
 ```
 
+### "fetch failed" with 0 tokens (5-minute timeout)
+
+If agents fail with `error=fetch failed` and `input: 0, output: 0` after exactly 5 minutes, Node.js's built-in `fetch()` (undici) is killing the connection before Ollama responds. This happens because undici has a hardcoded 300-second `headersTimeout` — on CPU-only inference with large context windows, Ollama can take longer than 5 minutes to start sending response headers.
+
+**Symptoms:**
+- Session logs show `"errorMessage": "fetch failed"` with `"output": 0`
+- Exactly 5 minutes between request and error (e.g., 05:29:06 → 05:34:06)
+- Gateway journal shows `embedded run agent end: ... error=fetch failed`
+- `ollama ps` shows the model is loaded and `curl http://127.0.0.1:11434/api/tags` works fine
+
+**Fix — override undici timeout with a preload script:**
+
+```bash
+cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
+const undici = require("undici");
+const OPTS = {
+  headersTimeout: 30 * 60 * 1000,  // 30 minutes
+  bodyTimeout: 0,
+};
+const realSet = undici.setGlobalDispatcher.bind(undici);
+function enforce() { realSet(new undici.EnvHttpProxyAgent(OPTS)); }
+enforce();
+undici.setGlobalDispatcher = function () { enforce(); };
+SCRIPT
+```
+
+Inject into the gateway systemd service:
+
+```bash
+sudo systemctl edit openclaw-gateway.service
+# Add under [Service]:
+# Environment="NODE_OPTIONS=--require /root/undici-timeout-fix.cjs"
+
+sudo systemctl daemon-reload
+sudo systemctl restart openclaw-gateway.service
+```
+
+**Also recommended for CPU-only deployments:**
+
+1. Reduce Ollama context window (128K on CPU is overkill):
+   ```bash
+   # In Ollama's systemd override:
+   Environment="OLLAMA_NUM_CTX=8192"
+   ```
+
+2. Disable provider cooldown (prevents exponential backoff after timeouts):
+   ```json
+   // In openclaw.json under models.providers.ollama:
+   "retry": { "attempts": 1 }
+   ```
+
+See [openclaw/openclaw#13336](https://github.com/openclaw/openclaw/issues/13336) and [openclaw/openclaw#29120](https://github.com/openclaw/openclaw/issues/29120) for upstream tracking.
+
 ### Model not found
 
 If agents report model errors, verify the exact model name:
