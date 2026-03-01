@@ -520,9 +520,15 @@ Unlike curl, undici does NOT automatically bypass localhost. You must explicitly
 
 Additionally, `timeoutSeconds` in OpenClaw config controls agent session duration, NOT HTTP call timeouts. There is no OpenClaw config to change the HTTP timeout.
 
-**Fix — create a preload script that locks the global dispatcher with extended timeouts:**
+**Fix — create a preload script that overrides OpenClaw's HTTP dispatcher timeouts:**
 
-OpenClaw's gateway is an ESM bundle that resets the undici global dispatcher at import time. A simple monkey-patch of `setGlobalDispatcher` only patches the CJS module export — the ESM import gets a separate reference and bypasses it. The fix uses `Symbol.for('undici.globalDispatcher.1')` (undici's cross-module shared Symbol) and locks it with `writable: false` so nothing can reset it:
+OpenClaw's internal library (`@mariozechner/pi-ai`) resets the undici global dispatcher at startup by calling `setGlobalDispatcher(new EnvHttpProxyAgent())` with **no timeout options** — inheriting undici's default 300-second `headersTimeout`. This happens asynchronously via a dynamic `import("undici").then(...)`, so it runs after any `--require` preload.
+
+The fix uses two strategies simultaneously to guarantee the timeout override works regardless of module resolution:
+
+1. **Set the dispatcher immediately** for any early fetch() calls
+2. **Re-apply after a delay** to overwrite pi-ai's async reset
+3. **Keep re-applying periodically** during startup to win any race condition
 
 ```bash
 cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
@@ -535,31 +541,43 @@ delete process.env.HTTPS_PROXY;
 delete process.env.ALL_PROXY;
 delete process.env.all_proxy;
 
-const { Agent, setGlobalDispatcher } = require("undici");
-
-const agent = new Agent({
-  headersTimeout: 30 * 60 * 1000,  // 30 minutes (default is 300s = 5 min)
-  bodyTimeout: 0,                   // no body timeout (streaming)
-  connect: { timeout: 30 * 60 * 1000 },
-});
-
-setGlobalDispatcher(agent);
-
-// Lock the dispatcher via the cross-module Symbol so ESM imports can't reset it.
-// undici stores the dispatcher at globalThis[Symbol.for('undici.globalDispatcher.1')].
-// Setting writable:false prevents any subsequent setGlobalDispatcher() call — whether
-// from CJS, ESM, or OpenClaw's bundled libraries — from overwriting it.
+const undici = require("undici");
 const SYM = Symbol.for("undici.globalDispatcher.1");
-Object.defineProperty(globalThis, SYM, {
-  value: agent,
-  writable: false,
-  enumerable: false,
-  configurable: false,
-});
+
+function applyDispatcher() {
+  const agent = new undici.Agent({
+    headersTimeout: 30 * 60 * 1000,  // 30 minutes (default is 300s = 5 min)
+    bodyTimeout: 0,                   // no body timeout (streaming)
+    connect: { timeout: 30 * 60 * 1000 },
+  });
+  // Write directly to the cross-module Symbol that ALL undici instances
+  // (built-in, npm-installed, vendored) read via getGlobalDispatcher().
+  // This bypasses setGlobalDispatcher() and works across CJS/ESM boundaries.
+  try {
+    Object.defineProperty(globalThis, SYM, {
+      value: agent, writable: true, enumerable: false, configurable: true,
+    });
+  } catch {
+    globalThis[SYM] = agent;  // fallback if property is already non-configurable
+  }
+}
+
+// Apply immediately
+applyDispatcher();
+
+// Re-apply after pi-ai's async import("undici").then(...) overwrites us.
+// pi-ai's dynamic import resolves in a microtask, so setTimeout(0) runs after it.
+// Apply multiple times during startup to win any race condition.
+setTimeout(applyDispatcher, 0);
+setTimeout(applyDispatcher, 100);
+setTimeout(applyDispatcher, 1000);
+setTimeout(applyDispatcher, 5000);
 SCRIPT
 ```
 
-> **Why `Agent` instead of `EnvHttpProxyAgent`?** The `EnvHttpProxyAgent` reads proxy env vars and may not properly propagate `headersTimeout`/`bodyTimeout` to the underlying connection pool ([undici#1987](https://github.com/nodejs/undici/issues/1987)). A plain `Agent` applies timeouts directly. If you need proxy support for non-Ollama traffic, configure it at the OS level instead.
+> **How this works:** OpenClaw's pi-ai does `import("undici").then(m => { setGlobalDispatcher(new EnvHttpProxyAgent()) })`. This `.then()` callback runs as a microtask after the dynamic import resolves — typically within the first few hundred milliseconds of startup. Our `setTimeout` callbacks run after microtasks flush, so the last `applyDispatcher()` call always wins. After 5 seconds, pi-ai's initialization is complete and the dispatcher is permanently set with 30-minute timeouts.
+
+> **Why `Agent` instead of `EnvHttpProxyAgent`?** `EnvHttpProxyAgent` may not propagate `headersTimeout`/`bodyTimeout` to the underlying pool ([undici#1987](https://github.com/nodejs/undici/issues/1987)). `Agent` applies timeouts directly. Since proxy vars are already deleted, there's no proxy routing to worry about.
 
 **Important:** The preload script requires undici as a module. If you get `Cannot find module 'undici'`, install it globally and set NODE_PATH:
 
@@ -585,12 +603,10 @@ UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_pro
 systemctl --user daemon-reload && systemctl --user restart openclaw-gateway
 ```
 
-**Verify the preload is working** — you should see no errors on gateway start:
+**Verify the preload is working** — gateway should start without errors:
 ```bash
 journalctl --user -u openclaw-gateway.service --since "1 min ago" | head -20
 ```
-
-If the gateway crashes with `TypeError: Cannot redefine property: Symbol(undici.globalDispatcher.1)`, the preload is working correctly — the lock prevented OpenClaw from resetting the dispatcher. This means a future OpenClaw version changed its dispatcher setup. Remove the `writable: false` line and rely on the `Agent` timeout alone.
 
 **Diagnostic — check if proxy vars are inherited:**
 ```bash

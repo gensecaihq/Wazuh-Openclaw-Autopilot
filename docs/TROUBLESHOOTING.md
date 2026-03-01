@@ -307,7 +307,7 @@ sudo systemctl edit ollama
 # Add: Environment="OLLAMA_KEEP_ALIVE=24h"
 sudo systemctl daemon-reload && sudo systemctl restart ollama
 
-# 2. Create preload script (locks undici dispatcher with extended timeouts)
+# 2. Create preload script (overrides undici dispatcher timeouts)
 cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
 "use strict";
 delete process.env.http_proxy;
@@ -316,18 +316,25 @@ delete process.env.HTTP_PROXY;
 delete process.env.HTTPS_PROXY;
 delete process.env.ALL_PROXY;
 delete process.env.all_proxy;
-const { Agent, setGlobalDispatcher } = require("undici");
-const agent = new Agent({
-  headersTimeout: 30 * 60 * 1000,
-  bodyTimeout: 0,
-  connect: { timeout: 30 * 60 * 1000 },
-});
-setGlobalDispatcher(agent);
-// Lock via cross-module Symbol — prevents ESM imports from resetting the dispatcher
+const undici = require("undici");
 const SYM = Symbol.for("undici.globalDispatcher.1");
-Object.defineProperty(globalThis, SYM, {
-  value: agent, writable: false, enumerable: false, configurable: false,
-});
+function applyDispatcher() {
+  const agent = new undici.Agent({
+    headersTimeout: 30 * 60 * 1000, bodyTimeout: 0,
+    connect: { timeout: 30 * 60 * 1000 },
+  });
+  try {
+    Object.defineProperty(globalThis, SYM, {
+      value: agent, writable: true, enumerable: false, configurable: true,
+    });
+  } catch { globalThis[SYM] = agent; }
+}
+applyDispatcher();
+// Re-apply after pi-ai's async setGlobalDispatcher overwrites us
+setTimeout(applyDispatcher, 0);
+setTimeout(applyDispatcher, 100);
+setTimeout(applyDispatcher, 1000);
+setTimeout(applyDispatcher, 5000);
 SCRIPT
 
 # 3. Install undici globally (preload needs it as a module)
