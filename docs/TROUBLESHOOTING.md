@@ -291,7 +291,7 @@ To test quickly, set `STALLED_PIPELINE_THRESHOLD_MINUTES=1` and ingest an alert 
 
 ### "fetch failed" with 0 tokens / 5-minute timeout (Ollama)
 
-If Ollama agents fail with `error=fetch failed` and `input: 0, output: 0` after exactly 5 minutes, three issues are usually compounding:
+If Ollama agents fail with `error=fetch failed` and `input: 0, output: 0` after exactly 5 minutes, several issues are usually compounding:
 
 1. **Proxy environment variables** (most common on servers with desktop sessions or prior proxy config) — OpenClaw's `EnvHttpProxyAgent` reads `http_proxy`/`HTTPS_PROXY`/etc from the environment and routes ALL fetch() calls through the proxy, including localhost. Unlike curl, undici does NOT auto-bypass localhost.
 2. **Ollama context window too small** — Ollama defaults to 2048 tokens. OpenClaw injects ~12K tokens of system prompt.

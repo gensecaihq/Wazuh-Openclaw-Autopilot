@@ -585,12 +585,13 @@ After the first timeout, OpenClaw incorrectly treats it as a rate limit and puts
 ```bash
 # Check for stale cooldown state
 find ~/.openclaw -name "auth-profiles.json" -exec grep -l "disabledUntil" {} \;
-# If found, edit and remove the usageStats/disabledUntil section
+# If found, edit the file and remove the usageStats/disabledUntil sections
 
-# Prevent future cooldowns
-openclaw config set models.providers.ollama.retry '{"attempts": 1}' --json
+# Restart gateway to clear in-memory cooldown state
 openclaw gateway restart
 ```
+
+> **Note:** The `models.providers.ollama.retry` config key is NOT supported by OpenClaw's zod schema (v2026.2.26). The only way to clear cooldown is to edit `auth-profiles.json` directly and restart the gateway.
 
 ### Model not found
 
