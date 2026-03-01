@@ -319,15 +319,10 @@ delete process.env.all_proxy;
 const undici = require("undici");
 const SYM = Symbol.for("undici.globalDispatcher.1");
 function applyDispatcher() {
-  const agent = new undici.Agent({
+  globalThis[SYM] = new undici.Agent({
     headersTimeout: 30 * 60 * 1000, bodyTimeout: 0,
     connect: { timeout: 30 * 60 * 1000 },
   });
-  try {
-    Object.defineProperty(globalThis, SYM, {
-      value: agent, writable: true, enumerable: false, configurable: true,
-    });
-  } catch { globalThis[SYM] = agent; }
 }
 applyDispatcher();
 // Re-apply after pi-ai's async setGlobalDispatcher overwrites us

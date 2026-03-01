@@ -542,6 +542,9 @@ delete process.env.ALL_PROXY;
 delete process.env.all_proxy;
 
 const undici = require("undici");
+
+// The Symbol where ALL undici instances (built-in, npm, vendored) store the
+// global dispatcher. Shared across CJS/ESM boundaries via globalThis.
 const SYM = Symbol.for("undici.globalDispatcher.1");
 
 function applyDispatcher() {
@@ -550,24 +553,20 @@ function applyDispatcher() {
     bodyTimeout: 0,                   // no body timeout (streaming)
     connect: { timeout: 30 * 60 * 1000 },
   });
-  // Write directly to the cross-module Symbol that ALL undici instances
-  // (built-in, npm-installed, vendored) read via getGlobalDispatcher().
-  // This bypasses setGlobalDispatcher() and works across CJS/ESM boundaries.
-  try {
-    Object.defineProperty(globalThis, SYM, {
-      value: agent, writable: true, enumerable: false, configurable: true,
-    });
-  } catch {
-    globalThis[SYM] = agent;  // fallback if property is already non-configurable
-  }
+  // Direct assignment works because undici sets the property with writable:true.
+  // This bypasses setGlobalDispatcher() and avoids CJS/ESM module isolation.
+  globalThis[SYM] = agent;
 }
 
-// Apply immediately
+// Apply immediately for any early fetch() calls
 applyDispatcher();
 
-// Re-apply after pi-ai's async import("undici").then(...) overwrites us.
-// pi-ai's dynamic import resolves in a microtask, so setTimeout(0) runs after it.
-// Apply multiple times during startup to win any race condition.
+// Re-apply to overwrite pi-ai's async dispatcher reset.
+// pi-ai's http-proxy.ts does: import("undici").then(m => {
+//   setGlobalDispatcher(new EnvHttpProxyAgent())  // no timeout opts!
+// })
+// The dynamic import + .then() resolves asynchronously during startup.
+// These delayed calls ensure we overwrite it regardless of timing.
 setTimeout(applyDispatcher, 0);
 setTimeout(applyDispatcher, 100);
 setTimeout(applyDispatcher, 1000);
@@ -575,7 +574,7 @@ setTimeout(applyDispatcher, 5000);
 SCRIPT
 ```
 
-> **How this works:** OpenClaw's pi-ai does `import("undici").then(m => { setGlobalDispatcher(new EnvHttpProxyAgent()) })`. This `.then()` callback runs as a microtask after the dynamic import resolves — typically within the first few hundred milliseconds of startup. Our `setTimeout` callbacks run after microtasks flush, so the last `applyDispatcher()` call always wins. After 5 seconds, pi-ai's initialization is complete and the dispatcher is permanently set with 30-minute timeouts.
+> **How this works:** pi-ai's `.then()` callback runs after the dynamic `import("undici")` resolves — typically within the first second of startup. Our `setTimeout` callbacks at 0/100/1000/5000ms re-apply the 30-minute timeout dispatcher after pi-ai's overwrite. The 5-second window is more than enough for module initialization. No LLM request fires until after the gateway is fully started (webhooks arrive externally), so the brief window where pi-ai's default dispatcher is active has no impact.
 
 > **Why `Agent` instead of `EnvHttpProxyAgent`?** `EnvHttpProxyAgent` may not propagate `headersTimeout`/`bodyTimeout` to the underlying pool ([undici#1987](https://github.com/nodejs/undici/issues/1987)). `Agent` applies timeouts directly. Since proxy vars are already deleted, there's no proxy routing to worry about.
 
