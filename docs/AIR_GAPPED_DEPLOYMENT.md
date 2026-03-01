@@ -524,11 +524,9 @@ Additionally, `timeoutSeconds` in OpenClaw config controls agent session duratio
 
 OpenClaw's internal library (`@mariozechner/pi-ai`) resets the undici global dispatcher at startup by calling `setGlobalDispatcher(new EnvHttpProxyAgent())` with **no timeout options** — inheriting undici's default 300-second `headersTimeout`. This happens asynchronously via a dynamic `import("undici").then(...)`, so it runs after any `--require` preload.
 
-The fix uses two strategies simultaneously to guarantee the timeout override works regardless of module resolution:
+**Additional hidden cause:** OpenClaw silently disables streaming for Ollama tool-calling models. Despite docs saying streaming works, the runtime injects `streaming: false` when tools are configured (always for agent sessions). This means Ollama waits for **full generation** before sending ANY HTTP response headers — and if generation takes >5 minutes, undici's `headersTimeout` kills the connection with 0 tokens received.
 
-1. **Set the dispatcher immediately** for any early fetch() calls
-2. **Re-apply after a delay** to overwrite pi-ai's async reset
-3. **Keep re-applying periodically** during startup to win any race condition
+The fix **monkey-patches `setGlobalDispatcher`** so that when pi-ai tries to overwrite the dispatcher with default timeouts, the call instead re-applies our extended timeout configuration:
 
 ```bash
 cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
@@ -543,40 +541,38 @@ delete process.env.all_proxy;
 
 const undici = require("undici");
 
-// The Symbol where ALL undici instances (built-in, npm, vendored) store the
-// global dispatcher. Shared across CJS/ESM boundaries via globalThis.
-const SYM = Symbol.for("undici.globalDispatcher.1");
+const TIMEOUT_OPTS = {
+  headersTimeout: 30 * 60 * 1000,  // 30 minutes (default is 300s = 5 min)
+  bodyTimeout: 0,                   // no body timeout (streaming/long generation)
+  connect: { timeout: 30 * 60 * 1000 },
+};
 
-function applyDispatcher() {
-  const agent = new undici.Agent({
-    headersTimeout: 30 * 60 * 1000,  // 30 minutes (default is 300s = 5 min)
-    bodyTimeout: 0,                   // no body timeout (streaming)
-    connect: { timeout: 30 * 60 * 1000 },
-  });
-  // Direct assignment works because undici sets the property with writable:true.
-  // This bypasses setGlobalDispatcher() and avoids CJS/ESM module isolation.
-  globalThis[SYM] = agent;
+// Save the real setGlobalDispatcher
+const realSetGlobalDispatcher = undici.setGlobalDispatcher.bind(undici);
+
+// Apply our extended-timeout dispatcher
+function enforce() {
+  realSetGlobalDispatcher(new undici.Agent(TIMEOUT_OPTS));
 }
 
-// Apply immediately for any early fetch() calls
-applyDispatcher();
+// Set it immediately for any early fetch() calls
+enforce();
 
-// Re-apply to overwrite pi-ai's async dispatcher reset.
-// pi-ai's http-proxy.ts does: import("undici").then(m => {
-//   setGlobalDispatcher(new EnvHttpProxyAgent())  // no timeout opts!
-// })
-// The dynamic import + .then() resolves asynchronously during startup.
-// These delayed calls ensure we overwrite it regardless of timing.
-setTimeout(applyDispatcher, 0);
-setTimeout(applyDispatcher, 100);
-setTimeout(applyDispatcher, 1000);
-setTimeout(applyDispatcher, 5000);
+// Monkey-patch setGlobalDispatcher so pi-ai's call re-applies our config.
+// pi-ai's http-proxy.ts does:
+//   import("undici").then(m => m.setGlobalDispatcher(new EnvHttpProxyAgent()))
+// Without this patch, that call overwrites our 30-minute timeouts with 300s defaults.
+undici.setGlobalDispatcher = function patchedSetGlobalDispatcher() {
+  enforce();  // Ignore pi-ai's dispatcher, re-apply ours
+};
 SCRIPT
 ```
 
-> **How this works:** pi-ai's `.then()` callback runs after the dynamic `import("undici")` resolves — typically within the first second of startup. Our `setTimeout` callbacks at 0/100/1000/5000ms re-apply the 30-minute timeout dispatcher after pi-ai's overwrite. The 5-second window is more than enough for module initialization. No LLM request fires until after the gateway is fully started (webhooks arrive externally), so the brief window where pi-ai's default dispatcher is active has no impact.
+> **How this works:** The preload runs before any other module. It saves the real `setGlobalDispatcher`, sets up a 30-minute timeout dispatcher, then replaces `setGlobalDispatcher` with a wrapper that always re-applies our config. When pi-ai later calls `setGlobalDispatcher(new EnvHttpProxyAgent())`, the patched version ignores the default-timeout dispatcher and re-applies the 30-minute one instead. This is deterministic — no race conditions.
 
 > **Why `Agent` instead of `EnvHttpProxyAgent`?** `EnvHttpProxyAgent` may not propagate `headersTimeout`/`bodyTimeout` to the underlying pool ([undici#1987](https://github.com/nodejs/undici/issues/1987)). `Agent` applies timeouts directly. Since proxy vars are already deleted, there's no proxy routing to worry about.
+
+> **Why not `writable:false` / Symbol lock?** pi-ai's `.then()` callback has no `.catch()`, so a `TypeError: Cannot redefine property` would crash the gateway with an unhandled promise rejection.
 
 **Important:** The preload script requires undici as a module. If you get `Cannot find module 'undici'`, install it globally and set NODE_PATH:
 

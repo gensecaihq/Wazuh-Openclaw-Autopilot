@@ -293,10 +293,11 @@ To test quickly, set `STALLED_PIPELINE_THRESHOLD_MINUTES=1` and ingest an alert 
 
 If Ollama agents fail with `error=fetch failed` and `input: 0, output: 0` after exactly 5 minutes, several issues are usually compounding:
 
-1. **Proxy environment variables** (most common on servers with desktop sessions or prior proxy config) — OpenClaw's `EnvHttpProxyAgent` reads `http_proxy`/`HTTPS_PROXY`/etc from the environment and routes ALL fetch() calls through the proxy, including localhost. Unlike curl, undici does NOT auto-bypass localhost.
-2. **Ollama context window too small** — Ollama defaults to 2048 tokens. OpenClaw injects ~12K tokens of system prompt.
-3. **undici 300-second headersTimeout** — Node.js `fetch()` kills connections after 5 minutes. No OpenClaw config can change this.
-4. **Provider cooldown** — After the first timeout, OpenClaw marks Ollama as rate-limited with exponential backoff.
+1. **Streaming silently disabled** — OpenClaw injects `streaming: false` for Ollama tool-calling models. Ollama waits for full generation before sending HTTP headers. If generation takes >5 min, undici kills the connection.
+2. **undici 300-second headersTimeout** — Node.js `fetch()` kills connections after 5 minutes with no response headers. pi-ai's `http-proxy.ts` sets `setGlobalDispatcher(new EnvHttpProxyAgent())` with default 300s timeout, overwriting any custom dispatcher.
+3. **Proxy environment variables** (common on servers with desktop sessions) — `EnvHttpProxyAgent` reads `http_proxy`/`HTTPS_PROXY`/etc and routes ALL requests including localhost through the proxy. Unlike curl, undici does NOT auto-bypass localhost.
+4. **Ollama context window too small** — Ollama defaults to 2048 tokens. OpenClaw injects ~12K tokens of system prompt.
+5. **Provider cooldown** — After the first timeout, OpenClaw marks Ollama as rate-limited with exponential backoff (1m → 5m → 25m → 1hr).
 
 **Fix all of them:**
 
@@ -307,7 +308,7 @@ sudo systemctl edit ollama
 # Add: Environment="OLLAMA_KEEP_ALIVE=24h"
 sudo systemctl daemon-reload && sudo systemctl restart ollama
 
-# 2. Create preload script (overrides undici dispatcher timeouts)
+# 2. Create preload script (monkey-patches setGlobalDispatcher to prevent pi-ai overwrite)
 cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
 "use strict";
 delete process.env.http_proxy;
@@ -317,19 +318,12 @@ delete process.env.HTTPS_PROXY;
 delete process.env.ALL_PROXY;
 delete process.env.all_proxy;
 const undici = require("undici");
-const SYM = Symbol.for("undici.globalDispatcher.1");
-function applyDispatcher() {
-  globalThis[SYM] = new undici.Agent({
-    headersTimeout: 30 * 60 * 1000, bodyTimeout: 0,
-    connect: { timeout: 30 * 60 * 1000 },
-  });
-}
-applyDispatcher();
-// Re-apply after pi-ai's async setGlobalDispatcher overwrites us
-setTimeout(applyDispatcher, 0);
-setTimeout(applyDispatcher, 100);
-setTimeout(applyDispatcher, 1000);
-setTimeout(applyDispatcher, 5000);
+const OPTS = { headersTimeout: 30*60*1000, bodyTimeout: 0, connect: { timeout: 30*60*1000 } };
+const realSet = undici.setGlobalDispatcher.bind(undici);
+function enforce() { realSet(new undici.Agent(OPTS)); }
+enforce();
+// Monkey-patch so pi-ai's setGlobalDispatcher(new EnvHttpProxyAgent()) re-applies ours
+undici.setGlobalDispatcher = function() { enforce(); };
 SCRIPT
 
 # 3. Install undici globally (preload needs it as a module)
