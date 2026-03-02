@@ -586,7 +586,7 @@ SCRIPT
 
 > **Why `Agent` instead of `EnvHttpProxyAgent`?** `EnvHttpProxyAgent` may not propagate `headersTimeout`/`bodyTimeout` to the underlying pool ([undici#1987](https://github.com/nodejs/undici/issues/1987)). `Agent` applies timeouts directly. Since proxy vars are already deleted, there's no proxy routing to worry about.
 
-> **Why not monkey-patch `setGlobalDispatcher`?** OpenClaw bundles its own undici copy. The preload's `require("undici")` and pi-ai's `import("undici")` resolve to **different module instances** with separate `setGlobalDispatcher` functions. Patching one doesn't affect the other.
+> **Why not monkey-patch `setGlobalDispatcher`?** OpenClaw bundles its own undici copy at `node_modules/openclaw/node_modules/undici/`. The preload's `require("undici")` and pi-ai's `import("undici")` resolve to **different module instances** with separate `setGlobalDispatcher` functions. Patching one doesn't affect the other. Note: The [ClawKit guide](https://getclawkit.com/docs/troubleshooting/ollama-timeout-errors) recommends this monkey-patch approach, but it does not work when OpenClaw's bundled undici is a separate copy from the global install (which is the case for npm global installs).
 
 > **Why not `writable:false` / Symbol lock?** pi-ai's `.then()` callback has no `.catch()`, so a `TypeError: Cannot redefine property` would crash the gateway with an unhandled promise rejection.
 
