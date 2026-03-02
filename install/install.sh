@@ -580,7 +580,7 @@ setup_secure_directories() {
     # OpenClaw directories — resolve the invoking user's home even under sudo
     local _real_user="${SUDO_USER:-$(whoami)}"
     local _real_home
-    _real_home=$(getent passwd "${_real_user}" | cut -d: -f6)
+    _real_home=$(getent passwd "${_real_user}" 2>/dev/null | cut -d: -f6 || true)
     if [[ -z "$_real_home" ]]; then _real_home="/root"; fi
     local OC_DIR="$_real_home/.openclaw"
     mkdir -p "$OC_DIR/wazuh-autopilot/agents"
@@ -809,7 +809,7 @@ deploy_agents() {
     # Resolve the invoking user's home even under sudo
     local _real_user="${SUDO_USER:-$(whoami)}"
     local _real_home
-    _real_home=$(getent passwd "${_real_user}" | cut -d: -f6)
+    _real_home=$(getent passwd "${_real_user}" 2>/dev/null | cut -d: -f6 || true)
     if [[ -z "$_real_home" ]]; then _real_home="/root"; fi
     local OC_DIR="$_real_home/.openclaw"
     local AGENTS_SRC="$PROJECT_ROOT/openclaw"
@@ -1136,11 +1136,13 @@ configure_system() {
     TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "127.0.0.1")
 
     # Read secrets
-    local MCP_AUTH_TOKEN OPENCLAW_TOKEN APPROVAL_SECRET PAIRING_SECRET
+    local MCP_AUTH_TOKEN OPENCLAW_TOKEN OPENCLAW_WEBHOOK_TOKEN APPROVAL_SECRET PAIRING_SECRET AUTOPILOT_SERVICE_TOKEN
     MCP_AUTH_TOKEN=$(cat "$SECRETS_DIR/mcp_token")
     OPENCLAW_TOKEN=$(cat "$SECRETS_DIR/openclaw_token")
+    OPENCLAW_WEBHOOK_TOKEN=$(cat "$SECRETS_DIR/openclaw_webhook_token")
     APPROVAL_SECRET=$(cat "$SECRETS_DIR/approval_secret")
     PAIRING_SECRET=$(cat "$SECRETS_DIR/pairing_code")
+    AUTOPILOT_SERVICE_TOKEN=$(cat "$SECRETS_DIR/service_token")
 
     echo ""
     echo -e "${CYAN}${BOLD}Wazuh API Configuration${NC}"
@@ -1410,7 +1412,7 @@ ENVEOF
     # Substitute placeholders in openclaw.json (generated earlier with placeholder values)
     local _oc_real_user="${SUDO_USER:-$(whoami)}"
     local _oc_real_home
-    _oc_real_home=$(getent passwd "${_oc_real_user}" | cut -d: -f6)
+    _oc_real_home=$(getent passwd "${_oc_real_user}" 2>/dev/null | cut -d: -f6 || true)
     if [[ -z "$_oc_real_home" ]]; then _oc_real_home="/root"; fi
     local _ocjson="$_oc_real_home/.openclaw/openclaw.json"
     if [[ -f "$_ocjson" ]]; then
@@ -1443,6 +1445,20 @@ ENVEOF
             sed -i "s/__SLACK_ENABLED__/true/" "$_ocjson"
         else
             sed -i "s/__SLACK_ENABLED__/false/" "$_ocjson"
+            # Remove Slack-dependent bindings when Slack is disabled to prevent
+            # OpenClaw zod schema validation failures on startup
+            if command -v python3 &>/dev/null; then
+                python3 -c "
+import json, sys
+with open('$_ocjson') as f: c = f.read()
+# Strip JSON5 comments for parsing
+import re
+c_clean = re.sub(r'//.*', '', c)
+d = json.loads(c_clean)
+d['bindings'] = []
+with open('$_ocjson', 'w') as f: json.dump(d, f, indent=2)
+" 2>/dev/null || log_warn "Could not remove Slack bindings — edit openclaw.json manually if OpenClaw fails to start"
+            fi
         fi
 
         # Substitute additional provider API keys (empty string if not set)
@@ -1828,7 +1844,7 @@ run_security_audit() {
     # Check gateway binding
     local _audit_real_user="${SUDO_USER:-$(whoami)}"
     local _audit_real_home
-    _audit_real_home=$(getent passwd "${_audit_real_user}" | cut -d: -f6)
+    _audit_real_home=$(getent passwd "${_audit_real_user}" 2>/dev/null | cut -d: -f6 || true)
     if [[ -z "$_audit_real_home" ]]; then _audit_real_home="/root"; fi
     if grep -q "bind.*loopback\|bind.*127.0.0.1" "$_audit_real_home/.openclaw/openclaw.json" 2>/dev/null; then
         echo -e "  ${GREEN}✓${NC} Gateway binds to localhost"
@@ -1968,7 +1984,9 @@ main() {
         # Also clean up openclaw.json temp files
         local _cleanup_user="${SUDO_USER:-$(whoami)}"
         local _oc_dir
-        _oc_dir=$(getent passwd "${_cleanup_user}" | cut -d: -f6)/.openclaw
+        _oc_dir=$(getent passwd "${_cleanup_user}" 2>/dev/null | cut -d: -f6 || true)
+        if [[ -z "$_oc_dir" ]]; then _oc_dir="/root"; fi
+        _oc_dir="$_oc_dir/.openclaw"
         if [[ -d "$_oc_dir" ]]; then
             rm -f "${_oc_dir}/openclaw.json."?????? 2>/dev/null || true
         fi
@@ -2025,7 +2043,7 @@ main() {
     validate_configuration
     prompt_responder_activation
     show_pairing_info
-    start_services
+    start_services || log_warn "Service startup had issues — check logs above"
     run_security_audit
     print_summary
 }

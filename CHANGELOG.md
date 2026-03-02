@@ -45,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Installer `dmPolicy: "open"`**: Changed to `"allowlist"` in both `install.sh` and `openclaw.json`
 - **Installer `npm install --production`**: Changed to `npm ci --omit=dev` for deterministic builds
 - **Installer missing `AUTOPILOT_SERVICE_TOKEN`**: Now generated, stored, and substituted into env file
+- **Installer missing `OPENCLAW_WEBHOOK_TOKEN`/`AUTOPILOT_SERVICE_TOKEN` in `configure_system()`** (fixes #13): Local variable declarations in `configure_system()` omitted these two secrets, causing `_safe_subst()` to leave raw placeholders in the .env file — resulting in "Unauthorized" webhook errors
+- **Installer breaks when declining Slack** (fixes #13): `start_services()` returned exit code 1 under `set -e` when services failed, killing the entire install. Slack bindings were also left in `openclaw.json` even when Slack was disabled, potentially causing OpenClaw zod schema validation failures. Now: `start_services` is non-fatal, and Slack bindings are removed when Slack is declined.
+- **Installer `getent passwd` pipeline failure**: All 5 `getent passwd` calls now suppressed stderr and appended `|| true` to prevent `set -eo pipefail` from killing the script in LDAP/Docker environments where the user isn't in the local passwd database
 - **`dmPolicy: "open"` in `openclaw.json`**: Changed to `"allowlist"` to match the documented security posture
 - **`package.json` version**: Bumped from 2.3.0 to 2.4.3 to match the latest release
 - **RUNTIME_API.md wrong Slack env var names**: Changed `SLACK_CHANNEL_ALERTS`/`SLACK_CHANNEL_APPROVALS` to `SLACK_ALERTS_CHANNEL`/`SLACK_APPROVALS_CHANNEL` to match actual code
