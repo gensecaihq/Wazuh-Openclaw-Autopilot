@@ -262,9 +262,9 @@ Tested via [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) v4
 |-------------|-------------|
 | [Wazuh Manager](https://wazuh.com) | SIEM platform (installed and running, 4.8.0+) |
 | [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) | MCP bridge for Wazuh API access |
-| [OpenClaw](https://github.com/openclaw/openclaw) | AI agent framework ([docs](https://openclaw.ai)) |
-| Node.js 20+ | Runtime for autopilot service |
-| LLM API Key | Claude, GPT, Groq, Mistral, or [Ollama](https://ollama.com) (local/free) |
+| [OpenClaw](https://github.com/openclaw/openclaw) v2026.3.1+ | AI agent framework ([docs](https://openclaw.ai)) |
+| Node.js 20+ | Runtime for autopilot service (22+ recommended by OpenClaw) |
+| [Ollama](https://ollama.com) 0.17+ (air-gapped) or LLM API Key | Local models or Claude, GPT, Groq, Mistral cloud APIs |
 
 ### Installation
 

@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Stalled-pipeline detector**: Automatically detects cases stuck in transient statuses (open, triaged, correlated, etc.) for longer than a configurable threshold and re-dispatches the webhook to give the agent another attempt. Configurable via `STALLED_PIPELINE_ENABLED`, `STALLED_PIPELINE_THRESHOLD_MINUTES` (default 30), and `STALLED_PIPELINE_CHECK_INTERVAL_MS` (default 300000). New metrics: `autopilot_stalled_pipeline_detected_total`, `autopilot_stalled_pipeline_redispatched_total`.
+
+### Fixed
+- **Ollama "fetch failed" 5-minute timeout** (fixes #12, #13): OpenClaw bundles its own undici copy, and pi-ai's `http-proxy.ts` resets the global dispatcher with a default 300-second `headersTimeout`. Combined with OpenClaw silently disabling streaming for Ollama tool-calling models, any generation >5 min causes "fetch failed" with 0 tokens. The preload script now writes directly to the shared `globalThis[Symbol.for('undici.globalDispatcher.1')]` and re-applies via `setTimeout` to survive pi-ai's async overwrite. See `docs/AIR_GAPPED_DEPLOYMENT.md` for the complete fix.
+- **Ollama `api` mode in air-gapped config** (fixes #11): Changed `openclaw-airgapped.json` from `"api": "openai-completions"` with `/v1` to `"api": "ollama"` with native endpoint. The OpenAI-compatible mode breaks tool calling — models output raw JSON instead of invoking tools.
+- **`reasoning: false` for Ollama models** (fixes #10): Set `"reasoning": false` explicitly for standard Ollama models (Llama, Mistral, Qwen, CodeLlama). Only models with native thinking support (deepseek-r1, qwq) should have `"reasoning": true`.
+
+### Changed
+- **Tested with OpenClaw v2026.3.1**: Verified compatibility with the latest OpenClaw release. The undici timeout preload script is still required — pi-ai@0.55.3 ships identical `http-proxy.ts`.
+
+### Added
 - **Runtime enforcement for policy time_windows, rate_limits, and idempotency**: These three policy.yaml sections were previously declarative only. The runtime now enforces them:
   - **Time windows**: `policyCheckTimeWindow()` blocks `createResponsePlan()` and `executePlan()` outside configured UTC day/time windows (respects `outside_window_action: allow|deny`)
   - **Rate limits**: `policyCheckActionRateLimit()` enforces per-action and global hourly/daily rate limits inside the plan execution action loop. Counters auto-reset on window expiry.
