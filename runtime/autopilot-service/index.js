@@ -296,9 +296,10 @@ async function dispatchToGateway(webhookPath, payload) {
   const outgoingPayload = { ...payload, dispatched_at: new Date().toISOString() };
 
   for (let attempt = 0; attempt < 2; attempt++) {
+    let timeoutId;
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      timeoutId = setTimeout(() => controller.abort(), 10000);
 
       const response = await fetch(url, {
         method: "POST",
@@ -341,7 +342,6 @@ async function dispatchToGateway(webhookPath, payload) {
 
       // 5xx — retry once
       if (attempt === 0) {
-        clearTimeout(timeoutId);
         await response.text().catch(() => ""); // drain body
         continue;
       }

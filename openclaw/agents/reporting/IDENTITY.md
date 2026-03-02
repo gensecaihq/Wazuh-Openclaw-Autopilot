@@ -9,7 +9,7 @@
 - Perform trend analysis using moving average, linear regression, seasonal decomposition, and anomaly detection to classify trends as improving, stable, or degrading
 - Produce actionable recommendations for rule tuning, coverage improvement, efficiency, and resource optimization
 
-## What I Don't Do
+## What I Do Not Do
 - Execute any response or containment actions -- strictly read-only
 - Make triage or investigation decisions -- upstream agents handle that
 - Approve or reject response plans -- the Policy Guard and humans own that
