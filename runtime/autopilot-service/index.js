@@ -790,10 +790,20 @@ async function atomicWriteFile(filePath, content) {
 
 // Per-case async mutex to prevent lost-update on concurrent updateCase calls.
 // Uses a proper queue pattern so 3+ concurrent callers are serialized correctly.
+const MAX_CASE_LOCKS = 10000;
 const caseLocks = new Map();
 async function withCaseLock(caseId, fn) {
   let lock = caseLocks.get(caseId);
   if (!lock) {
+    // Evict oldest lock entries if we hit the cap (prevents unbounded growth)
+    if (caseLocks.size >= MAX_CASE_LOCKS) {
+      for (const [oldId, oldLock] of caseLocks) {
+        if (!oldLock.running && oldLock.queue.length === 0) {
+          caseLocks.delete(oldId);
+          break;
+        }
+      }
+    }
     lock = { queue: [], running: false };
     caseLocks.set(caseId, lock);
   }
@@ -953,7 +963,10 @@ async function updateCase(caseId, updates) {
     if (Object.prototype.hasOwnProperty.call(updates, "summary")) evidencePack.summary = updates.summary;
     if (Object.prototype.hasOwnProperty.call(updates, "severity")) evidencePack.severity = updates.severity;
     if (Object.prototype.hasOwnProperty.call(updates, "confidence")) evidencePack.confidence = updates.confidence;
-    if (Object.prototype.hasOwnProperty.call(updates, "status")) evidencePack.status = updates.status;
+    if (Object.prototype.hasOwnProperty.call(updates, "status")) {
+      evidencePack.status = updates.status;
+      stalledRedispatchCounts.delete(caseId); // Reset backoff counter on status transition
+    }
 
     // Append arrays with size cap to prevent unbounded growth
     const MAX_ARRAY_ITEMS = 10000;
@@ -1044,7 +1057,10 @@ async function updateCase(caseId, updates) {
           status: updates.status,
           severity: evidencePack.severity,
           trigger: "status_change",
-        }).catch(() => {});
+        }).catch((err) => {
+          log("warn", "dispatch", "Failed to dispatch status change webhook", { case_id: caseId, status: updates.status, error: err.message });
+          incrementMetric("webhook_dispatch_failures_total");
+        });
       }
     }
 
@@ -1114,7 +1130,7 @@ function generateApprovalToken(planId, caseId) {
     const now = Date.now();
     let removed = 0;
     for (const [token, data] of approvalTokens.entries()) {
-      if (Date.parse(data.expires_at) < now || data.used) {
+      if (new Date(data.expires_at).getTime() < now || data.used) {
         approvalTokens.delete(token);
         removed++;
         if (approvalTokens.size < MAX_APPROVAL_TOKENS * 0.9) break;
@@ -1351,7 +1367,10 @@ function createResponsePlan(planData) {
     risk_level: plan.risk_level,
     actions_count: plan.actions.length,
     trigger: "plan_created",
-  }).catch(() => {});
+  }).catch((err) => {
+    log("warn", "dispatch", "Failed to dispatch plan-created webhook", { plan_id: planId, case_id: planData.case_id, error: err.message });
+    incrementMetric("webhook_dispatch_failures_total");
+  });
 
   return plan;
 }
@@ -2989,7 +3008,8 @@ function createServer() {
           return;
         }
 
-        const cases = await listCases({ limit: 100 });
+        const requestedLimit = parseInt(url.searchParams.get("limit") || "100", 10);
+        const cases = await listCases({ limit: Math.min(Math.max(requestedLimit, 1), 1000) });
         res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
         res.end(JSON.stringify(cases));
         return;
@@ -3341,7 +3361,10 @@ function createServer() {
             title: caseData.title,
             entities_count: entities.length,
             trigger: "alert_ingestion",
-          }).catch(() => {});
+          }).catch((err) => {
+            log("warn", "dispatch", "Failed to dispatch alert ingestion webhook", { case_id: caseId, error: err.message });
+            incrementMetric("webhook_dispatch_failures_total");
+          });
         }
 
         // Record metrics
@@ -3409,15 +3432,30 @@ function createServer() {
         }
 
         const ALLOWED_DATA_FIELDS = ["title", "summary", "severity", "confidence", "correlation", "findings", "recommended_response", "iocs", "enrichment_data", "mitre", "entities", "timeline"];
+        const STRING_FIELDS = ["title", "summary", "severity", "confidence", "recommended_response"];
+        const OBJECT_FIELDS = ["correlation", "enrichment_data", "mitre"];
+        const ARRAY_FIELDS = ["findings", "iocs", "entities", "timeline"];
+        const MAX_DATA_SIZE = 512 * 1024; // 512 KB
         const updates = {};
         if (status) updates.status = status;
         if (dataParam) {
+          if (dataParam.length > MAX_DATA_SIZE) {
+            sendJsonError(res, 400, "Data parameter exceeds 512 KB limit", requestId);
+            return;
+          }
           try {
             const parsed = JSON.parse(dataParam);
+            if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+              sendJsonError(res, 400, "Data parameter must be a JSON object", requestId);
+              return;
+            }
             for (const key of Object.keys(parsed)) {
-              if (ALLOWED_DATA_FIELDS.includes(key)) {
-                updates[key] = parsed[key];
-              }
+              if (!ALLOWED_DATA_FIELDS.includes(key)) continue;
+              const val = parsed[key];
+              if (STRING_FIELDS.includes(key) && typeof val !== "string") continue;
+              if (OBJECT_FIELDS.includes(key) && (typeof val !== "object" || val === null || Array.isArray(val))) continue;
+              if (ARRAY_FIELDS.includes(key) && !Array.isArray(val)) continue;
+              updates[key] = val;
             }
           } catch {
             sendJsonError(res, 400, "Invalid JSON in data parameter", requestId);
@@ -3473,6 +3511,14 @@ function createServer() {
         }
         if (!title) {
           sendJsonError(res, 400, "Missing title parameter", requestId);
+          return;
+        }
+        if (title.length > 500) {
+          sendJsonError(res, 400, "Title exceeds 500 character limit", requestId);
+          return;
+        }
+        if (description.length > 10000) {
+          sendJsonError(res, 400, "Description exceeds 10000 character limit", requestId);
           return;
         }
 
@@ -4250,6 +4296,8 @@ module.exports = {
   // Enrichment
   isPrivateIp,
   enrichIpAddress,
+  enrichmentCache,
+  MAX_ENRICHMENT_CACHE_SIZE,
   // Alert grouping
   findRelatedCase,
   indexCaseEntities,
@@ -4296,6 +4344,9 @@ module.exports = {
 // STALLED PIPELINE DETECTION
 // =============================================================================
 
+const MAX_REDISPATCH_ATTEMPTS = 5;
+const stalledRedispatchCounts = new Map();
+
 async function checkStalledPipeline() {
   if (!config.stalledPipelineEnabled) return;
 
@@ -4333,8 +4384,19 @@ async function checkStalledPipeline() {
       const webhookPath = redispatchWebhooks[caseSummary.status];
       if (!webhookPath) continue;
 
+      // Backoff: stop re-dispatching after MAX_REDISPATCH_ATTEMPTS
+      const attempts = stalledRedispatchCounts.get(caseSummary.case_id) || 0;
+      if (attempts >= MAX_REDISPATCH_ATTEMPTS) {
+        log("warn", "stalled-pipeline", `Case exceeded max redispatch attempts (${MAX_REDISPATCH_ATTEMPTS}), skipping`, {
+          case_id: caseSummary.case_id,
+          status: caseSummary.status,
+          attempts,
+        });
+        continue;
+      }
+
       const ageMinutes = Math.round(age / 60000);
-      log("warn", "stalled-pipeline", `Case stalled in ${caseSummary.status} for ${ageMinutes}m, re-dispatching`, {
+      log("warn", "stalled-pipeline", `Case stalled in ${caseSummary.status} for ${ageMinutes}m, re-dispatching (attempt ${attempts + 1}/${MAX_REDISPATCH_ATTEMPTS})`, {
         case_id: caseSummary.case_id,
         status: caseSummary.status,
         age_minutes: ageMinutes,
@@ -4379,9 +4441,13 @@ async function checkStalledPipeline() {
           status: caseSummary.status,
           severity: evidencePack.severity || caseSummary.severity,
           trigger: "stalled_pipeline_redispatch",
-        }).catch(() => {});
+        }).catch((err) => {
+          log("warn", "dispatch", "Failed to dispatch stalled pipeline webhook", { case_id: caseSummary.case_id, status: caseSummary.status, error: err.message });
+          incrementMetric("webhook_dispatch_failures_total");
+        });
 
         incrementMetric("stalled_pipeline_redispatched_total");
+        stalledRedispatchCounts.set(caseSummary.case_id, attempts + 1);
 
         // Touch updated_at so we don't re-dispatch every check interval
         // Use withCaseLock to prevent data corruption from concurrent updateCase calls

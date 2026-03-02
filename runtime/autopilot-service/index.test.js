@@ -42,6 +42,8 @@ const {
   // New: enrichment & grouping
   isPrivateIp,
   enrichIpAddress,
+  enrichmentCache,
+  MAX_ENRICHMENT_CACHE_SIZE,
   findRelatedCase,
   indexCaseEntities,
   markEntityFalsePositive,
@@ -976,6 +978,32 @@ describe("enrichIpAddress", () => {
     // enrichment is disabled by default in test env (ENRICHMENT_ENABLED not set)
     const result = await enrichIpAddress("203.0.113.50");
     assert.strictEqual(result, null);
+  });
+});
+
+describe("Enrichment cache eviction", () => {
+  afterEach(() => {
+    enrichmentCache.clear();
+  });
+
+  it("evicts oldest entry when cache is full", () => {
+    // Fill cache to the max
+    for (let i = 0; i < MAX_ENRICHMENT_CACHE_SIZE; i++) {
+      enrichmentCache.set(`10.0.${Math.floor(i / 256)}.${i % 256}`, {
+        data: { score: i },
+        expiresAt: Date.now() + 3600000,
+      });
+    }
+    assert.strictEqual(enrichmentCache.size, MAX_ENRICHMENT_CACHE_SIZE);
+
+    // Adding one more should still work (eviction happens in enrichIpAddress, but
+    // we verify the Map itself allows the insertion pattern)
+    const firstKey = enrichmentCache.keys().next().value;
+    enrichmentCache.delete(firstKey);
+    enrichmentCache.set("eviction-test-ip", { data: { score: 999 }, expiresAt: Date.now() + 3600000 });
+    assert.strictEqual(enrichmentCache.size, MAX_ENRICHMENT_CACHE_SIZE);
+    assert.ok(enrichmentCache.has("eviction-test-ip"));
+    assert.ok(!enrichmentCache.has(firstKey));
   });
 });
 

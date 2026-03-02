@@ -16,7 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Denied actions are skipped individually (rate limit / idempotency) or fail the entire plan (time window), with `policy_denies_total` metric incremented using reason labels `time_window_denied`, `action_rate_limited`, `global_rate_limited`, `duplicate_action`
   - Cleanup intervals evict expired rate limit and dedup state every 5 minutes
 - **LLM deployment choice documentation**: README now presents three clear paths (Cloud APIs, Local Ollama, Hybrid) with the local/air-gapped path clearly stating current limitations
-- 296 tests across 10 files
+- **Stalled pipeline redispatch backoff**: Re-dispatches are now capped at 5 attempts per case (resets on status transition), preventing gateway hammering on permanently stalled cases
+- **Data parameter schema validation**: `/api/agent-action/update-case` now validates field types (string, object, array) and enforces a 512 KB size limit on the `data` parameter
+- **Plan title/description length limits**: `create-plan` now rejects titles >500 chars and descriptions >10,000 chars
+- **listCases hard max**: `/api/cases` now clamps the `limit` parameter to 1-1000 range
+- **Enrichment cache eviction on overflow**: `enrichmentCache` now evicts oldest entry when hitting 10,000 entries
+- **Agent TOOLS.md stalled pipeline docs**: All 6 pipeline agent TOOLS.md files now document the `[RETRY]` message format and pre-built callback URLs
+- 297 tests across 10 files
 
 ### Fixed
 - **Stalled pipeline data corruption**: `checkStalledPipeline()` now acquires the case lock before writing `updated_at`, preventing data loss from concurrent `updateCase` calls
@@ -32,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Slack `SAFE_ERROR_PATTERNS` missing entries**: Added patterns for "Executor must be different" (separation of duties) and "Case already exists"
 - **Log sensitive field denylist too narrow**: Expanded from 4 fields (auth, token, password, secret) to 10 fields (added api_key, apiKey, authorization, credential, bearer, session_token)
 - **`uncaughtException` handler**: Now sets `isShuttingDown = true` to reject new requests during the 1-second drain window
+- **Silent dispatch error suppression**: All 4 `.catch(() => {})` patterns on `dispatchToGateway` calls now log the error and increment `webhook_dispatch_failures_total`
+- **caseLocks unbounded growth**: Added `MAX_CASE_LOCKS` (10,000) cap with eviction of idle lock entries
+- **Inconsistent `Date.parse` usage**: Replaced with `new Date().getTime()` for consistency in approval token cleanup
+- **Installer `dmPolicy: "open"`**: Changed to `"allowlist"` in both `install.sh` and `openclaw.json`
+- **Installer `npm install --production`**: Changed to `npm ci --omit=dev` for deterministic builds
+- **Installer missing `AUTOPILOT_SERVICE_TOKEN`**: Now generated, stored, and substituted into env file
 - **`dmPolicy: "open"` in `openclaw.json`**: Changed to `"allowlist"` to match the documented security posture
 - **`package.json` version**: Bumped from 2.3.0 to 2.4.3 to match the latest release
 - **RUNTIME_API.md wrong Slack env var names**: Changed `SLACK_CHANNEL_ALERTS`/`SLACK_CHANNEL_APPROVALS` to `SLACK_ALERTS_CHANNEL`/`SLACK_APPROVALS_CHANNEL` to match actual code
