@@ -206,7 +206,7 @@
       "enabled": true,
       "botToken": "${SLACK_BOT_TOKEN}",
       "appToken": "${SLACK_APP_TOKEN}",
-      "dmPolicy": "open",
+      "dmPolicy": "allowlist",
       "groupPolicy": "allowlist"
     }
   },

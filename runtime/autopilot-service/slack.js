@@ -308,6 +308,8 @@ const SAFE_ERROR_PATTERNS = [
   /^Cannot reject plan that is currently executing/,
   /^Responder capability is DISABLED/,
   /^Concurrent execution limit/,
+  /^Executor must be different/,
+  /^Case already exists/,
 ];
 
 function safeErrorMessage(err) {

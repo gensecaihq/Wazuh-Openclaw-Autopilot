@@ -122,6 +122,12 @@ function log(level, component, msg, extra = {}) {
   delete entry.token;
   delete entry.password;
   delete entry.secret;
+  delete entry.api_key;
+  delete entry.apiKey;
+  delete entry.authorization;
+  delete entry.credential;
+  delete entry.bearer;
+  delete entry.session_token;
 
   if (config.logFormat === "json") {
     console.log(JSON.stringify(entry));
@@ -335,10 +341,14 @@ async function dispatchToGateway(webhookPath, payload) {
 
       // 5xx — retry once
       if (attempt === 0) {
+        clearTimeout(timeoutId);
         await response.text().catch(() => ""); // drain body
         continue;
       }
+      // Final attempt 5xx — drain body to release connection
+      await response.text().catch(() => "");
     } catch (err) {
+      clearTimeout(timeoutId);
       if (attempt === 0 && (err.name === "AbortError" ||
         (err.cause && ["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT"].includes(err.cause.code)))) {
         continue; // retry once on transient errors
@@ -544,23 +554,25 @@ async function _doMcpSessionInit() {
     const controller2 = new AbortController();
     const timeoutId2 = setTimeout(() => controller2.abort(), 5000);
 
-    const notifResp = await fetch(`${config.mcpUrl}/mcp`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
-        ...(mcpSessionId && { "MCP-Session-Id": mcpSessionId }),
-        ...(authToken && { Authorization: `Bearer ${authToken}` }),
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "notifications/initialized",
-      }),
-      signal: controller2.signal,
-    });
-    await notifResp.text().catch(() => ""); // drain response body
-
-    clearTimeout(timeoutId2);
+    try {
+      const notifResp = await fetch(`${config.mcpUrl}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "MCP-Protocol-Version": MCP_PROTOCOL_VERSION,
+          ...(mcpSessionId && { "MCP-Session-Id": mcpSessionId }),
+          ...(authToken && { Authorization: `Bearer ${authToken}` }),
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/initialized",
+        }),
+        signal: controller2.signal,
+      });
+      await notifResp.text().catch(() => ""); // drain response body
+    } finally {
+      clearTimeout(timeoutId2);
+    }
 
     mcpSessionInitialized = true;
   } catch (err) {
@@ -776,20 +788,28 @@ async function atomicWriteFile(filePath, content) {
   await fs.rename(tmpPath, filePath);
 }
 
-// Per-case file lock to prevent lost-update on concurrent updateCase calls
+// Per-case async mutex to prevent lost-update on concurrent updateCase calls.
+// Uses a proper queue pattern so 3+ concurrent callers are serialized correctly.
 const caseLocks = new Map();
 async function withCaseLock(caseId, fn) {
-  while (caseLocks.has(caseId)) {
-    await caseLocks.get(caseId);
+  let lock = caseLocks.get(caseId);
+  if (!lock) {
+    lock = { queue: [], running: false };
+    caseLocks.set(caseId, lock);
   }
-  let resolve;
-  const promise = new Promise((r) => { resolve = r; });
-  caseLocks.set(caseId, promise);
+  if (lock.running) {
+    await new Promise((resolve) => lock.queue.push(resolve));
+  }
+  lock.running = true;
   try {
     return await fn();
   } finally {
-    caseLocks.delete(caseId);
-    resolve();
+    lock.running = false;
+    if (lock.queue.length > 0) {
+      lock.queue.shift()();
+    } else {
+      caseLocks.delete(caseId);
+    }
   }
 }
 
@@ -808,6 +828,17 @@ async function createCase(caseId, data) {
 
   return withCaseLock(caseId, async () => {
     const caseDir = path.join(config.dataDir, "cases", caseId);
+    const packPath = path.join(caseDir, "evidence-pack.json");
+
+    // Check if case already exists to prevent silent overwrite
+    try {
+      await fs.access(packPath);
+      throw new Error(`Case already exists: ${caseId}`);
+    } catch (err) {
+      if (err.message.startsWith("Case already exists")) throw err;
+      // ENOENT is expected — case doesn't exist yet
+    }
+
     await ensureDir(caseDir);
 
     const now = new Date().toISOString();
@@ -3904,10 +3935,16 @@ function createServer() {
           const updates = { appendFeedback: feedback };
 
           // If false positive, update case status and entity index
+          // Only attempt status change if the case isn't in a terminal state
           if (body.verdict === "false_positive") {
-            updates.status = "false_positive";
             markEntityFalsePositive(feedbackCaseId);
             incrementMetric("false_positives_total");
+            try {
+              const currentCase = await getCase(feedbackCaseId);
+              if (!["closed", "false_positive", "executed"].includes(currentCase.status)) {
+                updates.status = "false_positive";
+              }
+            } catch { /* proceed without status change */ }
           }
 
           const updatedCase = await updateCase(feedbackCaseId, updates);
@@ -4314,16 +4351,27 @@ async function checkStalledPipeline() {
           planned: `[RETRY] Evaluate plan for case ${caseSummary.case_id}`,
           approved: `[RETRY] Execute plan for case ${caseSummary.case_id}`,
         };
+
+        // Build callback URLs — for statuses that need a plan_id, look it up from the evidence pack
+        const latestPlan = (evidencePack.plans || []).slice(-1)[0];
+        const planId = latestPlan?.plan_id || "";
         const callbackUrls = {
           open: `http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseSummary.case_id}&status=triaged`,
           triaged: `http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseSummary.case_id}&status=correlated`,
           correlated: `http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseSummary.case_id}&status=investigated`,
-          investigated: `http://localhost:${config.metricsPort}/api/agent-action/create-plan?case_id=${caseSummary.case_id}&title=Response%20Plan&risk_level=medium&actions=%5B%5D`,
-          planned: `http://localhost:${config.metricsPort}/api/agent-action/approve-plan?plan_id={plan_id}&approver_id=policy-guard&decision=allow`,
-          approved: `http://localhost:${config.metricsPort}/api/agent-action/execute-plan?plan_id={plan_id}&executor_id=responder`,
+          // For investigated: don't include actions — let the agent build its own plan
+          investigated: `http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseSummary.case_id}&status=investigated`,
         };
+        // Only include plan-dependent URLs if we actually have a plan_id
+        if (planId) {
+          callbackUrls.planned = `http://localhost:${config.metricsPort}/api/agent-action/approve-plan?plan_id=${encodeURIComponent(planId)}&approver_id=policy-guard&decision=allow`;
+          callbackUrls.approved = `http://localhost:${config.metricsPort}/api/agent-action/execute-plan?plan_id=${encodeURIComponent(planId)}&executor_id=responder`;
+        }
 
-        const msg = `${statusMessages[caseSummary.status]} (${evidencePack.severity || caseSummary.severity} severity, stalled ${ageMinutes}m). Use web_fetch to call: ${callbackUrls[caseSummary.status]}`;
+        let msg = `${statusMessages[caseSummary.status]} (${evidencePack.severity || caseSummary.severity} severity, stalled ${ageMinutes}m).`;
+        if (callbackUrls[caseSummary.status]) {
+          msg += ` Use web_fetch to call: ${callbackUrls[caseSummary.status]}`;
+        }
 
         dispatchToGateway(webhookPath, {
           message: msg,
@@ -4336,15 +4384,21 @@ async function checkStalledPipeline() {
         incrementMetric("stalled_pipeline_redispatched_total");
 
         // Touch updated_at so we don't re-dispatch every check interval
-        evidencePack.updated_at = new Date(now).toISOString();
-        const caseDir = path.join(config.dataDir, "cases", caseSummary.case_id);
-        await atomicWriteFile(path.join(caseDir, "evidence-pack.json"), JSON.stringify(evidencePack, null, 2));
-        try {
-          const summaryPath = path.join(caseDir, "case.json");
-          const summary = JSON.parse(await fs.readFile(summaryPath, "utf8"));
-          summary.updated_at = new Date(now).toISOString();
-          await atomicWriteFile(summaryPath, JSON.stringify(summary, null, 2));
-        } catch { /* ok — summary may not exist */ }
+        // Use withCaseLock to prevent data corruption from concurrent updateCase calls
+        await withCaseLock(caseSummary.case_id, async () => {
+          const caseDir = path.join(config.dataDir, "cases", caseSummary.case_id);
+          try {
+            const currentPack = JSON.parse(await fs.readFile(path.join(caseDir, "evidence-pack.json"), "utf8"));
+            currentPack.updated_at = new Date(now).toISOString();
+            await atomicWriteFile(path.join(caseDir, "evidence-pack.json"), JSON.stringify(currentPack, null, 2));
+          } catch { /* ok — case may have been updated/deleted concurrently */ }
+          try {
+            const summaryPath = path.join(caseDir, "case.json");
+            const summary = JSON.parse(await fs.readFile(summaryPath, "utf8"));
+            summary.updated_at = new Date(now).toISOString();
+            await atomicWriteFile(summaryPath, JSON.stringify(summary, null, 2));
+          } catch { /* ok — summary may not exist */ }
+        });
 
       } catch (err) {
         log("warn", "stalled-pipeline", "Failed to re-dispatch stalled case", {
@@ -4628,6 +4682,7 @@ process.on("unhandledRejection", (reason) => {
 });
 
 process.on("uncaughtException", (err) => {
+  isShuttingDown = true; // Reject new requests during drain window
   log("error", "process", "Uncaught exception", {
     error: err.message,
     stack: err.stack,

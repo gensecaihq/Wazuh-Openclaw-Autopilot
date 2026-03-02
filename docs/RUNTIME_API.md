@@ -735,7 +735,7 @@ All responses include security headers:
 | `LOG_LEVEL` | info | Log level: debug, info, warn, error |
 | `LOG_FORMAT` | json | Log format: json or text |
 | `MAX_CONCURRENT_EXECUTIONS` | 5 | Max concurrent plan executions |
-| `MCP_MAX_RETRIES` | 3 | Max retries for MCP tool calls |
+| `MCP_MAX_RETRIES` | 2 | Max retries for MCP tool calls |
 | `AUTOPILOT_DATA_DIR` | /var/lib/wazuh-autopilot | Data directory for cases and plans |
 | `AUTOPILOT_CONFIG_DIR` | /etc/wazuh-autopilot | Config directory for policies |
 | `STALLED_PIPELINE_ENABLED` | true | Enable stalled-pipeline detection and re-dispatch |
@@ -743,5 +743,10 @@ All responses include security headers:
 | `STALLED_PIPELINE_CHECK_INTERVAL_MS` | 300000 | Interval between stall checks (5 min) |
 | `SLACK_APP_TOKEN` | (none) | Slack app-level token (xapp-...) for Socket Mode |
 | `SLACK_BOT_TOKEN` | (none) | Slack bot token (xoxb-...) for API calls |
-| `SLACK_CHANNEL_ALERTS` | (none) | Slack channel ID for alert notifications |
-| `SLACK_CHANNEL_APPROVALS` | (none) | Slack channel ID for approval requests |
+| `SLACK_ALERTS_CHANNEL` | (none) | Slack channel ID for alert notifications |
+| `SLACK_APPROVALS_CHANNEL` | (none) | Slack channel ID for approval requests |
+| `SLACK_REPORTS_CHANNEL` | (none) | Slack channel ID for report postings |
+| `MCP_RETRY_BASE_MS` | 1000 | Base delay for MCP retry backoff |
+| `ENRICHMENT_ERROR_CACHE_TTL_MS` | 300000 | Cache TTL for enrichment errors (5 min) |
+| `MCP_BOOTSTRAP_URL` | (none) | Fallback URL for MCP server (used if `MCP_URL` not set) |
+| `AUTOPILOT_MODE` | bootstrap | Runtime mode: `bootstrap` (fail-open) or `production` (fail-closed) |

@@ -9,23 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Stalled-pipeline detector**: Automatically detects cases stuck in transient statuses (open, triaged, correlated, etc.) for longer than a configurable threshold and re-dispatches the webhook to give the agent another attempt. Configurable via `STALLED_PIPELINE_ENABLED`, `STALLED_PIPELINE_THRESHOLD_MINUTES` (default 30), and `STALLED_PIPELINE_CHECK_INTERVAL_MS` (default 300000). New metrics: `autopilot_stalled_pipeline_detected_total`, `autopilot_stalled_pipeline_redispatched_total`.
-
-### Fixed
-- **Ollama "fetch failed" 5-minute timeout** (fixes #12, #13): OpenClaw bundles its own undici copy, and pi-ai's `http-proxy.ts` resets the global dispatcher with a default 300-second `headersTimeout`. Combined with OpenClaw silently disabling streaming for Ollama tool-calling models, any generation >5 min causes "fetch failed" with 0 tokens. The preload script now writes directly to the shared `globalThis[Symbol.for('undici.globalDispatcher.1')]` and re-applies via `setTimeout` to survive pi-ai's async overwrite. See `docs/AIR_GAPPED_DEPLOYMENT.md` for the complete fix.
-- **Ollama `api` mode in air-gapped config** (fixes #11): Changed `openclaw-airgapped.json` from `"api": "openai-completions"` with `/v1` to `"api": "ollama"` with native endpoint. The OpenAI-compatible mode breaks tool calling — models output raw JSON instead of invoking tools.
-- **`reasoning: false` for Ollama models** (fixes #10): Set `"reasoning": false` explicitly for standard Ollama models (Llama, Mistral, Qwen, CodeLlama). Only models with native thinking support (deepseek-r1, qwq) should have `"reasoning": true`.
-
-### Changed
-- **Tested with OpenClaw v2026.3.1**: Verified compatibility with the latest OpenClaw release. The undici timeout preload script is still required — pi-ai@0.55.3 ships identical `http-proxy.ts`.
-
-### Added
 - **Runtime enforcement for policy time_windows, rate_limits, and idempotency**: These three policy.yaml sections were previously declarative only. The runtime now enforces them:
   - **Time windows**: `policyCheckTimeWindow()` blocks `createResponsePlan()` and `executePlan()` outside configured UTC day/time windows (respects `outside_window_action: allow|deny`)
   - **Rate limits**: `policyCheckActionRateLimit()` enforces per-action and global hourly/daily rate limits inside the plan execution action loop. Counters auto-reset on window expiry.
   - **Idempotency**: `policyCheckIdempotency()` blocks duplicate action+target pairs within the configured `window_minutes` (default 60min)
   - Denied actions are skipped individually (rate limit / idempotency) or fail the entire plan (time window), with `policy_denies_total` metric incremented using reason labels `time_window_denied`, `action_rate_limited`, `global_rate_limited`, `duplicate_action`
   - Cleanup intervals evict expired rate limit and dedup state every 5 minutes
-- 21 new tests (276 total): Time window, rate limit, idempotency, and reset helper tests
+- **LLM deployment choice documentation**: README now presents three clear paths (Cloud APIs, Local Ollama, Hybrid) with the local/air-gapped path clearly stating current limitations
+- 296 tests across 10 files
+
+### Fixed
+- **Stalled pipeline data corruption**: `checkStalledPipeline()` now acquires the case lock before writing `updated_at`, preventing data loss from concurrent `updateCase` calls
+- **Stalled pipeline broken callback URLs**: Fixed callback URLs for `investigated` (was sending empty actions array, always rejected), `planned` and `approved` (were using literal `{plan_id}` instead of actual plan ID from evidence pack)
+- **Case lock race condition**: Replaced simple `Map.has/set/delete` pattern with proper async mutex queue. The old pattern allowed a third concurrent caller to bypass the lock between delete and resolve.
+- **Ollama "fetch failed" 5-minute timeout** (fixes #12, #13): OpenClaw bundles its own undici copy, and pi-ai's `http-proxy.ts` resets the global dispatcher with a default 300-second `headersTimeout`. Combined with OpenClaw silently disabling streaming for Ollama tool-calling models, any generation >5 min causes "fetch failed" with 0 tokens. The preload script now writes directly to the shared `globalThis[Symbol.for('undici.globalDispatcher.1')]` and re-applies via `setTimeout` to survive pi-ai's async overwrite. See `docs/AIR_GAPPED_DEPLOYMENT.md` for the complete fix.
+- **Ollama `api` mode in air-gapped config** (fixes #11): Changed `openclaw-airgapped.json` from `"api": "openai-completions"` with `/v1` to `"api": "ollama"` with native endpoint. The OpenAI-compatible mode breaks tool calling — models output raw JSON instead of invoking tools.
+- **`reasoning: false` for Ollama models** (fixes #10): Set `"reasoning": false` explicitly for standard Ollama models (Llama, Mistral, Qwen, CodeLlama). Only models with native thinking support (deepseek-r1, qwq) should have `"reasoning": true`.
+- **MCP session init timeout leak**: `clearTimeout` now runs in a `finally` block for the notification step, preventing timer leaks on error paths
+- **`dispatchToGateway` timeout and response leaks**: Timer is now cleared before retries and on error paths. Response body is drained on final 5xx to release connection pool sockets.
+- **`createCase` silent overwrite**: Now checks if `evidence-pack.json` already exists and returns 409 Conflict instead of silently overwriting
+- **False positive feedback on closed cases**: Feedback is now always appended; status change to `false_positive` is only attempted if the case isn't in a terminal state
+- **Slack `SAFE_ERROR_PATTERNS` missing entries**: Added patterns for "Executor must be different" (separation of duties) and "Case already exists"
+- **Log sensitive field denylist too narrow**: Expanded from 4 fields (auth, token, password, secret) to 10 fields (added api_key, apiKey, authorization, credential, bearer, session_token)
+- **`uncaughtException` handler**: Now sets `isShuttingDown = true` to reject new requests during the 1-second drain window
+- **`dmPolicy: "open"` in `openclaw.json`**: Changed to `"allowlist"` to match the documented security posture
+- **`package.json` version**: Bumped from 2.3.0 to 2.4.3 to match the latest release
+- **RUNTIME_API.md wrong Slack env var names**: Changed `SLACK_CHANNEL_ALERTS`/`SLACK_CHANNEL_APPROVALS` to `SLACK_ALERTS_CHANNEL`/`SLACK_APPROVALS_CHANNEL` to match actual code
+- **RUNTIME_API.md `MCP_MAX_RETRIES` default**: Corrected from 3 to 2
+- **OBSERVABILITY_EXPORT.md dead metric**: Removed `autopilot_action_plans_proposed_total` (replaced by `plans_created_total` in v2.4.2)
+- **OBSERVABILITY_EXPORT.md phantom OpenTelemetry section**: Removed section describing OTEL support that was never implemented
+- **SECURITY.md supported versions**: Updated from 2.0.x-2.1.x to 2.2.x-2.4.x
+
+### Changed
+- **Tested with OpenClaw v2026.3.1**: Verified compatibility with the latest OpenClaw release. The undici timeout preload script is still required — pi-ai@0.55.3 ships identical `http-proxy.ts`.
 
 ## [2.4.3] - 2026-02-27
 

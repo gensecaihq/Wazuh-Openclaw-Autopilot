@@ -7,7 +7,7 @@ Wazuh Autopilot exports metrics and logs for integration with your existing obse
 - **No stack shipped** - Autopilot doesn't include Prometheus, Grafana, or Loki
 - **Standard formats** - Prometheus metrics, JSON structured logs
 - **Secure defaults** - Metrics bound to localhost only
-- **Optional OTEL** - OpenTelemetry support when configured
+- **Extensible** - Standard Prometheus format works with any monitoring stack
 
 ## Metrics
 
@@ -65,9 +65,6 @@ autopilot_mcp_tool_call_latency_seconds_count{tool="wazuh_get_alert"}
 #### Planning and Approval Metrics
 
 ```prometheus
-# Counter: Response plans proposed (by agents)
-autopilot_action_plans_proposed_total
-
 # Counter: Approval requests sent
 autopilot_approvals_requested_total
 
@@ -382,29 +379,6 @@ StandardOutput=append:/var/log/wazuh-autopilot/autopilot.log
 ```
 {job="wazuh-autopilot"} | json | component="policy" | msg=~".*deny.*"
 ```
-
-## OpenTelemetry (Optional)
-
-### Configuration
-
-Set OTEL environment variables to enable:
-
-```bash
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-OTEL_SERVICE_NAME=wazuh-autopilot
-```
-
-### Exported Spans
-
-When OTEL is configured, Autopilot exports:
-
-- Workflow spans (triage, correlation, planning)
-- MCP call spans
-- Approval workflow spans
-
-### Trace Context
-
-Correlation IDs are propagated as trace context, allowing end-to-end tracing from alert to action.
 
 ## Alerting Examples
 

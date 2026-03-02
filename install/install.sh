@@ -606,7 +606,7 @@ setup_credentials() {
     echo ""
 
     # Idempotent: reuse existing secrets if present (prevents breaking running services on re-install)
-    local MCP_AUTH_TOKEN OPENCLAW_TOKEN PAIRING_SECRET APPROVAL_SECRET
+    local MCP_AUTH_TOKEN OPENCLAW_TOKEN PAIRING_SECRET APPROVAL_SECRET AUTOPILOT_SERVICE_TOKEN
     local _generated_new=false
 
     if [[ -s "$SECRETS_DIR/mcp_token" ]]; then
@@ -649,6 +649,14 @@ setup_credentials() {
         _generated_new=true
     fi
 
+    if [[ -s "$SECRETS_DIR/service_token" ]]; then
+        AUTOPILOT_SERVICE_TOKEN=$(cat "$SECRETS_DIR/service_token")
+        log_info "Reusing existing service token"
+    else
+        AUTOPILOT_SERVICE_TOKEN=$(generate_secret 32)
+        _generated_new=true
+    fi
+
     # Store secrets in isolated files with restrictive umask
     local _old_umask
     _old_umask=$(umask)
@@ -658,6 +666,7 @@ setup_credentials() {
     echo "$OPENCLAW_WEBHOOK_TOKEN" > "$SECRETS_DIR/openclaw_webhook_token"
     echo "$PAIRING_SECRET" > "$SECRETS_DIR/pairing_code"
     echo "$APPROVAL_SECRET" > "$SECRETS_DIR/approval_secret"
+    echo "$AUTOPILOT_SERVICE_TOKEN" > "$SECRETS_DIR/service_token"
     umask "$_old_umask"
 
     # Verify permissions
@@ -667,9 +676,10 @@ setup_credentials() {
     log_security "OpenClaw token stored: $SECRETS_DIR/openclaw_token (mode 600)"
     log_security "OpenClaw webhook token stored: $SECRETS_DIR/openclaw_webhook_token (mode 600)"
     log_security "Pairing code stored: $SECRETS_DIR/pairing_code (mode 600)"
+    log_security "Service token stored: $SECRETS_DIR/service_token (mode 600)"
 
     # Export for later use
-    export MCP_AUTH_TOKEN OPENCLAW_TOKEN OPENCLAW_WEBHOOK_TOKEN PAIRING_SECRET APPROVAL_SECRET
+    export MCP_AUTH_TOKEN OPENCLAW_TOKEN OPENCLAW_WEBHOOK_TOKEN PAIRING_SECRET APPROVAL_SECRET AUTOPILOT_SERVICE_TOKEN
 
     if [[ "$_generated_new" == "true" ]]; then
         log_success "Credentials generated and isolated"
@@ -949,7 +959,7 @@ deploy_agents() {
       "enabled": __SLACK_ENABLED__,
       "botToken": "__SLACK_BOT_TOKEN__",
       "appToken": "__SLACK_APP_TOKEN__",
-      "dmPolicy": "open",
+      "dmPolicy": "allowlist",
       "groupPolicy": "allowlist"
     }
   },
@@ -1072,8 +1082,8 @@ install_runtime_service() {
 
     cd "$RUNTIME_DST"
     log_info "Installing dependencies..."
-    if ! npm install --production 2>&1; then
-        log_warn "npm install --production failed, retrying without --production flag..."
+    if ! npm ci --omit=dev 2>&1; then
+        log_warn "npm ci --omit=dev failed, retrying with npm install..."
         if ! npm install 2>&1; then
             log_error "npm install failed — runtime service dependencies not installed"
             exit 1
@@ -1314,6 +1324,9 @@ APPROVAL_TOKEN_TTL_MINUTES=60
 AUTOPILOT_PAIRING_CODE=__PAIRING_SECRET__
 AUTOPILOT_PAIRING_ENABLED=true
 
+# INTERNAL SERVICE AUTHENTICATION
+AUTOPILOT_SERVICE_TOKEN=__AUTOPILOT_SERVICE_TOKEN__
+
 # RESPONDER AGENT - TWO-TIER HUMAN APPROVAL
 # SAFETY: Disabled by default. Every action requires human Approve + Execute.
 AUTOPILOT_RESPONDER_ENABLED=false
@@ -1380,6 +1393,7 @@ ENVEOF
     _safe_subst "__SLACK_BOT_TOKEN__" "SLACK_BOT_TOKEN" "$_envfile"
     _safe_subst "__SLACK_ALERTS_CHANNEL__" "SLACK_ALERTS_CHANNEL" "$_envfile"
     _safe_subst "__SLACK_APPROVALS_CHANNEL__" "SLACK_APPROVALS_CHANNEL" "$_envfile"
+    _safe_subst "__AUTOPILOT_SERVICE_TOKEN__" "AUTOPILOT_SERVICE_TOKEN" "$_envfile"
 
     # Set AUTOPILOT_MODE based on install mode (full → production, bootstrap/mcp-only → bootstrap)
     if [[ "$INSTALL_MODE" == "full" ]]; then
