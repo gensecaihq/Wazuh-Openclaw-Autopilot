@@ -189,8 +189,10 @@ Model format is `"provider/model-name"`. Example `openclaw.json` snippet:
 {
   "model": {
     "primary": "anthropic/claude-sonnet-4-5",
-    "fallback": "openai/gpt-4o",
-    "fast": "groq/llama-3.3-70b-versatile"
+    "fallbacks": [
+      "openai/gpt-4o",
+      "groq/llama-3.3-70b-versatile"
+    ]
   }
 }
 ```
@@ -224,11 +226,16 @@ Use hosted LLM providers (Anthropic, OpenAI, Groq, Google, Mistral, xAI, OpenRou
 | **Guide** | [Quick Start](#quick-start) below → configure API keys → start services |
 
 ```bash
-# Example: Claude + Groq fallback
 # In /etc/wazuh-autopilot/.env:
+# Primary provider (required — matches openclaw.json default)
 ANTHROPIC_API_KEY=sk-ant-...
+
+# Fallback providers (optional — used when primary is unavailable)
+OPENAI_API_KEY=sk-...
 GROQ_API_KEY=gsk-...
 ```
+
+> Only the primary provider's API key is strictly required. The default `openclaw.json` uses `anthropic/claude-sonnet-4-5` as primary. If you change the primary model, set the corresponding provider's key.
 
 ### Path B: Local LLMs with Ollama (Air-Gapped)
 

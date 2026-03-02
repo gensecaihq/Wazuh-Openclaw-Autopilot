@@ -54,7 +54,22 @@ Edit the configuration file:
 sudo nano /etc/wazuh-autopilot/.env
 ```
 
-**Required settings:**
+**Required — LLM API Keys:**
+
+At minimum, set the API key for your primary LLM provider. The default config uses Anthropic as primary with OpenAI and Groq as fallbacks:
+
+```bash
+# Primary provider (required) — get key at https://console.anthropic.com/
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Fallback providers (optional but recommended for resilience)
+OPENAI_API_KEY=sk-...       # https://platform.openai.com/
+GROQ_API_KEY=gsk-...        # https://console.groq.com/
+```
+
+> **Note**: Only the primary provider key is strictly required. Fallback providers are used when the primary is unavailable or rate-limited. If you customize `openclaw.json` to use a different primary (e.g., `openai/gpt-4o`), set that provider's key instead.
+
+**Required — MCP Server Connection:**
 
 ```bash
 # MCP Server Connection
@@ -125,7 +140,7 @@ Expected response:
 ```json
 {
   "status": "healthy",
-  "version": "2.3.0",
+  "version": "2.4.3",
   "mode": "bootstrap"
 }
 ```
