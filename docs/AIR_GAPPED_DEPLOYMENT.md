@@ -526,7 +526,9 @@ OpenClaw's internal library (`@mariozechner/pi-ai`) resets the undici global dis
 
 **Additional hidden cause:** OpenClaw silently disables streaming for Ollama tool-calling models. Despite docs saying streaming works, the runtime injects `streaming: false` when tools are configured (always for agent sessions). This means Ollama waits for **full generation** before sending ANY HTTP response headers — and if generation takes >5 minutes, undici's `headersTimeout` kills the connection with 0 tokens received.
 
-The fix **monkey-patches `setGlobalDispatcher`** so that when pi-ai tries to overwrite the dispatcher with default timeouts, the call instead re-applies our extended timeout configuration:
+**Important:** OpenClaw bundles its **own copy** of undici inside `/usr/lib/node_modules/openclaw/node_modules/undici/`. The preload's `require("undici")` resolves to the **globally installed** copy (via `NODE_PATH`). These are two separate module instances — monkey-patching `setGlobalDispatcher` on one does NOT affect the other.
+
+However, all copies of undici share the **same dispatcher storage** via `globalThis[Symbol.for('undici.globalDispatcher.1')]`. The fix writes directly to this shared Symbol, bypassing any module's `setGlobalDispatcher` function, then re-applies after pi-ai's async overwrite completes:
 
 ```bash
 cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
@@ -547,32 +549,46 @@ const TIMEOUT_OPTS = {
   connect: { timeout: 30 * 60 * 1000 },
 };
 
-// Save the real setGlobalDispatcher
-const realSetGlobalDispatcher = undici.setGlobalDispatcher.bind(undici);
+// The Symbol where ALL undici copies (bundled, global, built-in) store the
+// global dispatcher. Symbol.for() returns the same Symbol across ALL modules.
+const SYM = Symbol.for("undici.globalDispatcher.1");
 
-// Apply our extended-timeout dispatcher
-function enforce() {
-  realSetGlobalDispatcher(new undici.Agent(TIMEOUT_OPTS));
+function applyDispatcher() {
+  // Direct assignment to globalThis bypasses any specific module's
+  // setGlobalDispatcher function. Works because undici sets the property
+  // with writable:true (after the first defineProperty call makes it
+  // configurable:false, subsequent writes via assignment still work).
+  globalThis[SYM] = new undici.Agent(TIMEOUT_OPTS);
 }
 
-// Set it immediately for any early fetch() calls
-enforce();
+// Apply immediately for any early fetch() calls
+applyDispatcher();
 
-// Monkey-patch setGlobalDispatcher so pi-ai's call re-applies our config.
-// pi-ai's http-proxy.ts does:
+// Re-apply after pi-ai's async overwrite.
+// pi-ai's http-proxy.ts (in OpenClaw's bundled copy) does:
 //   import("undici").then(m => m.setGlobalDispatcher(new EnvHttpProxyAgent()))
-// Without this patch, that call overwrites our 30-minute timeouts with 300s defaults.
-undici.setGlobalDispatcher = function patchedSetGlobalDispatcher() {
-  enforce();  // Ignore pi-ai's dispatcher, re-apply ours
-};
+// This resolves to OpenClaw's bundled undici, NOT the global one, so
+// monkey-patching the global undici's setGlobalDispatcher has no effect.
+// Instead, we re-apply our dispatcher after pi-ai's .then() completes.
+// The microtask + dynamic import typically resolves within 100ms of startup.
+setTimeout(applyDispatcher, 0);     // after microtasks
+setTimeout(applyDispatcher, 50);    // early init
+setTimeout(applyDispatcher, 200);   // typical pi-ai resolution
+setTimeout(applyDispatcher, 1000);  // slow systems
+setTimeout(applyDispatcher, 3000);  // very slow systems
+setTimeout(applyDispatcher, 8000);  // extra safety margin
 SCRIPT
 ```
 
-> **How this works:** The preload runs before any other module. It saves the real `setGlobalDispatcher`, sets up a 30-minute timeout dispatcher, then replaces `setGlobalDispatcher` with a wrapper that always re-applies our config. When pi-ai later calls `setGlobalDispatcher(new EnvHttpProxyAgent())`, the patched version ignores the default-timeout dispatcher and re-applies the 30-minute one instead. This is deterministic — no race conditions.
+> **How this works:** All undici copies (OpenClaw's bundled copy, the globally installed copy, Node.js internals) share the same dispatcher storage at `globalThis[Symbol.for('undici.globalDispatcher.1')]`. The preload sets this immediately, then pi-ai's async `import("undici").then(...)` overwrites it with a default-timeout `EnvHttpProxyAgent`. The `setTimeout` callbacks re-apply our 30-minute timeout `Agent` after pi-ai's overwrite. Since no LLM requests fire until the gateway is fully started (webhooks arrive externally), the brief window where pi-ai's default dispatcher is active has no impact.
 
 > **Why `Agent` instead of `EnvHttpProxyAgent`?** `EnvHttpProxyAgent` may not propagate `headersTimeout`/`bodyTimeout` to the underlying pool ([undici#1987](https://github.com/nodejs/undici/issues/1987)). `Agent` applies timeouts directly. Since proxy vars are already deleted, there's no proxy routing to worry about.
 
+> **Why not monkey-patch `setGlobalDispatcher`?** OpenClaw bundles its own undici copy. The preload's `require("undici")` and pi-ai's `import("undici")` resolve to **different module instances** with separate `setGlobalDispatcher` functions. Patching one doesn't affect the other.
+
 > **Why not `writable:false` / Symbol lock?** pi-ai's `.then()` callback has no `.catch()`, so a `TypeError: Cannot redefine property` would crash the gateway with an unhandled promise rejection.
+
+> **Why not a getter/setter trap?** undici's first `setGlobalDispatcher` call uses `Object.defineProperty` with `configurable: false`. Once set as a data property, it cannot be redefined as an accessor property (getter/setter). The property IS `writable: true` though, so direct assignment (`globalThis[SYM] = agent`) always works.
 
 **Important:** The preload script requires undici as a module. If you get `Cannot find module 'undici'`, install it globally and set NODE_PATH:
 

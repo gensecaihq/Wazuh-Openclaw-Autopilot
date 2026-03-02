@@ -308,7 +308,7 @@ sudo systemctl edit ollama
 # Add: Environment="OLLAMA_KEEP_ALIVE=24h"
 sudo systemctl daemon-reload && sudo systemctl restart ollama
 
-# 2. Create preload script (monkey-patches setGlobalDispatcher to prevent pi-ai overwrite)
+# 2. Create preload script (writes to shared Symbol, re-applies after pi-ai overwrite)
 cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
 "use strict";
 delete process.env.http_proxy;
@@ -319,11 +319,17 @@ delete process.env.ALL_PROXY;
 delete process.env.all_proxy;
 const undici = require("undici");
 const OPTS = { headersTimeout: 30*60*1000, bodyTimeout: 0, connect: { timeout: 30*60*1000 } };
-const realSet = undici.setGlobalDispatcher.bind(undici);
-function enforce() { realSet(new undici.Agent(OPTS)); }
-enforce();
-// Monkey-patch so pi-ai's setGlobalDispatcher(new EnvHttpProxyAgent()) re-applies ours
-undici.setGlobalDispatcher = function() { enforce(); };
+const SYM = Symbol.for("undici.globalDispatcher.1");
+function apply() { globalThis[SYM] = new undici.Agent(OPTS); }
+apply();
+// Re-apply after pi-ai's bundled undici overwrites the dispatcher
+// (pi-ai uses OpenClaw's bundled undici copy, not this global one)
+setTimeout(apply, 0);
+setTimeout(apply, 50);
+setTimeout(apply, 200);
+setTimeout(apply, 1000);
+setTimeout(apply, 3000);
+setTimeout(apply, 8000);
 SCRIPT
 
 # 3. Install undici globally (preload needs it as a module)
