@@ -168,15 +168,17 @@ Alert Ingestion ──▶ Triage ──▶ Correlation ──▶ Investigation
 
 OpenClaw is model-agnostic and supports 10+ LLM providers. Configure your preferred provider in `openclaw/openclaw.json`:
 
+> **Important — API Keys Only**: Wazuh Autopilot requires **pay-per-token API keys**, NOT subscription OAuth tokens. Anthropic and Google have banned the use of subscription-based OAuth tokens (Claude Pro/Max, Google AI Ultra) in third-party agent tools like OpenClaw. **Using subscription OAuth tokens will result in account suspension.** Always use API keys from the provider's developer console, or route through OpenRouter. See the [Provider Policy Notice](#provider-policy-notice) below.
+
 | Provider | Models | Best For | API Key Env |
 |----------|--------|----------|-------------|
-| [Anthropic](https://console.anthropic.com/) | `claude-opus-4-5`, `claude-sonnet-4-5`, `claude-haiku-4-5` | **Recommended** for SOC reasoning | `ANTHROPIC_API_KEY` |
+| [OpenRouter](https://openrouter.ai/) | 300+ models (Claude, GPT, Gemini, etc.) | **Safest option** — billing proxy, no ban risk | `OPENROUTER_API_KEY` |
+| [Anthropic](https://console.anthropic.com/) | `claude-sonnet-4-5`, `claude-haiku-4-5` | Best SOC reasoning (API key only) | `ANTHROPIC_API_KEY` |
 | [OpenAI](https://platform.openai.com/) | `gpt-4o`, `gpt-4.5-preview`, `o3-mini` | General purpose, embeddings | `OPENAI_API_KEY` |
-| [Groq](https://console.groq.com/) | `llama-3.3-70b-versatile`, `mixtral-8x7b-32768` | **Ultra-fast** inference | `GROQ_API_KEY` |
-| [Google](https://aistudio.google.com/) | `gemini-2.0-flash`, `gemini-2.0-pro` | Multimodal capabilities | `GOOGLE_API_KEY` |
+| [Groq](https://console.groq.com/) | `llama-3.3-70b-versatile`, `mixtral-8x7b-32768` | **Ultra-fast** inference, no ban issues | `GROQ_API_KEY` |
+| [Google](https://aistudio.google.com/) | `gemini-2.0-flash`, `gemini-2.0-pro` | Multimodal (API key only) | `GOOGLE_API_KEY` |
 | [Mistral](https://console.mistral.ai/) | `mistral-large-latest`, `codestral-latest` | European provider | `MISTRAL_API_KEY` |
 | [xAI](https://console.x.ai/) | `grok-2`, `grok-3` | Real-time knowledge | `XAI_API_KEY` |
-| [OpenRouter](https://openrouter.ai/) | 300+ models | Multi-provider gateway | `OPENROUTER_API_KEY` |
 | [Ollama](https://ollama.ai/) | `llama3.3`, `mistral`, `codellama` | **Local/free** inference | N/A |
 | [Together](https://together.xyz/) | Various open-source | Open-source hosting | `TOGETHER_API_KEY` |
 | [Cerebras](https://cerebras.ai/) | Cerebras models | Ultra-fast inference | `CEREBRAS_API_KEY` |
@@ -197,6 +199,17 @@ Model format is `"provider/model-name"`. Example `openclaw.json` snippet:
 }
 ```
 
+### Provider Policy Notice
+
+As of early 2026, **Anthropic and Google have banned** the use of subscription-plan OAuth tokens in third-party tools:
+
+- **Anthropic**: Claude Free, Pro, and Max subscription OAuth tokens are blocked in all third-party tools including OpenClaw. Pay-per-token API keys from [console.anthropic.com](https://console.anthropic.com/) work fine.
+- **Google**: Google AI Ultra subscribers have been suspended for routing through OpenClaw via OAuth. Pay-per-token API keys from [aistudio.google.com](https://aistudio.google.com/) work fine.
+- **OpenRouter**: Acts as a billing proxy — routes to Claude, GPT, Gemini, and 300+ other models via a single API key. **No ban risk** because you're paying per token through OpenRouter's billing, not abusing a flat-rate subscription.
+- **Groq, Mistral, xAI, Together, Cerebras**: No restrictions reported for API key usage in agent tools.
+
+**Recommendation**: Use **OpenRouter** as your primary provider for maximum safety and flexibility. You get access to Claude, GPT-4o, Gemini, and hundreds of other models through a single `OPENROUTER_API_KEY` with no risk of account suspension.
+
 ### Cost Optimization
 
 | Task Type | Recommended Model | Reason |
@@ -205,6 +218,7 @@ Model format is `"provider/model-name"`. Example `openclaw.json` snippet:
 | High-volume triage | `groq/llama-3.3-70b-versatile` | Fast & cost-effective |
 | Heartbeats/checks | `anthropic/claude-haiku-4-5` | Low cost |
 | Air-gapped deployment | `ollama/llama3.3` | No external API calls |
+| Safest cloud option | `openrouter/anthropic/claude-sonnet-4-5` | No ban risk via OpenRouter |
 
 ---
 
@@ -216,18 +230,30 @@ Wazuh Autopilot supports **two deployment paths** depending on your environment 
 
 > **Status: Stable and production-ready.**
 
-Use hosted LLM providers (Anthropic, OpenAI, Groq, Google, Mistral, xAI, OpenRouter) for the highest quality reasoning with minimal setup. This is the recommended path for most deployments.
+Use hosted LLM providers for the highest quality reasoning with minimal setup. **We recommend OpenRouter** as the safest single-key option — it routes to Claude, GPT-4o, Gemini, and 300+ models with no risk of provider-level account bans. Direct API keys from Anthropic, OpenAI, Groq, etc. also work but require pay-per-token billing (not subscription OAuth).
 
 | | Details |
 |---|---|
 | **Setup** | Set your API key in `.env` and configure `openclaw.json` with `"provider/model-name"` format |
-| **Pros** | Best model quality, fastest inference (Groq), no hardware requirements, multi-provider fallback, streaming support |
+| **Pros** | Best model quality, fastest inference (Groq), no hardware requirements, multi-provider fallback |
 | **Cons** | Requires internet access, API costs, data leaves your network |
 | **Guide** | [Quick Start](#quick-start) below → configure API keys → start services |
 
+**Option 1: OpenRouter (Recommended — safest)**
 ```bash
 # In /etc/wazuh-autopilot/.env:
-# Primary provider (required — matches openclaw.json default)
+# Single key for access to Claude, GPT-4o, Gemini, and 300+ models
+OPENROUTER_API_KEY=sk-or-...
+```
+Then update `openclaw.json` to use `openrouter/` prefix:
+```json
+{ "primary": "openrouter/anthropic/claude-sonnet-4-5", "fallbacks": ["openrouter/openai/gpt-4o"] }
+```
+
+**Option 2: Direct provider API keys**
+```bash
+# In /etc/wazuh-autopilot/.env:
+# Primary provider (required — pay-per-token API key, NOT subscription OAuth)
 ANTHROPIC_API_KEY=sk-ant-...
 
 # Fallback providers (optional — used when primary is unavailable)
@@ -235,7 +261,7 @@ OPENAI_API_KEY=sk-...
 GROQ_API_KEY=gsk-...
 ```
 
-> Only the primary provider's API key is strictly required. The default `openclaw.json` uses `anthropic/claude-sonnet-4-5` as primary. If you change the primary model, set the corresponding provider's key.
+> **Warning**: Do NOT use Claude Pro/Max or Google AI Ultra subscription OAuth tokens. These will be detected and your account will be suspended. Always use pay-per-token API keys from the provider's developer console. See [Provider Policy Notice](#provider-policy-notice).
 
 ### Path B: Local LLMs with Ollama (Air-Gapped)
 

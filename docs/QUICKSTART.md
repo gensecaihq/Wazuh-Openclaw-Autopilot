@@ -56,18 +56,19 @@ sudo nano /etc/wazuh-autopilot/.env
 
 **Required — LLM API Keys:**
 
-At minimum, set the API key for your primary LLM provider. The default config uses Anthropic as primary with OpenAI and Groq as fallbacks:
+At minimum, set the API key for your primary LLM provider. **We recommend OpenRouter** as the safest single-key option — it provides access to Claude, GPT-4o, Gemini, and 300+ models with no risk of provider-level account bans.
 
 ```bash
-# Primary provider (required) — get key at https://console.anthropic.com/
-ANTHROPIC_API_KEY=sk-ant-...
+# Option 1: OpenRouter (recommended — single key, no ban risk)
+OPENROUTER_API_KEY=sk-or-...     # https://openrouter.ai/
 
-# Fallback providers (optional but recommended for resilience)
-OPENAI_API_KEY=sk-...       # https://platform.openai.com/
-GROQ_API_KEY=gsk-...        # https://console.groq.com/
+# Option 2: Direct provider API keys (pay-per-token only!)
+ANTHROPIC_API_KEY=sk-ant-...     # https://console.anthropic.com/
+OPENAI_API_KEY=sk-...            # https://platform.openai.com/
+GROQ_API_KEY=gsk-...             # https://console.groq.com/
 ```
 
-> **Note**: Only the primary provider key is strictly required. Fallback providers are used when the primary is unavailable or rate-limited. If you customize `openclaw.json` to use a different primary (e.g., `openai/gpt-4o`), set that provider's key instead.
+> **Warning**: Do NOT use Claude Pro/Max or Google AI Ultra **subscription OAuth tokens**. Anthropic and Google have banned subscription OAuth in third-party agent tools — your account will be suspended. Always use **pay-per-token API keys** from the provider's developer console, or use OpenRouter which acts as a safe billing proxy. See the [Provider Policy Notice](../README.md#provider-policy-notice) in the README.
 
 **Required — MCP Server Connection:**
 

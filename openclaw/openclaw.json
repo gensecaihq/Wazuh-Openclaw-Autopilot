@@ -13,6 +13,11 @@
   // Built-in providers: anthropic, openai, google, groq, mistral, xai
   // Custom providers (Ollama, OpenRouter, etc.): configure in "models" section
   // API keys: set via environment variables or in the "env" section below
+  //
+  // IMPORTANT: Use pay-per-token API keys only. Anthropic and Google have banned
+  // subscription OAuth tokens (Claude Pro/Max, Google AI Ultra) in third-party
+  // agent tools. Using them will result in account suspension. OpenRouter is the
+  // safest option — it routes to Claude, GPT, Gemini via a single billing proxy.
   // =============================================================================
 
   // ---------------------------------------------------------------------------
