@@ -2,6 +2,19 @@
 
 Deploy Wazuh Autopilot in a fully air-gapped environment using Ollama as the sole LLM provider.
 
+> **Current Status: Functional with known limitations.**
+>
+> Local Ollama deployment works but requires a workaround for OpenClaw's internal 5-minute HTTP timeout. This is due to OpenClaw's bundled undici library resetting the global HTTP dispatcher with a 300-second `headersTimeout`, combined with streaming being silently disabled for tool-calling models. A Node.js preload script (included in this guide) overrides the timeout. We are working with the community to resolve this upstream.
+>
+> **Before proceeding, be aware of these requirements:**
+> - A preload script must be installed to fix the HTTP timeout (Step 4a below)
+> - Ollama's context window must be explicitly set to 32768+ tokens (Step 4)
+> - The native Ollama API (`"api": "ollama"`) is required — the OpenAI-compatible mode breaks tool calling
+> - Significant hardware is needed: 16 GB RAM minimum, 48+ GB recommended
+> - Inference is slower than cloud APIs — expect 1–10 tokens/sec on CPU
+>
+> If you want a stable, zero-configuration experience, consider using [cloud LLM APIs](../README.md#path-a-cloud-llm-apis-recommended) instead.
+
 ## Prerequisites
 
 - Wazuh Manager installed and running (4.8.0 or later)
@@ -203,6 +216,38 @@ Verify the context window is applied:
 ```bash
 ollama ps
 # The CONTEXT column should show your configured value (32768), not 2048
+```
+
+---
+
+## Step 4a: Install the HTTP Timeout Fix (Required)
+
+OpenClaw's internal HTTP library has a 5-minute timeout that kills Ollama connections during long generations. **This step is mandatory for Ollama deployments.** Without it, agents will fail with `"fetch failed"` and 0 tokens after exactly 5 minutes.
+
+Create the preload script and inject it into the OpenClaw gateway service. The script and full systemd configuration are in the [Troubleshooting section below](#fetch-failed-with-0-tokens-5-minute-timeout). For Ollama-only deployments, set `OPENCLAW_LLM_MODE=local`.
+
+Quick summary:
+
+```bash
+# 1. Install undici globally
+npm install -g undici
+
+# 2. Create the preload script (see Troubleshooting section for full script)
+cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
+# ... see "fetch failed" troubleshooting section below for the complete script ...
+SCRIPT
+
+# 3. Configure the gateway service
+systemctl edit --user openclaw-gateway
+# Add:
+# [Service]
+# Environment="NODE_OPTIONS=--require /root/undici-timeout-fix.cjs"
+# Environment="NODE_PATH=/usr/lib/node_modules"
+# Environment="OPENCLAW_LLM_MODE=local"
+# UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+
+# 4. Reload and restart
+systemctl --user daemon-reload && systemctl --user restart openclaw-gateway
 ```
 
 ---
@@ -528,69 +573,91 @@ OpenClaw's internal library (`@mariozechner/pi-ai`) resets the undici global dis
 
 **Additional hidden cause:** OpenClaw silently disables streaming for Ollama tool-calling models. Despite docs saying streaming works, the runtime injects `streaming: false` when tools are configured (always for agent sessions). This means Ollama waits for **full generation** before sending ANY HTTP response headers — and if generation takes >5 minutes, undici's `headersTimeout` kills the connection with 0 tokens received.
 
-**Important:** OpenClaw bundles its **own copy** of undici inside `/usr/lib/node_modules/openclaw/node_modules/undici/`. The preload's `require("undici")` resolves to the **globally installed** copy (via `NODE_PATH`). These are two separate module instances — monkey-patching `setGlobalDispatcher` on one does NOT affect the other.
+**Important:** OpenClaw bundles its **own copy** of undici inside `/usr/lib/node_modules/openclaw/node_modules/undici/`. The preload's `require("undici")` resolves to the **globally installed** copy (via `NODE_PATH`). These are two separate module instances — monkey-patching `setGlobalDispatcher` on one does NOT affect the other. However, all copies share the **same dispatcher storage** via `globalThis[Symbol.for('undici.globalDispatcher.1')]`. The fix writes directly to this shared Symbol.
 
-However, all copies of undici share the **same dispatcher storage** via `globalThis[Symbol.for('undici.globalDispatcher.1')]`. The fix writes directly to this shared Symbol, bypassing any module's `setGlobalDispatcher` function, then re-applies after pi-ai's async overwrite completes:
+> **Choose your deployment mode.** The preload script supports two modes depending on whether you use local Ollama, cloud APIs, or both. Set `OPENCLAW_LLM_MODE` to control behavior:
+>
+> | Mode | `OPENCLAW_LLM_MODE` | Proxy vars | Timeouts | Best for |
+> |------|---------------------|-----------|----------|----------|
+> | **Local only** | `local` | Deleted (not needed) | 30 min headers, no body timeout | Air-gapped / Ollama-only |
+> | **Hybrid / Cloud** | `cloud` or unset | Preserved; `NO_PROXY` set for localhost | 10 min headers, 10 min body, 60s connect | Cloud APIs + optional local Ollama |
 
 ```bash
 cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
 "use strict";
-// Strip proxy env vars BEFORE anything reads them
-delete process.env.http_proxy;
-delete process.env.https_proxy;
-delete process.env.HTTP_PROXY;
-delete process.env.HTTPS_PROXY;
-delete process.env.ALL_PROXY;
-delete process.env.all_proxy;
+// ============================================================================
+// OpenClaw undici timeout fix — works for BOTH local Ollama and cloud LLM APIs
+// ============================================================================
+// Set OPENCLAW_LLM_MODE=local  → air-gapped / Ollama-only (aggressive timeouts)
+// Set OPENCLAW_LLM_MODE=cloud  → cloud APIs or hybrid (conservative timeouts)
+// Default (unset)              → cloud mode (safe for all deployments)
+// ============================================================================
+
+const mode = (process.env.OPENCLAW_LLM_MODE || "cloud").toLowerCase();
+
+if (mode === "local") {
+  // Air-gapped: no proxy needed, delete all proxy vars
+  delete process.env.http_proxy;
+  delete process.env.https_proxy;
+  delete process.env.HTTP_PROXY;
+  delete process.env.HTTPS_PROXY;
+  delete process.env.ALL_PROXY;
+  delete process.env.all_proxy;
+} else {
+  // Cloud/hybrid: preserve proxy vars for cloud API access,
+  // but exempt localhost so Ollama requests bypass the proxy
+  const existing = process.env.NO_PROXY || process.env.no_proxy || "";
+  const exemptions = "127.0.0.1,localhost,::1";
+  if (!existing.includes("127.0.0.1")) {
+    process.env.NO_PROXY = existing ? existing + "," + exemptions : exemptions;
+    process.env.no_proxy = process.env.NO_PROXY;
+  }
+}
 
 const undici = require("undici");
 
-const TIMEOUT_OPTS = {
-  headersTimeout: 30 * 60 * 1000,  // 30 minutes (default is 300s = 5 min)
-  bodyTimeout: 0,                   // no body timeout (streaming/long generation)
-  connect: { timeout: 30 * 60 * 1000 },
-};
+// Timeouts based on deployment mode
+const TIMEOUT_OPTS = mode === "local"
+  ? {
+      headersTimeout: 30 * 60 * 1000,  // 30 min — Ollama may take long to generate
+      bodyTimeout: 0,                   // disabled — no streaming, single response
+      connect: { timeout: 30 * 60 * 1000 },  // 30 min — cold model loading
+    }
+  : {
+      headersTimeout: 10 * 60 * 1000,  // 10 min — generous for cloud + local
+      bodyTimeout: 10 * 60 * 1000,     // 10 min — detect stalled streams
+      connect: { timeout: 60 * 1000 }, // 60s — cloud APIs connect fast
+    };
 
-// The Symbol where ALL undici copies (bundled, global, built-in) store the
-// global dispatcher. Symbol.for() returns the same Symbol across ALL modules.
+// The Symbol where ALL undici copies store the global dispatcher.
+// Symbol.for() returns the same Symbol across ALL modules/copies.
 const SYM = Symbol.for("undici.globalDispatcher.1");
 
 function applyDispatcher() {
-  // Direct assignment to globalThis bypasses any specific module's
-  // setGlobalDispatcher function. Works because undici sets the property
-  // with writable:true (after the first defineProperty call makes it
-  // configurable:false, subsequent writes via assignment still work).
   globalThis[SYM] = new undici.Agent(TIMEOUT_OPTS);
 }
 
-// Apply immediately for any early fetch() calls
+// Apply immediately, then re-apply after pi-ai's async overwrite.
+// pi-ai's http-proxy.ts does: import("undici").then(m => setGlobalDispatcher(...))
+// This resolves to OpenClaw's bundled undici (separate module instance),
+// so we can't intercept it — we just overwrite after it runs.
 applyDispatcher();
-
-// Re-apply after pi-ai's async overwrite.
-// pi-ai's http-proxy.ts (in OpenClaw's bundled copy) does:
-//   import("undici").then(m => m.setGlobalDispatcher(new EnvHttpProxyAgent()))
-// This resolves to OpenClaw's bundled undici, NOT the global one, so
-// monkey-patching the global undici's setGlobalDispatcher has no effect.
-// Instead, we re-apply our dispatcher after pi-ai's .then() completes.
-// The microtask + dynamic import typically resolves within 100ms of startup.
-setTimeout(applyDispatcher, 0);     // after microtasks
-setTimeout(applyDispatcher, 50);    // early init
-setTimeout(applyDispatcher, 200);   // typical pi-ai resolution
-setTimeout(applyDispatcher, 1000);  // slow systems
-setTimeout(applyDispatcher, 3000);  // very slow systems
-setTimeout(applyDispatcher, 8000);  // extra safety margin
+setTimeout(applyDispatcher, 0);
+setTimeout(applyDispatcher, 50);
+setTimeout(applyDispatcher, 200);
+setTimeout(applyDispatcher, 1000);
+setTimeout(applyDispatcher, 3000);
+setTimeout(applyDispatcher, 8000);
 SCRIPT
 ```
 
-> **How this works:** All undici copies (OpenClaw's bundled copy, the globally installed copy, Node.js internals) share the same dispatcher storage at `globalThis[Symbol.for('undici.globalDispatcher.1')]`. The preload sets this immediately, then pi-ai's async `import("undici").then(...)` overwrites it with a default-timeout `EnvHttpProxyAgent`. The `setTimeout` callbacks re-apply our 30-minute timeout `Agent` after pi-ai's overwrite. Since no LLM requests fire until the gateway is fully started (webhooks arrive externally), the brief window where pi-ai's default dispatcher is active has no impact.
+> **How this works:** All undici copies share dispatcher storage at `globalThis[Symbol.for('undici.globalDispatcher.1')]`. The preload sets this immediately, then pi-ai's async `import("undici").then(...)` overwrites it. The `setTimeout` callbacks re-apply our dispatcher after pi-ai's overwrite. No LLM requests fire until the gateway is fully started, so the brief overwrite window has no impact.
 
-> **Why `Agent` instead of `EnvHttpProxyAgent`?** `EnvHttpProxyAgent` may not propagate `headersTimeout`/`bodyTimeout` to the underlying pool ([undici#1987](https://github.com/nodejs/undici/issues/1987)). `Agent` applies timeouts directly. Since proxy vars are already deleted, there's no proxy routing to worry about.
+> **Why two modes?** Deleting proxy vars breaks corporate environments where cloud APIs (api.anthropic.com, api.openai.com) are only reachable through an HTTP proxy. The `cloud` mode preserves proxy vars and uses `NO_PROXY` to exempt localhost instead. The `local` mode deletes proxy vars entirely (safe when everything is on localhost). Setting `bodyTimeout: 0` in local mode is needed because Ollama sends the entire response as a single chunk after generation completes. In cloud mode, `bodyTimeout: 10min` detects stalled streams without killing legitimate long responses.
 
-> **Why not monkey-patch `setGlobalDispatcher`?** OpenClaw bundles its own undici copy at `node_modules/openclaw/node_modules/undici/`. The preload's `require("undici")` and pi-ai's `import("undici")` resolve to **different module instances** with separate `setGlobalDispatcher` functions. Patching one doesn't affect the other. Note: The [ClawKit guide](https://getclawkit.com/docs/troubleshooting/ollama-timeout-errors) recommends this monkey-patch approach, but it does not work when OpenClaw's bundled undici is a separate copy from the global install (which is the case for npm global installs).
+> **Why not monkey-patch `setGlobalDispatcher`?** OpenClaw bundles its own undici copy. The preload's `require("undici")` and pi-ai's `import("undici")` resolve to **different module instances**. Patching one doesn't affect the other. The [ClawKit guide](https://getclawkit.com/docs/troubleshooting/ollama-timeout-errors) recommends this approach, but it doesn't work with bundled undici.
 
-> **Why not `writable:false` / Symbol lock?** pi-ai's `.then()` callback has no `.catch()`, so a `TypeError: Cannot redefine property` would crash the gateway with an unhandled promise rejection.
-
-> **Why not a getter/setter trap?** undici's first `setGlobalDispatcher` call uses `Object.defineProperty` with `configurable: false`. Once set as a data property, it cannot be redefined as an accessor property (getter/setter). The property IS `writable: true` though, so direct assignment (`globalThis[SYM] = agent`) always works.
+> **Why not `writable:false` / Symbol lock?** pi-ai's `.then()` has no `.catch()`, so a `TypeError` would crash the gateway.
 
 **Important:** The preload script requires undici as a module. If you get `Cannot find module 'undici'`, install it globally and set NODE_PATH:
 
@@ -604,13 +671,24 @@ Inject into the gateway systemd service:
 systemctl edit --user openclaw-gateway
 ```
 
-Add:
+**For air-gapped / Ollama-only deployments:**
 ```ini
 [Service]
 Environment="NODE_OPTIONS=--require /root/undici-timeout-fix.cjs"
 Environment="NODE_PATH=/usr/lib/node_modules"
+Environment="OPENCLAW_LLM_MODE=local"
 UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 ```
+
+**For cloud API or hybrid (cloud + Ollama) deployments:**
+```ini
+[Service]
+Environment="NODE_OPTIONS=--require /root/undici-timeout-fix.cjs"
+Environment="NODE_PATH=/usr/lib/node_modules"
+Environment="OPENCLAW_LLM_MODE=cloud"
+```
+
+> **Note:** In `cloud` mode, do NOT add `UnsetEnvironment` for proxy vars — your cloud API requests may need them. The script automatically sets `NO_PROXY=127.0.0.1,localhost,::1` so local Ollama requests bypass the proxy.
 
 ```bash
 systemctl --user daemon-reload && systemctl --user restart openclaw-gateway

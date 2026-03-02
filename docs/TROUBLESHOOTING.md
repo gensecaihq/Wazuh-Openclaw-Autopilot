@@ -308,40 +308,30 @@ sudo systemctl edit ollama
 # Add: Environment="OLLAMA_KEEP_ALIVE=24h"
 sudo systemctl daemon-reload && sudo systemctl restart ollama
 
-# 2. Create preload script (writes to shared Symbol, re-applies after pi-ai overwrite)
-cat > /root/undici-timeout-fix.cjs << 'SCRIPT'
-"use strict";
-delete process.env.http_proxy;
-delete process.env.https_proxy;
-delete process.env.HTTP_PROXY;
-delete process.env.HTTPS_PROXY;
-delete process.env.ALL_PROXY;
-delete process.env.all_proxy;
-const undici = require("undici");
-const OPTS = { headersTimeout: 30*60*1000, bodyTimeout: 0, connect: { timeout: 30*60*1000 } };
-const SYM = Symbol.for("undici.globalDispatcher.1");
-function apply() { globalThis[SYM] = new undici.Agent(OPTS); }
-apply();
-// Re-apply after pi-ai's bundled undici overwrites the dispatcher
-// (pi-ai uses OpenClaw's bundled undici copy, not this global one)
-setTimeout(apply, 0);
-setTimeout(apply, 50);
-setTimeout(apply, 200);
-setTimeout(apply, 1000);
-setTimeout(apply, 3000);
-setTimeout(apply, 8000);
-SCRIPT
-
-# 3. Install undici globally (preload needs it as a module)
+# 2. Install undici globally (preload needs it as a module)
 npm install -g undici
+
+# 3. Create preload script — see AIR_GAPPED_DEPLOYMENT.md for the full script
+#    The script supports two modes via OPENCLAW_LLM_MODE env var:
+#      local → air-gapped/Ollama-only (aggressive timeouts, deletes proxy vars)
+#      cloud → cloud APIs or hybrid  (conservative timeouts, preserves proxy vars)
 
 # 4. Inject into gateway systemd service
 systemctl edit --user openclaw-gateway
-# Add:
+# For Ollama-only:
 # [Service]
 # Environment="NODE_OPTIONS=--require /root/undici-timeout-fix.cjs"
 # Environment="NODE_PATH=/usr/lib/node_modules"
+# Environment="OPENCLAW_LLM_MODE=local"
 # UnsetEnvironment=http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+#
+# For cloud APIs or hybrid (cloud + Ollama):
+# [Service]
+# Environment="NODE_OPTIONS=--require /root/undici-timeout-fix.cjs"
+# Environment="NODE_PATH=/usr/lib/node_modules"
+# Environment="OPENCLAW_LLM_MODE=cloud"
+# (do NOT add UnsetEnvironment — cloud APIs may need proxy vars)
+
 systemctl --user daemon-reload && systemctl --user restart openclaw-gateway
 
 # 5. Clear cooldown state
@@ -349,9 +339,9 @@ find ~/.openclaw -name "auth-profiles.json" -exec grep -l "disabledUntil" {} \;
 # If found, edit and remove usageStats/disabledUntil section
 ```
 
-**Diagnostic:** `systemctl --user show-environment | grep -i proxy` — if this shows ANY proxy vars, that's your blocker.
+**Diagnostic:** `systemctl --user show-environment | grep -i proxy` — if this shows proxy vars and you use Ollama locally, switch to `OPENCLAW_LLM_MODE=cloud` mode (uses `NO_PROXY` for localhost) instead of deleting them.
 
-See [AIR_GAPPED_DEPLOYMENT.md](./AIR_GAPPED_DEPLOYMENT.md#fetch-failed-with-0-tokens-5-minute-timeout) for the full breakdown.
+See [AIR_GAPPED_DEPLOYMENT.md](./AIR_GAPPED_DEPLOYMENT.md#fetch-failed-with-0-tokens-5-minute-timeout) for the full preload script and detailed explanation.
 
 ### Gateway start blocked: `set gateway.mode=local`
 

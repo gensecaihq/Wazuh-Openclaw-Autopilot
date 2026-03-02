@@ -206,6 +206,66 @@ Model format is `"provider/model-name"`. Example `openclaw.json` snippet:
 
 ---
 
+## Choose Your LLM Deployment
+
+Wazuh Autopilot supports **two deployment paths** depending on your environment and requirements. Choose the path that fits your use case:
+
+### Path A: Cloud LLM APIs (Recommended)
+
+> **Status: Stable and production-ready.**
+
+Use hosted LLM providers (Anthropic, OpenAI, Groq, Google, Mistral, xAI, OpenRouter) for the highest quality reasoning with minimal setup. This is the recommended path for most deployments.
+
+| | Details |
+|---|---|
+| **Setup** | Set your API key in `.env` and configure `openclaw.json` with `"provider/model-name"` format |
+| **Pros** | Best model quality, fastest inference (Groq), no hardware requirements, multi-provider fallback, streaming support |
+| **Cons** | Requires internet access, API costs, data leaves your network |
+| **Guide** | [Quick Start](#quick-start) below → configure API keys → start services |
+
+```bash
+# Example: Claude + Groq fallback
+# In /etc/wazuh-autopilot/.env:
+ANTHROPIC_API_KEY=sk-ant-...
+GROQ_API_KEY=gsk-...
+```
+
+### Path B: Local LLMs with Ollama (Air-Gapped)
+
+> **Status: Functional with known limitations. Proceed with care.**
+
+Run entirely on local Ollama models with **zero external network calls**. Suitable for air-gapped, classified, or offline environments. All data stays on your server.
+
+| | Details |
+|---|---|
+| **Setup** | Install Ollama, pull models, apply the preload timeout fix, use the air-gapped config |
+| **Pros** | No internet required, no API costs, full data sovereignty, works in classified environments |
+| **Cons** | Requires significant RAM (16–48+ GB), slower inference, requires timeout workaround (see below) |
+| **Guide** | [Air-Gapped Deployment Guide](docs/AIR_GAPPED_DEPLOYMENT.md) — follow all steps carefully |
+
+**Known limitations (as of OpenClaw v2026.3.1):**
+
+- **Timeout workaround required**: OpenClaw's internal HTTP library has a hardcoded 5-minute timeout that kills Ollama connections during long generations. A Node.js preload script is required to override this. See the [Air-Gapped Deployment Guide](docs/AIR_GAPPED_DEPLOYMENT.md#fetch-failed-with-0-tokens-5-minute-timeout) for the fix.
+- **Streaming silently disabled**: OpenClaw disables streaming for tool-calling models, so Ollama must complete full generation before sending any response — this compounds the timeout issue.
+- **Context window must be set manually**: Ollama defaults to 2048 tokens but OpenClaw needs 16K+. You must configure `OLLAMA_NUM_CTX=32768` in the Ollama systemd unit.
+- **Native API required**: Must use `"api": "ollama"` (not `"openai-completions"`) for tool calling to work.
+- **Provider cooldown after errors**: If a timeout occurs, OpenClaw may put Ollama into exponential backoff. Manual state reset may be needed.
+
+We are actively working with the community to resolve these upstream. If you encounter issues not covered in the guide, please [open an issue](https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot/issues).
+
+### Path C: Hybrid (Cloud + Local)
+
+Use cloud APIs for primary reasoning and Ollama as a local fallback, or vice versa. The preload script supports both modes via the `OPENCLAW_LLM_MODE` environment variable:
+
+```bash
+# In the OpenClaw gateway systemd unit:
+Environment="OPENCLAW_LLM_MODE=cloud"   # Preserves proxy vars, sets NO_PROXY for localhost
+```
+
+See [Air-Gapped Deployment Guide](docs/AIR_GAPPED_DEPLOYMENT.md) for the preload script that supports both modes.
+
+---
+
 ## Human-in-the-Loop Approval
 
 Every response action requires explicit human authorization through a two-tier workflow with inline policy enforcement:
@@ -250,7 +310,7 @@ Tested via [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) v4
 | Ubuntu 22.04 / 24.04 | Tested |
 | Debian 11 / 12 | Tested |
 | RHEL / Rocky / AlmaLinux 8/9 | Supported |
-| Air-gapped (Ollama) | Supported — see [Air-Gapped Deployment Guide](docs/AIR_GAPPED_DEPLOYMENT.md) |
+| Air-gapped (Ollama) | Supported with workarounds — see [Air-Gapped Deployment Guide](docs/AIR_GAPPED_DEPLOYMENT.md) |
 
 ---
 
@@ -297,6 +357,10 @@ The installer will guide you through:
 
 ### Configuration
 
+Choose your LLM deployment path first — see [Choose Your LLM Deployment](#choose-your-llm-deployment) above.
+
+**For Cloud APIs (Path A — recommended):**
+
 ```bash
 # Edit configuration
 sudo nano /etc/wazuh-autopilot/.env
@@ -321,6 +385,10 @@ GOOGLE_API_KEY=...                     # Gemini
 SLACK_APP_TOKEN=xapp-...
 SLACK_BOT_TOKEN=xoxb-...
 ```
+
+**For Local Ollama (Path B — air-gapped):**
+
+Follow the complete [Air-Gapped Deployment Guide](docs/AIR_GAPPED_DEPLOYMENT.md) instead. It covers Ollama setup, model configuration, the required timeout fix, and all known limitations.
 
 ### Docker Deployment
 
@@ -529,12 +597,15 @@ Features:
 
 ## Deployment Options
 
-| Method | Use Case | Command |
-|--------|----------|---------|
-| **Docker Compose** | Production | `docker-compose up -d` |
-| **Docker** | Single container | `docker run -d wazuh-autopilot` |
-| **Systemd** | Native Linux | `sudo ./install/install.sh` (supports `--mode bootstrap\|mcp-only`) |
-| **Manual** | Development | `cd runtime/autopilot-service && npm start` |
+First, [choose your LLM deployment path](#choose-your-llm-deployment) (Cloud APIs vs Local Ollama vs Hybrid).
+
+| Method | Use Case | LLM Path | Command |
+|--------|----------|----------|---------|
+| **Docker Compose** | Production (cloud APIs) | Cloud | `docker-compose up -d` |
+| **Docker** | Single container | Cloud or Hybrid | `docker run -d wazuh-autopilot` |
+| **Systemd** | Native Linux | Any | `sudo ./install/install.sh` (supports `--mode bootstrap\|mcp-only`) |
+| **Systemd (air-gapped)** | Offline / classified | Local (Ollama) | `sudo ./install/install.sh --mode bootstrap` + [Air-Gapped Guide](docs/AIR_GAPPED_DEPLOYMENT.md) |
+| **Manual** | Development | Any | `cd runtime/autopilot-service && npm start` |
 
 ---
 
