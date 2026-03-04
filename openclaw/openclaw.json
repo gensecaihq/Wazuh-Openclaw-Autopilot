@@ -48,6 +48,11 @@
       "workspace": "~/.openclaw/wazuh-autopilot/workspace",
 
       // Primary model + ordered fallbacks for all agents
+      // IMPORTANT: If using OpenRouter, prefix ALL model names with "openrouter/":
+      //   "primary": "openrouter/anthropic/claude-sonnet-4-5"
+      //   "fallbacks": ["openrouter/openai/gpt-4o"]
+      // OpenClaw uses the prefix before the first "/" to select the provider.
+      // Without the prefix, it tries the direct provider API (requires that key).
       "model": {
         "primary": "anthropic/claude-sonnet-4-5",
         "fallbacks": [

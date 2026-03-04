@@ -70,6 +70,17 @@ GROQ_API_KEY=gsk-...             # https://console.groq.com/
 
 > **Warning**: Do NOT use Claude Pro/Max or Google AI Ultra **subscription OAuth tokens**. Anthropic and Google have banned subscription OAuth in third-party agent tools — your account will be suspended. Always use **pay-per-token API keys** from the provider's developer console, or use OpenRouter which acts as a safe billing proxy. See the [Provider Policy Notice](../README.md#provider-policy-notice) in the README.
 
+**Important — OpenRouter model names:** If you're using OpenRouter, you must also update `~/.openclaw/openclaw.json` to use the `openrouter/` prefix on all model names. OpenClaw uses the prefix before the first `/` to determine the provider — without it, the system tries the direct provider API (which requires that provider's API key).
+
+```json
+{
+  "primary": "openrouter/anthropic/claude-sonnet-4-5",
+  "fallbacks": ["openrouter/openai/gpt-4o", "openrouter/groq/llama-3.3-70b-versatile"]
+}
+```
+
+The installer (v2.4.4+) handles this automatically when you select "OpenRouter" during LLM provider setup. If you installed manually or with an older version, update the model names in your `openclaw.json` by hand.
+
 **Required — MCP Server Connection:**
 
 ```bash

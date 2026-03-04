@@ -1208,26 +1208,56 @@ configure_system() {
     echo ""
     echo -e "${CYAN}${BOLD}LLM Provider Configuration${NC}"
     echo ""
-    echo "  Configure at least one LLM provider for the AI agents."
-    echo "  Options: Anthropic API key, or local Ollama (air-gapped)."
+    echo "  Choose your LLM provider:"
+    echo ""
+    echo "    1) OpenRouter (recommended — single key, routes to Claude/GPT/Gemini, no ban risk)"
+    echo "    2) Anthropic (direct — requires pay-per-token API key, NOT Pro/Max subscription)"
+    echo "    3) Skip (use local Ollama for air-gapped, or configure manually later)"
     echo ""
 
+    local _llm_choice=""
     local ANTHROPIC_API_KEY=""
-    read -rsp "  Anthropic API Key (sk-ant-..., or press Enter to skip): " ANTHROPIC_API_KEY
-    echo ""
+    local OPENROUTER_API_KEY=""
+    local LLM_PROVIDER="direct"  # "openrouter" or "direct"
 
-    # Validate API key format if provided
-    if [[ -n "$ANTHROPIC_API_KEY" && ! "$ANTHROPIC_API_KEY" =~ ^sk-ant- ]]; then
-        log_warn "Anthropic API key doesn't start with 'sk-ant-' — please verify it's correct"
-    fi
-    if [[ -z "$ANTHROPIC_API_KEY" ]]; then
-        if command -v ollama &>/dev/null; then
-            log_info "No Anthropic key — using local Ollama as LLM provider"
-        else
-            log_warn "No Anthropic key and Ollama not found — agents may not function"
-            log_warn "Set an LLM provider key in $CONFIG_DIR/.env later, or install Ollama"
-        fi
-    fi
+    read -rp "  Select [1/2/3]: " _llm_choice
+    case "${_llm_choice}" in
+        1)
+            read -rsp "  OpenRouter API Key (sk-or-...): " OPENROUTER_API_KEY
+            echo ""
+            if [[ -n "$OPENROUTER_API_KEY" && ! "$OPENROUTER_API_KEY" =~ ^sk-or- ]]; then
+                log_warn "OpenRouter API key doesn't start with 'sk-or-' — please verify it's correct"
+            fi
+            if [[ -z "$OPENROUTER_API_KEY" ]]; then
+                log_warn "No OpenRouter key entered — agents may not function"
+                log_warn "Set OPENROUTER_API_KEY in $CONFIG_DIR/.env later"
+            else
+                LLM_PROVIDER="openrouter"
+                log_success "Using OpenRouter as LLM provider"
+            fi
+            ;;
+        2)
+            read -rsp "  Anthropic API Key (sk-ant-...): " ANTHROPIC_API_KEY
+            echo ""
+            if [[ -n "$ANTHROPIC_API_KEY" && ! "$ANTHROPIC_API_KEY" =~ ^sk-ant- ]]; then
+                log_warn "Anthropic API key doesn't start with 'sk-ant-' — please verify it's correct"
+            fi
+            if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+                log_warn "No Anthropic key entered — agents may not function"
+                log_warn "Set ANTHROPIC_API_KEY in $CONFIG_DIR/.env later"
+            else
+                log_success "Using Anthropic as LLM provider"
+            fi
+            ;;
+        *)
+            if command -v ollama &>/dev/null; then
+                log_info "Skipped — using local Ollama as LLM provider"
+            else
+                log_warn "No LLM provider configured and Ollama not found — agents may not function"
+                log_warn "Set an LLM provider key in $CONFIG_DIR/.env later, or install Ollama"
+            fi
+            ;;
+    esac
 
     echo ""
     echo -e "${CYAN}${BOLD}Slack Integration (Optional)${NC}"
@@ -1423,8 +1453,8 @@ ENVEOF
         # Construct MCP URL for substitution
         export WAZUH_MCP_URL_COMPUTED="http://$TAILSCALE_IP:$MCP_PORT"
 
-        # Determine memory provider: use local embeddings for air-gapped, OpenAI otherwise
-        if [[ "$SKIP_TAILSCALE" == "true" ]] || [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+        # Determine memory provider: use local embeddings for air-gapped/Ollama, OpenAI otherwise
+        if [[ "$SKIP_TAILSCALE" == "true" ]] || { [[ -z "${ANTHROPIC_API_KEY:-}" ]] && [[ -z "${OPENROUTER_API_KEY:-}" ]]; }; then
             export MEMORY_PROVIDER="local"
             export MEMORY_MODEL="hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M.gguf"
         else
@@ -1466,6 +1496,18 @@ with open('$_ocjson', 'w') as f: json.dump(d, f, indent=2)
             export "$_provider_key"="${!_provider_key:-}"
             _safe_subst "__${_provider_key}__" "$_provider_key" "$_ocjson"
         done
+
+        # When using OpenRouter, rewrite model names to use openrouter/ prefix
+        # OpenClaw uses the prefix before the first / to determine the provider.
+        # Without this, it tries direct Anthropic/OpenAI APIs with empty keys.
+        if [[ "$LLM_PROVIDER" == "openrouter" ]]; then
+            log_info "Rewriting model names for OpenRouter provider..."
+            sed -i 's|"anthropic/claude-sonnet-4-5"|"openrouter/anthropic/claude-sonnet-4-5"|g' "$_ocjson"
+            sed -i 's|"anthropic/claude-haiku-4-5"|"openrouter/anthropic/claude-haiku-4-5"|g' "$_ocjson"
+            sed -i 's|"openai/gpt-4o"|"openrouter/openai/gpt-4o"|g' "$_ocjson"
+            sed -i 's|"groq/llama-3.3-70b-versatile"|"openrouter/groq/llama-3.3-70b-versatile"|g' "$_ocjson"
+            log_success "Model names rewritten for OpenRouter"
+        fi
 
         umask "$_old_umask2"
         chmod 600 "$_ocjson"

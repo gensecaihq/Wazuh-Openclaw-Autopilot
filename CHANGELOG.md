@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **OpenRouter not working out of the box**: OpenClaw requires `openrouter/` prefix on model names (e.g., `openrouter/anthropic/claude-sonnet-4-5`) to route through OpenRouter. Without the prefix, it tries the direct provider API with an empty key. The installer now offers OpenRouter as a provider choice and automatically rewrites model names. Documentation updated with clear instructions for manual setup.
 - **Pipeline stalls after triage — OpenClaw security envelope blocks tool calls** (fixes #13): OpenClaw wraps webhook payloads in `EXTERNAL_UNTRUSTED_CONTENT` which instructs models not to execute tools mentioned within untrusted content. Our `web_fetch` callback URLs were inside this envelope, so agents correctly refused to call them. Fix: added `allowUnsafeExternalContent: true` to all 6 hook mappings (safe — webhooks are loopback-only and token-authenticated), and restructured webhook messages to be data-only (callback URL templates now live in each agent's AGENTS.md system prompt instead of the webhook payload).
 
 ### Added
