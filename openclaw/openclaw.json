@@ -269,48 +269,60 @@
     "enabled": true,
     "path": "/webhook",
     "token": "${OPENCLAW_WEBHOOK_TOKEN}",
+    // allowUnsafeExternalContent: Webhook payloads come from our own runtime
+    // service on loopback (127.0.0.1), authenticated by hooks.token. Without
+    // this flag, OpenClaw wraps the message in an EXTERNAL_UNTRUSTED_CONTENT
+    // security envelope that instructs the model NOT to execute tools mentioned
+    // in the message — which blocks agents from calling web_fetch to advance
+    // the pipeline. Safe here because the webhook source is trusted internal.
     "mappings": [
       {
         "match": { "path": "wazuh-alert" },
         "action": "agent",
         "agentId": "wazuh-triage",
         "messageTemplate": "{{message}}",
-        "name": "Wazuh Alert Triage"
+        "name": "Wazuh Alert Triage",
+        "allowUnsafeExternalContent": true
       },
       {
         "match": { "path": "case-created" },
         "action": "agent",
         "agentId": "wazuh-correlation",
         "messageTemplate": "{{message}}",
-        "name": "Wazuh Correlation"
+        "name": "Wazuh Correlation",
+        "allowUnsafeExternalContent": true
       },
       {
         "match": { "path": "investigation-request" },
         "action": "agent",
         "agentId": "wazuh-investigation",
         "messageTemplate": "{{message}}",
-        "name": "Wazuh Investigation"
+        "name": "Wazuh Investigation",
+        "allowUnsafeExternalContent": true
       },
       {
         "match": { "path": "plan-request" },
         "action": "agent",
         "agentId": "wazuh-response-planner",
         "messageTemplate": "{{message}}",
-        "name": "Wazuh Response Planning"
+        "name": "Wazuh Response Planning",
+        "allowUnsafeExternalContent": true
       },
       {
         "match": { "path": "policy-check" },
         "action": "agent",
         "agentId": "wazuh-policy-guard",
         "messageTemplate": "{{message}}",
-        "name": "Wazuh Policy Check"
+        "name": "Wazuh Policy Check",
+        "allowUnsafeExternalContent": true
       },
       {
         "match": { "path": "execute-action" },
         "action": "agent",
         "agentId": "wazuh-responder",
         "messageTemplate": "{{message}}",
-        "name": "Wazuh Action Execution"
+        "name": "Wazuh Action Execution",
+        "allowUnsafeExternalContent": true
       }
     ]
   },

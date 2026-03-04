@@ -1044,12 +1044,16 @@ async function updateCase(caseId, updates) {
       };
       const webhookPath = statusWebhooks[updates.status];
       if (webhookPath) {
+        // NOTE: Callback URLs are in each agent's AGENTS.md (system prompt), not here.
+        // OpenClaw wraps webhook content in EXTERNAL_UNTRUSTED_CONTENT which blocks
+        // tool invocations from the message body. Agents read case_id from the data
+        // below and use the URL templates from their system prompt.
         const statusMessages = {
-          triaged: `Correlate case ${caseId} (${evidencePack.severity} severity). Search for related alerts, identify attack patterns, then use web_fetch to call: http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseId}&status=correlated`,
-          correlated: `Investigate case ${caseId} (${evidencePack.severity} severity). Perform deep analysis using MCP tools: check agent health, search security events, analyze threat indicators. Then use web_fetch to call: http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseId}&status=investigated`,
-          investigated: `Plan response for case ${caseId} (${evidencePack.severity} severity). Review investigation findings and create a response plan. Then use web_fetch to submit the plan: http://localhost:${config.metricsPort}/api/agent-action/create-plan?case_id=${caseId}&title={url_encoded_title}&risk_level={risk_level}&actions={url_encoded_actions_json}`,
-          planned: `Evaluate proposed plan for case ${caseId} (${evidencePack.severity} severity). Check all policy rules, risk levels, and approval requirements. Then use web_fetch to submit your decision: http://localhost:${config.metricsPort}/api/agent-action/approve-plan?plan_id={plan_id}&approver_id=policy-guard&decision={allow|deny|escalate}&reason={url_encoded_reason}`,
-          approved: `Execute approved plan for case ${caseId} (${evidencePack.severity} severity). Check responder status, then execute the plan. Use web_fetch to call: http://localhost:${config.metricsPort}/api/agent-action/execute-plan?plan_id={plan_id}&executor_id=responder-agent`,
+          triaged: `New correlation task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Search for related alerts, identify attack patterns, and advance the pipeline per your AGENTS.md instructions.`,
+          correlated: `New investigation task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Perform deep analysis using MCP tools, then advance the pipeline per your AGENTS.md instructions.`,
+          investigated: `New response planning task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Review investigation findings and create a response plan per your AGENTS.md instructions.`,
+          planned: `New policy evaluation task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Check all policy rules, risk levels, and approval requirements per your AGENTS.md instructions.`,
+          approved: `New execution task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Execute the approved plan per your AGENTS.md instructions.`,
         };
         dispatchToGateway(webhookPath, {
           message: statusMessages[updates.status] || `Process case ${caseId} — status changed to ${updates.status}.`,
@@ -3354,8 +3358,14 @@ function createServer() {
           log("info", "triage", "Created new case from alert", { case_id: caseId, alert_id: alertId, severity });
 
           // Dispatch to triage agent via OpenClaw gateway
+          // NOTE: Callback URLs are NOT included in the webhook message because
+          // OpenClaw wraps webhook content in an EXTERNAL_UNTRUSTED_CONTENT security
+          // envelope that instructs models not to execute tools from untrusted content.
+          // Instead, each agent's AGENTS.md (loaded as system prompt) contains the
+          // callback URL templates. The agent reads case_id from this data and
+          // substitutes it into the URL pattern from its system prompt.
           dispatchToGateway("/webhook/wazuh-alert", {
-            message: `Triage new ${severity}-severity alert: ${caseData.title}. Case ${caseId} with ${entities.length} entities extracted. Analyze the alert, assess threat level, then use web_fetch to call: http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseId}&status=triaged`,
+            message: `New triage task. Case ID: ${caseId}. Severity: ${severity}. Title: ${caseData.title}. Entities: ${entities.length} extracted. Follow your AGENTS.md instructions to triage this alert and advance the pipeline.`,
             case_id: caseId,
             severity,
             title: caseData.title,
@@ -4405,35 +4415,9 @@ async function checkStalledPipeline() {
 
       try {
         const evidencePack = await getCase(caseSummary.case_id);
-        const statusMessages = {
-          open: `[RETRY] Triage alert for case ${caseSummary.case_id}`,
-          triaged: `[RETRY] Correlate case ${caseSummary.case_id}`,
-          correlated: `[RETRY] Investigate case ${caseSummary.case_id}`,
-          investigated: `[RETRY] Plan response for case ${caseSummary.case_id}`,
-          planned: `[RETRY] Evaluate plan for case ${caseSummary.case_id}`,
-          approved: `[RETRY] Execute plan for case ${caseSummary.case_id}`,
-        };
-
-        // Build callback URLs — for statuses that need a plan_id, look it up from the evidence pack
-        const latestPlan = (evidencePack.plans || []).slice(-1)[0];
-        const planId = latestPlan?.plan_id || "";
-        const callbackUrls = {
-          open: `http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseSummary.case_id}&status=triaged`,
-          triaged: `http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseSummary.case_id}&status=correlated`,
-          correlated: `http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseSummary.case_id}&status=investigated`,
-          // For investigated: don't include actions — let the agent build its own plan
-          investigated: `http://localhost:${config.metricsPort}/api/agent-action/update-case?case_id=${caseSummary.case_id}&status=investigated`,
-        };
-        // Only include plan-dependent URLs if we actually have a plan_id
-        if (planId) {
-          callbackUrls.planned = `http://localhost:${config.metricsPort}/api/agent-action/approve-plan?plan_id=${encodeURIComponent(planId)}&approver_id=policy-guard&decision=allow`;
-          callbackUrls.approved = `http://localhost:${config.metricsPort}/api/agent-action/execute-plan?plan_id=${encodeURIComponent(planId)}&executor_id=responder`;
-        }
-
-        let msg = `${statusMessages[caseSummary.status]} (${evidencePack.severity || caseSummary.severity} severity, stalled ${ageMinutes}m).`;
-        if (callbackUrls[caseSummary.status]) {
-          msg += ` Use web_fetch to call: ${callbackUrls[caseSummary.status]}`;
-        }
+        // NOTE: Callback URLs are in each agent's AGENTS.md (system prompt), not
+        // in the webhook message. See comment in updateCase() for rationale.
+        const msg = `[RETRY] Case ID: ${caseSummary.case_id}. Severity: ${evidencePack.severity || caseSummary.severity}. Status: ${caseSummary.status}. Stalled for ${ageMinutes}m. Follow your AGENTS.md instructions to process this case and advance the pipeline.`;
 
         dispatchToGateway(webhookPath, {
           message: msg,

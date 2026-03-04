@@ -266,6 +266,33 @@ If `web_fetch` is only in agent allow lists but missing from the global allow li
 journalctl -u openclaw-gateway | grep "unknown entries"
 ```
 
+### Agent receives webhook but doesn't call web_fetch (EXTERNAL_UNTRUSTED_CONTENT)
+
+OpenClaw wraps all webhook payloads in a security envelope (`EXTERNAL_UNTRUSTED_CONTENT`) that instructs models **not** to execute tools or commands mentioned within the untrusted content. This is a safety feature to prevent prompt injection from external sources.
+
+**Problem:** If your `openclaw.json` hook mappings don't include `"allowUnsafeExternalContent": true`, the model sees the callback URL inside the security envelope and correctly refuses to call `web_fetch`. The agent outputs a text summary but never advances the pipeline.
+
+**Symptoms:**
+- Agent sessions show the model producing text analysis but never invoking `web_fetch`
+- Cases stay in `open` status despite triage agent running
+- Stalled pipeline detector fires repeatedly with no progress
+- Session logs show `stopReason: "stop"` (not `"error"`) with token usage > 0
+
+**Fix:** Add `"allowUnsafeExternalContent": true` to each hook mapping in `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "match": { "path": "wazuh-alert" },
+  "action": "agent",
+  "agentId": "wazuh-triage",
+  "messageTemplate": "{{message}}",
+  "name": "Wazuh Alert Triage",
+  "allowUnsafeExternalContent": true
+}
+```
+
+This is safe because webhook payloads come from your own runtime service on loopback (`127.0.0.1`), authenticated by `hooks.token`. Apply to all 6 hook mappings. Version 2.4.4+ of the installer and reference configs include this flag by default.
+
 ### Stalled pipeline detector (automatic recovery)
 
 The runtime includes a stalled-pipeline detector that automatically re-dispatches webhooks for cases stuck in transient statuses (`open`, `triaged`, `correlated`, `investigated`, `planned`, `approved`). If a case remains in one of these statuses longer than the threshold, the detector re-sends the appropriate webhook to give the agent another chance.

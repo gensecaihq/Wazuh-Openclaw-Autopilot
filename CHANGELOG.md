@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Pipeline stalls after triage — OpenClaw security envelope blocks tool calls** (fixes #13): OpenClaw wraps webhook payloads in `EXTERNAL_UNTRUSTED_CONTENT` which instructs models not to execute tools mentioned within untrusted content. Our `web_fetch` callback URLs were inside this envelope, so agents correctly refused to call them. Fix: added `allowUnsafeExternalContent: true` to all 6 hook mappings (safe — webhooks are loopback-only and token-authenticated), and restructured webhook messages to be data-only (callback URL templates now live in each agent's AGENTS.md system prompt instead of the webhook payload).
+
 ### Added
 - **Provider policy notice and OpenRouter recommendation**: README, QUICKSTART, and openclaw.json now warn users that Anthropic and Google have banned subscription OAuth tokens in third-party agent tools. OpenRouter is recommended as the safest single-key option. Direct provider API keys (pay-per-token) still work fine.
 - **Stalled-pipeline detector**: Automatically detects cases stuck in transient statuses (open, triaged, correlated, etc.) for longer than a configurable threshold and re-dispatches the webhook to give the agent another attempt. Configurable via `STALLED_PIPELINE_ENABLED`, `STALLED_PIPELINE_THRESHOLD_MINUTES` (default 30), and `STALLED_PIPELINE_CHECK_INTERVAL_MS` (default 300000). New metrics: `autopilot_stalled_pipeline_detected_total`, `autopilot_stalled_pipeline_redispatched_total`.
