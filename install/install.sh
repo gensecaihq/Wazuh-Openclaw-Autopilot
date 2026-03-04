@@ -1609,6 +1609,32 @@ SCRIPT
 }
 
 # =============================================================================
+# REFRESH MODEL CATALOG (tool calling metadata)
+# =============================================================================
+
+refresh_model_catalog() {
+    # OpenClaw's openai-completions provider only sends tool definitions if
+    # the model has toolUse:true in its catalog.  `openclaw models scan`
+    # probes configured providers and writes capability metadata.  Without
+    # this, OpenRouter models may lack toolUse, causing agents to output
+    # tool calls as plain text instead of invoking them.
+    if ! command -v openclaw &>/dev/null; then
+        log_warn "OpenClaw CLI not found — skipping model catalog refresh"
+        return 0
+    fi
+
+    log_step "Refreshing Model Catalog (tool calling metadata)"
+
+    if openclaw models scan --json 2>/dev/null | head -1 | grep -q '"'; then
+        log_success "Model catalog refreshed — tool capabilities updated"
+    else
+        # Older OpenClaw versions may not support 'models scan'
+        log_warn "openclaw models scan not available or failed — tool calling may not work for OpenRouter"
+        log_info "After installation, run: openclaw models scan"
+    fi
+}
+
+# =============================================================================
 # PRE-FLIGHT CONFIGURATION VALIDATOR
 # =============================================================================
 
@@ -2083,6 +2109,7 @@ main() {
     configure_system
     configure_wazuh_integrator
     validate_configuration
+    refresh_model_catalog
     prompt_responder_activation
     show_pairing_info
     start_services || log_warn "Service startup had issues — check logs above"

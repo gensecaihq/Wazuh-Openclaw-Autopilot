@@ -221,6 +221,48 @@ If agent sessions fail with `400 "llama3.1:8b" does not support thinking`, the m
 
 Only set `"reasoning": true` for models with native structured thinking output: `deepseek-r1`, `qwq`, and similar reasoning-specific models. After updating, restart OpenClaw.
 
+### Tool calls not working / agents output web_fetch as text (OpenRouter)
+
+If agents produce a full triage analysis but write `web_fetch http://...` as plain text in markdown code blocks instead of actually invoking the tool, the model's capability metadata is missing the `toolUse` flag. This is a known upstream OpenClaw issue with the `openai-completions` provider path ([openclaw#1866](https://github.com/openclaw/openclaw/issues/1866), [openclaw#8923](https://github.com/openclaw/openclaw/issues/8923)).
+
+**How to confirm:** Check the agent session log (`~/.openclaw/agents/wazuh-triage/sessions/*.jsonl`). If you see:
+- `"stopReason":"stop"` (not `"tool_use"`)
+- `"content":[{"type":"text","text":"...web_fetch http://..."}]` (tool call as text, not as `type: "tool_use"`)
+- `"modelApi":"openai-completions"`
+
+Then the model never received tool schemas in the API request.
+
+**Fix (in order of reliability):**
+
+1. **Refresh the model catalog** — this populates `toolUse: true` for your configured models:
+   ```bash
+   openclaw models scan
+   sudo systemctl restart openclaw-gateway
+   ```
+
+2. **Use direct Anthropic API as primary model** — the `anthropic-messages` wire protocol has native, reliable tool support:
+   ```bash
+   # Set ANTHROPIC_API_KEY in /etc/wazuh-autopilot/.env
+   ANTHROPIC_API_KEY=sk-ant-your-key-here
+   ```
+   Then in `~/.openclaw/openclaw.json`, change the primary model to use Anthropic directly:
+   ```json
+   "model": {
+     "primary": "anthropic/claude-sonnet-4-5",
+     "fallbacks": ["openrouter/openai/gpt-4o"]
+   }
+   ```
+   This routes the primary model through Anthropic's native API (tool calling works) with OpenRouter as fallback. **Important:** Use a pay-per-token API key from [console.anthropic.com](https://console.anthropic.com/), NOT a Claude Pro/Max subscription token — Anthropic has banned subscription OAuth in third-party tools and will suspend your account. See [Provider Policy Notice](../README.md#provider-policy-notice).
+
+3. **Upgrade OpenClaw** to the latest version — newer releases may include catalog updates with correct capabilities:
+   ```bash
+   curl -fsSL https://openclaw.ai/install.sh | sh
+   openclaw models scan
+   sudo systemctl restart openclaw-gateway
+   ```
+
+After applying the fix, re-test by submitting an alert and checking the session log for `"stopReason":"tool_use"` and `"type":"tool_use"` entries.
+
 ### Tool calls not working / agents output raw JSON text (Ollama)
 
 If agents produce output tokens but never actually invoke tools like `web_fetch`, the Ollama provider is likely configured with the OpenAI-compatible API mode. This breaks tool calling — models output raw tool JSON as plain text.

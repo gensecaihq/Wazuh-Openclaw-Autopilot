@@ -121,7 +121,21 @@ Replace the placeholder values:
 
 See the comments in the file for instructions on finding these IDs.
 
-## Step 5: Start the Service
+## Step 5: Refresh Model Catalog
+
+This step ensures OpenClaw knows your models support tool calling (`web_fetch`). Without it, agents using OpenRouter may output tool calls as plain text instead of invoking them.
+
+```bash
+openclaw models scan
+```
+
+If `openclaw models scan` is not available on your version, upgrade OpenClaw first:
+```bash
+curl -fsSL https://openclaw.ai/install.sh | sh
+openclaw models scan
+```
+
+## Step 6: Start the Service
 
 ```bash
 # Start the runtime service
@@ -134,7 +148,7 @@ sudo systemctl enable wazuh-autopilot
 sudo systemctl status wazuh-autopilot
 ```
 
-## Step 6: Verify Installation
+## Step 7: Verify Installation
 
 ### Run health check:
 
@@ -163,7 +177,7 @@ Expected response:
 ./scripts/health-check.sh --quick
 ```
 
-## Step 7: Test Alert Ingestion
+## Step 8: Test Alert Ingestion
 
 Send a test alert to verify triage works:
 
@@ -206,7 +220,7 @@ Expected response (case_id is a hash-based identifier):
 curl http://127.0.0.1:9090/api/cases
 ```
 
-## Step 8: Test Alert Grouping
+## Step 9: Test Alert Grouping
 
 Send a second alert with the same source IP — it should be grouped into the same case:
 
@@ -242,7 +256,7 @@ Expected response (note `status: "updated"` and `grouped_into`):
 }
 ```
 
-## Step 9: Submit Feedback (Optional)
+## Step 10: Submit Feedback (Optional)
 
 Mark a case as a false positive or true positive:
 
