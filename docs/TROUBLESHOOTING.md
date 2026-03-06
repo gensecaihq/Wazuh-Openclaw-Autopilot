@@ -181,6 +181,27 @@ Check logs with:
 journalctl -u wazuh-autopilot | grep "dispatch"
 ```
 
+### OPENCLAW_GATEWAY_URL set to ws:// — webhook dispatch fails
+
+`openclaw status --all` reports the gateway target as `ws://127.0.0.1:18789` (the WebSocket endpoint for interactive sessions). If you copy this URL into `OPENCLAW_GATEWAY_URL`, webhook dispatch fails because Node's `fetch()` does not support the `ws://` scheme.
+
+**Symptoms:**
+- Startup log: `OpenClaw Gateway NOT reachable — agent dispatch will fail`
+- Webhook dispatch errors with `fetch failed` or `TypeError`
+- Agents never start after alert ingestion
+
+**Auto-fix (v2.5.0+):** The runtime automatically normalizes `ws://` → `http://` and `wss://` → `https://` and logs a warning. No manual action needed.
+
+**Manual fix (older versions):** Change the scheme in your `.env`:
+
+```bash
+# Wrong (copied from openclaw status)
+OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
+
+# Correct
+OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
+```
+
 ### "allowlist contains unknown entries (web.fetch)"
 
 OpenClaw uses **snake_case** tool identifiers in per-agent allow/deny lists. The correct tool name is `web_fetch`, not `web.fetch`. Dot notation is only valid in the global config path (`tools.web.fetch.enabled`).

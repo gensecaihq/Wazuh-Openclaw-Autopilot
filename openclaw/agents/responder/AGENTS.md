@@ -188,22 +188,19 @@ When `status` is `failed`, populate `error_details` with a descriptive message i
 
 ## MANDATORY: Execute Plan via API
 
-**To execute an approved plan, you MUST use `web_fetch` to call the Runtime API.** If you skip this step, no actions are executed.
+**To execute an approved plan, you MUST invoke the `web_fetch` tool to call the Runtime API.** If you skip this step, no actions are executed.
 
-Use `web_fetch` to call the agent-action endpoint:
+Invoke the `web_fetch` tool with the execute-plan endpoint:
 
-```
-http://localhost:9090/api/agent-action/execute-plan?plan_id={plan_id}&executor_id={executor_id}
-```
+    web_fetch(url="http://localhost:9090/api/agent-action/execute-plan?plan_id={plan_id}&executor_id={executor_id}")
 
 **Example:**
-```
-http://localhost:9090/api/agent-action/execute-plan?plan_id=PLAN-20260217-def67890&executor_id=responder-agent
-```
+
+    web_fetch(url="http://localhost:9090/api/agent-action/execute-plan?plan_id=PLAN-20260217-def67890&executor_id=responder-agent")
 
 **Preconditions** (checked by the service):
 1. Plan must be in `approved` state (human Tier 1 + Tier 2 approval completed)
 2. `AUTOPILOT_RESPONDER_ENABLED` must be `true`
 3. Action limits and circuit breaker must not be tripped
 
-**This is not optional.** Without this call, the plan remains in `approved` state and no containment or remediation actions are taken.
+**Do NOT write the URL as text.** You must actually invoke the `web_fetch` tool so the HTTP request is made. Writing the URL in a code block does nothing — the plan remains in `approved` state and no containment or remediation actions are taken.

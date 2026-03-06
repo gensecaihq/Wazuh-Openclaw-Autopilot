@@ -50,6 +50,7 @@ const {
   getMcpAuthToken,
   ensureMcpSession,
   invalidateMcpSession,
+  normalizeGatewayUrl,
 } = require("./index.js");
 
 describe("Evidence Pack Management", () => {
@@ -674,6 +675,58 @@ describe("Gateway Dispatch", () => {
     };
     assert.strictEqual(typeof policyPayload.message, "string");
     assert.ok(policyPayload.message.length > 0, "message must not be empty");
+  });
+});
+
+// =============================================================================
+// GATEWAY URL NORMALIZATION (Issue #15)
+// =============================================================================
+
+describe("normalizeGatewayUrl", () => {
+  it("rewrites ws:// to http://", () => {
+    assert.strictEqual(normalizeGatewayUrl("ws://127.0.0.1:18789"), "http://127.0.0.1:18789");
+  });
+
+  it("rewrites wss:// to https://", () => {
+    assert.strictEqual(normalizeGatewayUrl("wss://gateway.example.com:18789"), "https://gateway.example.com:18789");
+  });
+
+  it("preserves http:// unchanged", () => {
+    assert.strictEqual(normalizeGatewayUrl("http://127.0.0.1:18789"), "http://127.0.0.1:18789");
+  });
+
+  it("preserves https:// unchanged", () => {
+    assert.strictEqual(normalizeGatewayUrl("https://gateway.example.com"), "https://gateway.example.com");
+  });
+
+  it("handles empty string", () => {
+    assert.strictEqual(normalizeGatewayUrl(""), "");
+  });
+
+  it("handles undefined/null", () => {
+    assert.strictEqual(normalizeGatewayUrl(undefined), undefined);
+    assert.strictEqual(normalizeGatewayUrl(null), null);
+  });
+
+  it("preserves path and query after scheme rewrite", () => {
+    assert.strictEqual(
+      normalizeGatewayUrl("ws://127.0.0.1:18789/custom/path?token=abc"),
+      "http://127.0.0.1:18789/custom/path?token=abc"
+    );
+  });
+
+  it("only rewrites scheme at start of string", () => {
+    // A URL that contains ws:// in the path should not be affected
+    assert.strictEqual(
+      normalizeGatewayUrl("http://example.com/ws://test"),
+      "http://example.com/ws://test"
+    );
+  });
+
+  it("handles uppercase WS:// and WSS://", () => {
+    assert.strictEqual(normalizeGatewayUrl("WS://127.0.0.1:18789"), "http://127.0.0.1:18789");
+    assert.strictEqual(normalizeGatewayUrl("WSS://gateway.example.com"), "https://gateway.example.com");
+    assert.strictEqual(normalizeGatewayUrl("Ws://mixed-case:18789"), "http://mixed-case:18789");
   });
 });
 

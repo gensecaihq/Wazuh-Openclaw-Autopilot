@@ -34,6 +34,17 @@ try {
 // CONFIGURATION
 // =============================================================================
 
+/**
+ * Normalize gateway URL scheme: ws:// → http://, wss:// → https://.
+ * OpenClaw `status --all` reports the gateway target as ws:// (its WebSocket
+ * endpoint for interactive sessions), but webhook dispatch uses HTTP POST.
+ * Users who copy the ws:// URL from `openclaw status` would get fetch errors.
+ */
+function normalizeGatewayUrl(url) {
+  if (!url) return url;
+  return url.replace(/^ws(s?):\/\//i, (_, s) => `http${s.toLowerCase()}://`);
+}
+
 const config = {
   mode: process.env.AUTOPILOT_MODE || "bootstrap",
   requireTailscale: process.env.AUTOPILOT_REQUIRE_TAILSCALE === "true",
@@ -75,7 +86,7 @@ const config = {
   // Graceful shutdown timeout (Issue #12 fix)
   shutdownTimeoutMs: parseInt(process.env.SHUTDOWN_TIMEOUT_MS || "30000", 10),
   // OpenClaw Gateway dispatch (for agent pipeline handoffs)
-  openclawGatewayUrl: process.env.OPENCLAW_GATEWAY_URL || "http://127.0.0.1:18789",
+  openclawGatewayUrl: normalizeGatewayUrl(process.env.OPENCLAW_GATEWAY_URL || "http://127.0.0.1:18789"),
   openclawToken: process.env.OPENCLAW_TOKEN || "",
   // Separate webhook token for hook validation (falls back to gateway token for backwards compat)
   openclawWebhookToken: process.env.OPENCLAW_WEBHOOK_TOKEN || process.env.OPENCLAW_TOKEN || "",
@@ -4100,6 +4111,12 @@ async function validateStartup() {
     }
   }
 
+  // Warn if OPENCLAW_GATEWAY_URL was set with ws:// scheme (auto-corrected at config load)
+  const rawGatewayUrl = process.env.OPENCLAW_GATEWAY_URL || "";
+  if (/^wss?:\/\//i.test(rawGatewayUrl)) {
+    log("warn", "startup", `OPENCLAW_GATEWAY_URL uses WebSocket scheme "${rawGatewayUrl}" — auto-corrected to "${config.openclawGatewayUrl}". OpenClaw status shows ws:// but webhook dispatch requires HTTP.`);
+  }
+
   // Ensure data directories exist
   await ensureDir(path.join(config.dataDir, "cases"));
   await ensureDir(path.join(config.dataDir, "reports"));
@@ -4348,6 +4365,7 @@ module.exports = {
   // Utilities
   parseSimpleYaml,
   sanitizeMetricLabelName,
+  normalizeGatewayUrl,
 };
 
 // =============================================================================
