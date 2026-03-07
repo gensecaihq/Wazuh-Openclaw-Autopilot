@@ -1,9 +1,12 @@
 # Reporting Agent - Heartbeat Schedule
 
+**IMPORTANT:** Use ONLY the `web_fetch` tool for all HTTP requests. Do NOT use `exec`, `curl`, or shell commands.
+`web_fetch` runs on the gateway host and can reach `http://localhost:9090`.
+
 ## Hourly Snapshot (every hour)
-- [ ] Query Prometheus for alert volume (last 60 min)
-- [ ] Count active cases and their severities
-- [ ] Check pending approvals in plan store
+- [ ] Use `web_fetch` to query runtime metrics: `web_fetch(url="http://localhost:9090/metrics")`
+- [ ] Use `web_fetch` to count active cases: `web_fetch(url="http://localhost:9090/api/cases")`
+- [ ] Check pending approvals in plan store via `web_fetch`
 - [ ] Query agent health status via MCP
 - [ ] Output: Slack post to ops channel with 4-section snapshot
 
