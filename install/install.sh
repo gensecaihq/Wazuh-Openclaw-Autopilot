@@ -981,7 +981,7 @@ deploy_agents() {
     "deny": ["browser", "canvas"],
     "web": {
       "search": {"enabled": false},
-      "fetch": {"enabled": true}
+      "fetch": {"enabled": true, "allowPrivateNetwork": true}
     }
   },
 

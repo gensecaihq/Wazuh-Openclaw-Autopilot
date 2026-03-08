@@ -69,6 +69,27 @@ The `alsoAllow` key adds tools **on top of** the profile's base set. After editi
 
 **Verification:** Check the gateway debug log for the tool schemas sent in the API request. You should see `web_fetch` listed. The model should respond with `stopReason: "tool_use"`.
 
+### web_fetch blocked: "Blocked hostname or private/internal/special-use IP address"
+
+Agents make tool calls correctly (`stopReason: "tool_use"`) but `web_fetch` returns an SSRF error when accessing `http://127.0.0.1:9090`.
+
+**Root cause:** OpenClaw's SSRF guard blocks private/localhost IPs by default. The `allowPrivateNetwork` setting must be explicitly enabled.
+
+**Fix:** Add `"allowPrivateNetwork": true` to the `tools.web.fetch` block in `openclaw.json`:
+
+```json5
+"tools": {
+  "web": {
+    "search": { "enabled": false },
+    "fetch": { "enabled": true, "allowPrivateNetwork": true }
+  }
+}
+```
+
+Restart the gateway: `systemctl restart openclaw-gateway`.
+
+**Security note:** This is safe for this project because the runtime API runs on loopback only (127.0.0.1) and agents are trusted internal processes.
+
 ### "No MCP URL configured"
 
 **Solution:**
