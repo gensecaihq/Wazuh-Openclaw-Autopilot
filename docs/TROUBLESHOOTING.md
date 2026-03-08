@@ -49,6 +49,26 @@ systemctl start docker
 
 ## Configuration Issues
 
+### Agents end with `stopReason: "stop"` instead of `"tool_use"`
+
+The model finishes its turn without making tool calls — it outputs tool invocations as plain text instead.
+
+**Root cause:** Your `openclaw.json` uses `"allow"` in the `tools` block. The `allow` key only *narrows* the tools already in the resolved profile — it cannot add new tools. Since `web_fetch` is not part of any named profile (`profiles: []`), listing it in `allow` has no effect.
+
+**Fix:** Change `"allow"` to `"alsoAllow"` in every `tools` block (global and per-agent):
+
+```json5
+"tools": {
+  "profile": "minimal",
+  "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+  "deny": ["write", "exec", "delete", "browser"]
+}
+```
+
+The `alsoAllow` key adds tools **on top of** the profile's base set. After editing, restart the gateway: `systemctl restart openclaw-gateway`.
+
+**Verification:** Check the gateway debug log for the tool schemas sent in the API request. You should see `web_fetch` listed. The model should respond with `stopReason: "tool_use"`.
+
 ### "No MCP URL configured"
 
 **Solution:**

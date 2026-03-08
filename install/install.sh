@@ -875,7 +875,7 @@ deploy_agents() {
         "agentDir": "~/.openclaw/wazuh-autopilot/agents/triage",
         "tools": {
           "profile": "minimal",
-          "allow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
           "deny": ["write", "exec", "delete", "browser"]
         },
         "heartbeat": {"every": "10m"}
@@ -886,7 +886,7 @@ deploy_agents() {
         "agentDir": "~/.openclaw/wazuh-autopilot/agents/correlation",
         "tools": {
           "profile": "minimal",
-          "allow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
           "deny": ["write", "exec", "delete", "browser"]
         },
         "heartbeat": {"every": "5m"}
@@ -897,7 +897,7 @@ deploy_agents() {
         "agentDir": "~/.openclaw/wazuh-autopilot/agents/investigation",
         "tools": {
           "profile": "minimal",
-          "allow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
           "deny": ["write", "exec", "delete", "browser"]
         }
       },
@@ -907,7 +907,7 @@ deploy_agents() {
         "agentDir": "~/.openclaw/wazuh-autopilot/agents/response-planner",
         "tools": {
           "profile": "minimal",
-          "allow": ["read", "write", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "alsoAllow": ["read", "write", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
           "deny": ["exec", "delete", "browser"]
         }
       },
@@ -917,7 +917,7 @@ deploy_agents() {
         "agentDir": "~/.openclaw/wazuh-autopilot/agents/policy-guard",
         "tools": {
           "profile": "minimal",
-          "allow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
           "deny": ["write", "exec", "delete", "browser"]
         }
       },
@@ -931,7 +931,7 @@ deploy_agents() {
         },
         "tools": {
           "profile": "coding",
-          "allow": ["read", "write", "exec", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "alsoAllow": ["read", "write", "exec", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
           "deny": ["browser", "delete"],
           "elevated": {"enabled": true}
         },
@@ -947,7 +947,7 @@ deploy_agents() {
         "model": "anthropic/claude-haiku-4-5",
         "tools": {
           "profile": "minimal",
-          "allow": ["read", "write", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "alsoAllow": ["read", "write", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
           "deny": ["exec", "delete", "browser"]
         }
       }
@@ -977,7 +977,7 @@ deploy_agents() {
 
   "tools": {
     "profile": "minimal",
-    "allow": ["read", "edit", "write", "exec", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+    "alsoAllow": ["read", "edit", "write", "exec", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
     "deny": ["browser", "canvas"],
     "web": {
       "search": {"enabled": false},
