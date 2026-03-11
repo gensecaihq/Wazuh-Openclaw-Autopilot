@@ -83,13 +83,35 @@ Agent runtime settings (model, tools, triggers, channels) are configured in `ope
 
 ### Tool Permissions
 
-Tool permissions are enforced by the OpenClaw gateway via `tools.allow` and `tools.deny` arrays in `openclaw.json`:
+Tool permissions are enforced at two levels by the OpenClaw gateway:
+
+**Agent-level tools** — configured via `tools.alsoAllow` in each agent's config in `openclaw.json`. Note: `alsoAllow` adds tools on top of the resolved profile; `allow` only narrows (filters down) a profile's tool list and cannot add tools not already in the profile.
 
 | Agent | Allowed | Denied |
 |-------|---------|--------|
 | Triage, Correlation, Investigation | `read`, `sessions_*` | `write`, `exec`, `delete`, `browser` |
 | Response Planner | `read`, `write`, `sessions_*` | `exec`, `delete`, `browser` |
 | Responder | `read`, `write`, `exec` (elevated) | `delete`, `browser` |
+
+**Sandbox-level tools** — the sandbox has its own independent tool policy, separate from agent-level permissions. `web_fetch` is not included in any named OpenClaw tool profile, so it must be explicitly added in the sandbox config:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "sandbox": {
+        "mode": "all",
+        "scope": "session",
+        "tools": {
+          "alsoAllow": ["web_fetch"]
+        }
+      }
+    }
+  }
+}
+```
+
+Without this, agents will not have access to `web_fetch` inside the sandbox, and all API calls to the Runtime Service will fail silently (the agent outputs tool invocations as text instead of executing them).
 
 ### Triggers
 
@@ -126,7 +148,11 @@ openclaw cron add --schedule "0 9 * * 1" --agent wazuh-reporting --name "weekly-
 
 ### Agent API Access
 
-Agents use `web_fetch` (enabled in `openclaw.json`) to call the Runtime Service API at `${AUTOPILOT_RUNTIME_URL}` (default `http://127.0.0.1:9090`). Agents do **not** connect to the Wazuh MCP Server directly — the Runtime Service acts as the intermediary for all MCP calls.
+Agents use `web_fetch` to call the Runtime Service API at `http://localhost:9090`. Since `web_fetch` is GET-only and cannot set HTTP headers, agents authenticate via query parameter: `?token=<AUTOPILOT_MCP_AUTH>`. The `AUTOPILOT_MCP_AUTH` value is injected into the agent's environment via the `env` section in `openclaw.json`.
+
+Agents interact with the Runtime Service through GET-based agent-action endpoints (`/api/agent-action/*`) that accept operations via query parameters. See [AGENT_COMMUNICATION.md](AGENT_COMMUNICATION.md) for the full endpoint reference.
+
+Agents do **not** connect to the Wazuh MCP Server directly — the Runtime Service acts as the intermediary for all MCP calls.
 
 ---
 

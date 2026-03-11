@@ -20,7 +20,7 @@ Deploy Wazuh Autopilot in a fully air-gapped environment using Ollama as the sol
 - Wazuh Manager installed and running (4.8.0 or later)
 - Node.js 20+ (Node.js 22+ recommended by OpenClaw)
 - Ollama 0.17 or later ([ollama.com](https://ollama.com))
-- OpenClaw v2026.3.1 or later (`npm install -g openclaw@latest`)
+- OpenClaw v2026.7.3 or later (`npm install -g openclaw@latest`)
 - Server with sufficient RAM for LLM models (see hardware requirements below)
 - Network connectivity between Wazuh Manager, MCP Server, and Ollama (all can be on the same server)
 
@@ -719,7 +719,7 @@ find ~/.openclaw -name "auth-profiles.json" -exec grep -l "disabledUntil" {} \;
 openclaw gateway restart
 ```
 
-> **Note:** The `models.providers.ollama.retry` config key is NOT supported by OpenClaw's zod schema (as of v2026.3.1). The only way to clear cooldown is to edit `auth-profiles.json` directly and restart the gateway.
+> **Note:** The `models.providers.ollama.retry` config key is NOT supported by OpenClaw's zod schema (as of v2026.7.3). The only way to clear cooldown is to edit `auth-profiles.json` directly and restart the gateway.
 
 ### Model not found
 

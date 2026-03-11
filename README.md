@@ -276,7 +276,7 @@ Run entirely on local Ollama models with **zero external network calls**. Suitab
 | **Cons** | Requires significant RAM (16–48+ GB), slower inference, requires timeout workaround (see below) |
 | **Guide** | [Air-Gapped Deployment Guide](docs/AIR_GAPPED_DEPLOYMENT.md) — follow all steps carefully |
 
-**Known limitations (as of OpenClaw v2026.3.1):**
+**Known limitations (as of OpenClaw v2026.7.3):**
 
 - **Timeout workaround required**: OpenClaw's internal HTTP library has a hardcoded 5-minute timeout that kills Ollama connections during long generations. A Node.js preload script is required to override this. See the [Air-Gapped Deployment Guide](docs/AIR_GAPPED_DEPLOYMENT.md#fetch-failed-with-0-tokens-5-minute-timeout) for the fix.
 - **Streaming silently disabled**: OpenClaw disables streaming for tool-calling models, so Ollama must complete full generation before sending any response — this compounds the timeout issue.
@@ -355,7 +355,7 @@ Tested via [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) v4
 |-------------|-------------|
 | [Wazuh Manager](https://wazuh.com) | SIEM platform (installed and running, 4.8.0+) |
 | [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) | MCP bridge for Wazuh API access |
-| [OpenClaw](https://github.com/openclaw/openclaw) v2026.3.1+ | AI agent framework ([docs](https://openclaw.ai)) |
+| [OpenClaw](https://github.com/openclaw/openclaw) v2026.7.3+ | AI agent framework ([docs](https://openclaw.ai)) |
 | Node.js 20+ | Runtime for autopilot service (22+ recommended by OpenClaw) |
 | [Ollama](https://ollama.com) 0.17+ (air-gapped) or LLM API Key | Local models or Claude, GPT, Groq, Mistral cloud APIs |
 
@@ -472,6 +472,19 @@ curl http://localhost:9090/metrics
 | `/api/plans/:id/execute` | POST | Tier 2: Execute plan |
 | `/api/plans/:id/reject` | POST | Reject plan |
 
+### Agent Action Endpoints (GET-based)
+
+OpenClaw agents use `web_fetch` which only supports GET requests. These endpoints let agents perform write operations via query parameters, calling the same underlying functions as the standard REST endpoints.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/agent-action/update-case` | GET | Update case status/data (replaces `PUT /api/cases/:id`) |
+| `/api/agent-action/create-plan` | GET | Create response plan (replaces `POST /api/plans`) |
+| `/api/agent-action/approve-plan` | GET | Approve/deny plan (replaces `POST /api/plans/:id/approve`) |
+| `/api/agent-action/execute-plan` | GET | Execute plan (replaces `POST /api/plans/:id/execute`) |
+
+See [RUNTIME_API.md](docs/RUNTIME_API.md) and [AGENT_COMMUNICATION.md](docs/AGENT_COMMUNICATION.md) for full parameter documentation.
+
 ### Observability
 
 | Endpoint | Method | Description |
@@ -572,6 +585,17 @@ Each case generates a structured evidence pack:
 
 No services are exposed to the public internet.
 
+### Authentication
+
+Two authentication methods are supported:
+
+| Method | Format | Use Case |
+|--------|--------|----------|
+| Bearer header | `Authorization: Bearer <token>` | Direct API consumers (curl, scripts, Slack) |
+| Query parameter | `?token=<token>` | OpenClaw agents via `web_fetch` (cannot set headers) |
+
+Query parameter authentication is restricted to GET requests only to prevent token leakage in POST/PUT request bodies. In bootstrap mode, requests from localhost bypass authentication entirely.
+
 ### Access Control
 
 - **Pairing mode**: Devices must be explicitly approved
@@ -616,9 +640,9 @@ Features:
 │   └── agents/                 # 7 SOC agents + _shared/ (AGENTS.md, IDENTITY.md, TOOLS.md, HEARTBEAT.md, MEMORY.md)
 ├── runtime/autopilot-service/
 │   ├── Dockerfile              # Production container
-│   ├── index.js                # Main service (4300+ LOC)
+│   ├── index.js                # Main service (4700+ LOC)
 │   ├── slack.js                # Slack Socket Mode integration
-│   └── *.test.js               # Test suite (296 tests)
+│   └── *.test.js               # Test suite (348 tests across 11 files)
 ├── policies/
 │   ├── policy.yaml             # Security policies & approvers
 │   └── toolmap.yaml            # MCP tool mappings

@@ -8,18 +8,31 @@ By default, the service listens on `http://127.0.0.1:9090`. The port is configur
 
 ## Authentication
 
-All API endpoints require a `Bearer` token via the `Authorization` header. Two token types are supported:
+All API endpoints require authentication. Two token types are supported:
 
 | Token | Env Variable | Scope | Purpose |
 |-------|-------------|-------|---------|
 | Service token | `AUTOPILOT_SERVICE_TOKEN` | Read-only | Agent-to-service queries |
 | MCP auth token | `AUTOPILOT_MCP_AUTH` | Read + Write | Full API access |
 
-Requests from localhost (`127.0.0.1` / `::1`) bypass authentication to allow internal agent communication.
+### Authentication Methods
 
-**Example:**
+| Method | Format | Use Case |
+|--------|--------|----------|
+| Bearer header | `Authorization: Bearer <token>` | Direct API consumers (curl, scripts, Slack integrations) |
+| Query parameter | `?token=<token>` | OpenClaw agents via `web_fetch` (GET requests only) |
+
+Query parameter authentication is restricted to GET requests only. This prevents token leakage in POST/PUT request bodies. The token source is tracked in audit logs as `api_token` (header) or `api_token_query` (query parameter).
+
+Requests from localhost (`127.0.0.1` / `::1`) bypass authentication in bootstrap mode to allow internal agent communication. In production mode (`AUTOPILOT_MODE=production`), authentication is always required.
+
+**Examples:**
 ```bash
+# Bearer header (standard)
 curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:9090/api/cases
+
+# Query parameter (for OpenClaw agents using web_fetch)
+curl "http://127.0.0.1:9090/api/agent-action/update-case?case_id=CASE-123&status=triaged&token=YOUR_TOKEN"
 ```
 
 ## Endpoints
