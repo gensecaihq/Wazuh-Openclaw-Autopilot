@@ -204,11 +204,11 @@ Emit an enriched case JSON. Example:
 
 Invoke the `web_fetch` tool with the following URL (replace `{case_id}` with the actual case ID from the webhook message):
 
-    web_fetch(url="http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=correlated")
+    web_fetch(url="http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=correlated&token=<AUTOPILOT_MCP_AUTH>")
 
 To attach your correlation results, add a URL-encoded JSON `data` parameter:
 
-    web_fetch(url="http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=correlated&data=%7B%22correlation_score%22%3A0.85%7D")
+    web_fetch(url="http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=correlated&data=%7B%22correlation_score%22%3A0.85%7D&token=<AUTOPILOT_MCP_AUTH>")
 
 **Do NOT write the URL as text.** You must actually invoke the `web_fetch` tool so the HTTP request is made. Writing the URL in a code block does nothing — the runtime only advances the pipeline when it receives the HTTP request.
 

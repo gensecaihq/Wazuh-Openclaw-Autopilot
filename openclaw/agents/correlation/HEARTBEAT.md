@@ -10,7 +10,7 @@ This procedure runs on a 5-minute cron cycle. Follow each step in order.
 ### 1. Fetch new triage cases
 Use `web_fetch` to query the runtime API for triaged cases:
 
-    web_fetch(url="http://localhost:9090/api/cases")
+    web_fetch(url="http://localhost:9090/api/cases?token=<AUTOPILOT_MCP_AUTH>")
 
 Filter the response for cases with status `triaged` created since the last heartbeat (last 5 minutes).
 

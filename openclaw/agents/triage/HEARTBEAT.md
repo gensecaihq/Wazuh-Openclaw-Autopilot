@@ -10,7 +10,7 @@ This procedure runs on a 10-minute cron cycle. Follow each step in order.
 ### 1. Query for untriaged alerts
 Use `web_fetch` to fetch open cases from the runtime API:
 
-    web_fetch(url="http://localhost:9090/api/cases")
+    web_fetch(url="http://localhost:9090/api/cases?token=<AUTOPILOT_MCP_AUTH>")
 
 Filter the response for cases with status `open` created in the last 10 minutes. Sort by severity descending, limit 100.
 

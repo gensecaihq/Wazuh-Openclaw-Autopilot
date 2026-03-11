@@ -73,22 +73,25 @@ The `alsoAllow` key adds tools **on top of** the profile's base set. After editi
 
 Agents make tool calls correctly (`stopReason: "tool_use"`) but `web_fetch` returns an SSRF error when accessing `http://127.0.0.1:9090`.
 
-**Root cause:** OpenClaw's SSRF guard blocks private/localhost IPs by default. The `allowPrivateNetwork` setting must be explicitly enabled.
+**Root cause:** OpenClaw's SSRF guard blocks private/localhost IPs by default. There is **no config-level override** — `allowPrivateNetwork` is not in the zod schema and will crash the gateway with "Unrecognized key".
 
-**Fix:** Add `"allowPrivateNetwork": true` to the `tools.web.fetch` block in `openclaw.json`:
+**Workaround — reverse proxy:** Deploy nginx or caddy on a non-loopback address that forwards to `localhost:9090`:
 
-```json5
-"tools": {
-  "web": {
-    "search": { "enabled": false },
-    "fetch": { "enabled": true, "allowPrivateNetwork": true }
-  }
+```nginx
+# /etc/nginx/sites-enabled/autopilot-proxy
+server {
+    listen 9091;
+    server_name autopilot-runtime;
+    location / {
+        proxy_pass http://127.0.0.1:9090;
+        proxy_set_header Host $host;
+    }
 }
 ```
 
-Restart the gateway: `systemctl restart openclaw-gateway`.
+Then update agent URLs in AGENTS.md and TOOLS.md files to use the proxy address (e.g., `http://<server-ip>:9091/api/...`) instead of `http://localhost:9090`.
 
-**Security note:** This is safe for this project because the runtime API runs on loopback only (127.0.0.1) and agents are trusted internal processes.
+**Important:** Do NOT add `allowPrivateNetwork` to `tools.web.fetch` — OpenClaw's strict schema rejects it and the gateway will fail to start.
 
 ### "No MCP URL configured"
 
@@ -247,11 +250,11 @@ OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
 
 OpenClaw uses **snake_case** tool identifiers in per-agent allow/deny lists. The correct tool name is `web_fetch`, not `web.fetch`. Dot notation is only valid in the global config path (`tools.web.fetch.enabled`).
 
-**Fix:** In your `openclaw.json`, change every occurrence of `"web.fetch"` to `"web_fetch"` in agent `tools.allow` arrays:
+**Fix:** In your `openclaw.json`, change every occurrence of `"web.fetch"` to `"web_fetch"` in agent `tools.alsoAllow` arrays:
 
 ```json
 "tools": {
-  "allow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"]
+  "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"]
 }
 ```
 
@@ -341,21 +344,59 @@ If agents produce output tokens but never actually invoke tools like `web_fetch`
 
 Do **not** use `"api": "openai-completions"` with `"baseUrl": "http://127.0.0.1:11434/v1"`. After updating, restart OpenClaw.
 
+### "Tool web_fetch not found" in sandboxed agents
+
+Agents attempt to call `web_fetch` but get `"Tool web_fetch not found"` in the session log. The tool is listed in `tools.alsoAllow` but the sandbox blocks it.
+
+**Root cause:** OpenClaw's sandbox has its own independent tool policy separate from the agent-level `tools.alsoAllow`. The sandbox default allow list does not include `web_fetch`. Run `openclaw sandbox explain --agent <agent-id>` to see the effective sandbox policy.
+
+**Fix:** Add `web_fetch` to the sandbox tool allow list in `agents.defaults.sandbox` in `~/.openclaw/openclaw.json`:
+
+```json
+"sandbox": {
+  "mode": "all",
+  "scope": "session",
+  "tools": {
+    "alsoAllow": ["web_fetch"]
+  }
+}
+```
+
+After updating, restart OpenClaw and verify with `openclaw sandbox explain --agent wazuh-triage` — you should see `web_fetch` in the sandbox allow list.
+
+### "Missing Authorization header" on agent-action endpoints (401)
+
+Agents call the runtime API via `web_fetch` and get a 401 `"Missing Authorization header"` error.
+
+**Root cause:** OpenClaw's `web_fetch` tool only supports GET requests with no custom headers. Agents cannot pass a `Bearer` token in the `Authorization` header. In production mode, the runtime requires auth even from localhost.
+
+**Fix (v2.6.0+):** The runtime now accepts the auth token as a query parameter on GET requests. Add `&token=<AUTOPILOT_MCP_AUTH>` to all API URLs in your agent playbooks:
+
+```
+web_fetch(url="http://localhost:9090/api/agent-action/update-case?case_id={id}&status=triaged&token=<AUTOPILOT_MCP_AUTH>")
+```
+
+The `AUTOPILOT_MCP_AUTH` value must be set in the OpenClaw config `env` section so agents can reference it. Updated agent playbooks (AGENTS.md, TOOLS.md, HEARTBEAT.md) include the `?token=` parameter on all API URLs.
+
+**Bootstrap mode alternative:** If you don't need production-grade auth, set `AUTOPILOT_MODE=bootstrap` in `/etc/wazuh-autopilot/.env`. Bootstrap mode allows unauthenticated localhost requests. This is NOT recommended for production.
+
 ### Pipeline stalls after triage (agents don't advance)
 
 If triage processes alerts but no downstream agents (correlation, investigation, etc.) activate, the most common cause is agents unable to call the Runtime API to transition case status.
 
 **Check:**
-1. `web_fetch` is in each agent's `tools.allow` list (not `web.fetch`)
-2. `web_fetch` and `sessions_send` are in the **global** `tools.allow` list — agent-level overrides cannot re-add tools blocked at global level
+1. `web_fetch` is in each agent's `tools.alsoAllow` list (not `web.fetch`, not `tools.allow`)
+2. `web_fetch` and `sessions_send` are in the **global** `tools.alsoAllow` list — agent-level overrides cannot re-add tools blocked at global level
 3. Global `tools.web.fetch.enabled` is `true`
 4. OpenClaw gateway logs show no "unknown entries" warnings
+5. Sandbox tool policy includes `web_fetch` (check with `openclaw sandbox explain --agent <id>`)
+6. API URLs include `&token=<AUTOPILOT_MCP_AUTH>` (required in production mode)
 
-The global `tools.allow` must include every tool that any agent needs:
+The global `tools.alsoAllow` must include every tool that any agent needs:
 ```json
 "tools": {
   "profile": "minimal",
-  "allow": ["read", "edit", "write", "exec", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+  "alsoAllow": ["read", "edit", "write", "exec", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
   "deny": ["browser", "canvas"],
   "web": {
     "search": { "enabled": false },

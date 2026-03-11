@@ -6,7 +6,7 @@
 
 The Runtime Service port defaults to 9090 but is configurable via the `RUNTIME_PORT` environment variable.
 
-> **Note**: This endpoint uses GET with query parameters because OpenClaw's `web_fetch` tool only supports GET requests.
+> **Note**: This endpoint uses GET with query parameters because OpenClaw's `web_fetch` tool only supports GET requests (no custom headers). Pass the auth token as `?token=<AUTOPILOT_MCP_AUTH>` on every request.
 
 ### Submitting a Plan
 
@@ -17,10 +17,9 @@ Build the request URL with these query parameters:
 - `description` (optional) — Detailed explanation
 - `risk_level` (optional, default: "medium") — `low|medium|high|critical`
 - `actions` (required) — URL-encoded JSON array of actions
+- `token` (required) — Your `AUTOPILOT_MCP_AUTH` token
 
-```
-GET http://localhost:9090/api/agent-action/create-plan?case_id={case_id}&title={url_encoded_title}&risk_level={level}&actions={url_encoded_json_array}
-```
+    web_fetch(url="http://localhost:9090/api/agent-action/create-plan?case_id={case_id}&title={url_encoded_title}&risk_level={level}&actions={url_encoded_json_array}&token=<AUTOPILOT_MCP_AUTH>")
 
 **Actions JSON structure** (URL-encode this array):
 
@@ -94,15 +93,13 @@ Match the investigation's attack classification to the appropriate playbook (bru
 
 ## Runtime API Access
 
-The Response Planner calls the runtime REST API at `http://localhost:9090` using `web_fetch`.
+The Response Planner calls the runtime REST API at `http://localhost:9090` using `web_fetch`. Pass the auth token as `?token=<AUTOPILOT_MCP_AUTH>` on every request.
 
 ### Read Case for Context
 
 Before building a response plan, fetch the full case to review investigation findings, correlation data, and severity.
 
-```
-GET http://localhost:9090/api/cases/{case_id}
-```
+    web_fetch(url="http://localhost:9090/api/cases/{case_id}?token=<AUTOPILOT_MCP_AUTH>")
 
 The `GET /api/agent-action/create-plan` endpoint for submitting plans is documented above in the "Runtime API: Submit Plans" section.
 

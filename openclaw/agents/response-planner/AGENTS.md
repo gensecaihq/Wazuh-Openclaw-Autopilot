@@ -33,11 +33,11 @@ This separation prevents accidental execution -- a human must consciously make t
 
 Invoke the `web_fetch` tool with your plan details as query parameters:
 
-    web_fetch(url="http://localhost:9090/api/agent-action/create-plan?case_id={case_id}&title={url_encoded_title}&risk_level={risk_level}&actions={url_encoded_actions_json}")
+    web_fetch(url="http://localhost:9090/api/agent-action/create-plan?case_id={case_id}&title={url_encoded_title}&risk_level={risk_level}&actions={url_encoded_actions_json}&token=<AUTOPILOT_MCP_AUTH>")
 
 **Example:**
 
-    web_fetch(url="http://localhost:9090/api/agent-action/create-plan?case_id=CASE-20260217-abc12345&title=Block%20brute%20force%20attacker&risk_level=low&actions=%5B%7B%22type%22%3A%22block_ip%22%2C%22target%22%3A%22203.0.113.42%22%7D%5D")
+    web_fetch(url="http://localhost:9090/api/agent-action/create-plan?case_id=CASE-20260217-abc12345&title=Block%20brute%20force%20attacker&risk_level=low&actions=%5B%7B%22type%22%3A%22block_ip%22%2C%22target%22%3A%22203.0.113.42%22%7D%5D&token=<AUTOPILOT_MCP_AUTH>")
 
 The plan will be:
 1. Created in `proposed` state

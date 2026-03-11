@@ -182,13 +182,16 @@ describe("OpenClaw config tool registration (issue #16)", () => {
         );
       });
 
-      it("tools.web.fetch.allowPrivateNetwork is true (agents need localhost access)", () => {
+      it("tools.web.fetch has no unrecognized keys (OpenClaw strict schema)", () => {
         config = config || loadJson5(cfg.path);
-        assert.equal(
-          config.tools?.web?.fetch?.allowPrivateNetwork,
-          true,
-          "tools.web.fetch.allowPrivateNetwork must be true — agents call localhost:9090 runtime API via web_fetch",
-        );
+        const fetch = config.tools?.web?.fetch || {};
+        const validKeys = ["enabled", "maxChars", "maxCharsCap", "timeoutSeconds", "cacheTtlMinutes", "maxRedirects", "userAgent"];
+        for (const key of Object.keys(fetch)) {
+          assert.ok(
+            validKeys.includes(key),
+            `tools.web.fetch.${key} is not a valid OpenClaw config key — will crash gateway startup`,
+          );
+        }
       });
     });
   }
@@ -223,11 +226,11 @@ describe("install.sh config template uses alsoAllow", () => {
     );
   });
 
-  it("contains allowPrivateNetwork: true for web_fetch localhost access", () => {
+  it("does not contain unrecognized OpenClaw config keys", () => {
     const content = fs.readFileSync(installSh, "utf-8");
     assert.ok(
-      content.includes('"allowPrivateNetwork": true') || content.includes('"allowPrivateNetwork":true'),
-      "install.sh should set allowPrivateNetwork: true for web_fetch to reach localhost runtime API",
+      !content.includes('"allowPrivateNetwork"'),
+      "install.sh must not contain allowPrivateNetwork — rejected by OpenClaw strict schema",
     );
   });
 });
@@ -382,5 +385,141 @@ describe("E2E pipeline with agent-action GET endpoints", () => {
   it("cleanup: stop server", async () => {
     if (server) await new Promise((resolve) => server.close(resolve));
     fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  });
+});
+
+describe("Query parameter auth for agent-action endpoints (Issue #17/#18)", () => {
+  const os = require("os");
+  const http = require("http");
+
+  const TEST_DATA_DIR = path.join(
+    os.tmpdir(),
+    `autopilot-query-auth-test-${Date.now()}-${process.pid}`,
+  );
+
+  // Use production mode to disable localhost bypass — forces token auth
+  process.env.AUTOPILOT_MODE = "production";
+  process.env.AUTOPILOT_DATA_DIR = TEST_DATA_DIR;
+  process.env.AUTOPILOT_MCP_AUTH = "test-query-auth-token-value";
+  process.env.AUTOPILOT_SERVICE_TOKEN = "test-service-read-token";
+  process.env.AUTOPILOT_RESPONDER_ENABLED = "false";
+  process.env.RATE_LIMIT_MAX_REQUESTS = "500";
+  process.env.RATE_LIMIT_WINDOW_MS = "60000";
+  process.env.LOG_LEVEL = "error";
+  // Tailnet check bypass for production mode in tests
+  process.env.MCP_URL = "https://mcp.tailnet.ts.net:3000";
+
+  // Re-require to pick up new env vars
+  delete require.cache[require.resolve("./index")];
+  const { createServer: createServerAuth } = require("./index");
+
+  function req(server, method, urlPath, body = null, headers = {}) {
+    return new Promise((resolve, reject) => {
+      const addr = server.address();
+      const opts = {
+        hostname: "127.0.0.1",
+        port: addr.port,
+        path: urlPath,
+        method,
+        headers: { ...headers },
+      };
+      if (body) {
+        const data = JSON.stringify(body);
+        opts.headers["Content-Type"] = "application/json";
+        opts.headers["Content-Length"] = Buffer.byteLength(data);
+      }
+      const r = http.request(opts, (res) => {
+        const chunks = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => {
+          const raw = Buffer.concat(chunks).toString();
+          let parsed;
+          try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+          resolve({ status: res.statusCode, body: parsed, raw });
+        });
+      });
+      r.on("error", reject);
+      if (body) r.write(JSON.stringify(body));
+      r.end();
+    });
+  }
+
+  let server;
+  let caseId;
+
+  it("setup: start server in production mode and create alert", async () => {
+    fs.mkdirSync(path.join(TEST_DATA_DIR, "cases"), { recursive: true });
+    fs.mkdirSync(path.join(TEST_DATA_DIR, "plans"), { recursive: true });
+    fs.mkdirSync(path.join(TEST_DATA_DIR, "policies"), { recursive: true });
+    server = createServerAuth();
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    const res = await req(server, "POST", "/api/alerts", {
+      alert_id: "query-auth-001",
+      rule: { id: "5712", level: 10, description: "SSH brute force" },
+      agent: { id: "001", name: "test-srv", ip: "10.0.1.50" },
+      data: { srcip: "198.51.100.20" },
+    }, { Authorization: "Bearer test-query-auth-token-value" });
+
+    assert.equal(res.status, 201, `Expected 201, got ${res.status}: ${res.raw}`);
+    caseId = res.body.case_id;
+    assert.ok(caseId, "Case ID should be returned");
+  });
+
+  it("GET without auth returns 401 in production mode", async () => {
+    const res = await req(
+      server,
+      "GET",
+      `/api/agent-action/update-case?case_id=${caseId}&status=triaged`,
+    );
+    assert.equal(res.status, 401, `Expected 401, got ${res.status}: ${res.raw}`);
+  });
+
+  it("GET with ?token= query param authenticates successfully", async () => {
+    const res = await req(
+      server,
+      "GET",
+      `/api/agent-action/update-case?case_id=${caseId}&status=triaged&token=test-query-auth-token-value`,
+    );
+    assert.equal(res.status, 200, `Expected 200, got ${res.status}: ${res.raw}`);
+    assert.equal(res.body.status, "triaged");
+  });
+
+  it("GET with invalid ?token= returns 401", async () => {
+    const res = await req(
+      server,
+      "GET",
+      `/api/agent-action/update-case?case_id=${caseId}&status=correlated&token=wrong-token-value-here`,
+    );
+    assert.equal(res.status, 401, `Expected 401, got ${res.status}: ${res.raw}`);
+  });
+
+  it("GET /api/cases with ?token= works for read endpoints", async () => {
+    const res = await req(
+      server,
+      "GET",
+      `/api/cases/${caseId}?token=test-query-auth-token-value`,
+    );
+    assert.equal(res.status, 200, `Expected 200, got ${res.status}: ${res.raw}`);
+    assert.equal(res.body.status, "triaged");
+  });
+
+  it("Bearer header still works alongside query token support", async () => {
+    const res = await req(
+      server,
+      "GET",
+      `/api/agent-action/update-case?case_id=${caseId}&status=correlated`,
+      null,
+      { Authorization: "Bearer test-query-auth-token-value" },
+    );
+    assert.equal(res.status, 200, `Expected 200, got ${res.status}: ${res.raw}`);
+    assert.equal(res.body.status, "correlated");
+  });
+
+  it("cleanup: stop server", async () => {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+    // Restore bootstrap mode for other tests
+    process.env.AUTOPILOT_MODE = "bootstrap";
   });
 });

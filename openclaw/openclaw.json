@@ -71,7 +71,13 @@
 
       "sandbox": {
         "mode": "all",
-        "scope": "session"
+        "scope": "session",
+        // Issue #18 fix: web_fetch is not in the sandbox default allow list.
+        // Without this, agents get "Tool web_fetch not found" even when
+        // tools.alsoAllow includes web_fetch at the agent level.
+        "tools": {
+          "alsoAllow": ["web_fetch"]
+        }
       },
 
       // Heartbeat: periodic health/sweep tasks using cheap model
@@ -252,7 +258,7 @@
     "deny": ["browser", "canvas"],
     "web": {
       "search": { "enabled": false },
-      "fetch": { "enabled": true, "allowPrivateNetwork": true }
+      "fetch": { "enabled": true }
     }
   },
 

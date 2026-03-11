@@ -192,11 +192,11 @@ When `status` is `failed`, populate `error_details` with a descriptive message i
 
 Invoke the `web_fetch` tool with the execute-plan endpoint:
 
-    web_fetch(url="http://localhost:9090/api/agent-action/execute-plan?plan_id={plan_id}&executor_id={executor_id}")
+    web_fetch(url="http://localhost:9090/api/agent-action/execute-plan?plan_id={plan_id}&executor_id={executor_id}&token=<AUTOPILOT_MCP_AUTH>")
 
 **Example:**
 
-    web_fetch(url="http://localhost:9090/api/agent-action/execute-plan?plan_id=PLAN-20260217-def67890&executor_id=responder-agent")
+    web_fetch(url="http://localhost:9090/api/agent-action/execute-plan?plan_id=PLAN-20260217-def67890&executor_id=responder-agent&token=<AUTOPILOT_MCP_AUTH>")
 
 **Preconditions** (checked by the service):
 1. Plan must be in `approved` state (human Tier 1 + Tier 2 approval completed)

@@ -58,12 +58,15 @@ Each status transition triggers a webhook that activates the next agent. The run
 
 ## Security
 
-- Same authentication as standard endpoints (Bearer token or localhost bypass)
+- **Authentication**: Bearer header OR `?token=` query parameter
+  - `Authorization: Bearer <AUTOPILOT_MCP_AUTH>` — for direct API consumers (curl, scripts)
+  - `?token=<AUTOPILOT_MCP_AUTH>` — for OpenClaw agents via `web_fetch` (cannot set headers)
+  - Localhost bypass (bootstrap mode only, no token required)
 - Same authorization checks (`validateAuthorization(req, "write")`)
 - Same input validation (`isValidCaseId`, `isValidPlanId`, `isValidIdentityId`)
-- Bound to localhost only — not exposed externally
+- Query token auth is limited to GET requests only (prevents token leakage in POST/PUT bodies)
 - `data` parameter is JSON-parsed inside try/catch — rejects malformed input
 
 ## Standard REST Endpoints
 
-The original PUT/POST endpoints remain available for direct API consumers (curl, scripts, Slack integrations). The GET-based endpoints are specifically for OpenClaw agents using `web_fetch`.
+The original PUT/POST endpoints remain available for direct API consumers (curl, scripts, Slack integrations) using `Authorization: Bearer` headers. The GET-based endpoints with `?token=` auth are specifically for OpenClaw agents using `web_fetch`.

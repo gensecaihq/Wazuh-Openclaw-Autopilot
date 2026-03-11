@@ -5,7 +5,7 @@
 
 ## Hourly Snapshot (every hour)
 - [ ] Use `web_fetch` to query runtime metrics: `web_fetch(url="http://localhost:9090/metrics")`
-- [ ] Use `web_fetch` to count active cases: `web_fetch(url="http://localhost:9090/api/cases")`
+- [ ] Use `web_fetch` to count active cases: `web_fetch(url="http://localhost:9090/api/cases?token=<AUTOPILOT_MCP_AUTH>")`
 - [ ] Check pending approvals in plan store via `web_fetch`
 - [ ] Query agent health status via MCP
 - [ ] Output: Slack post to ops channel with 4-section snapshot

@@ -90,23 +90,19 @@ Count distinct kill chain phases present in the cluster. Score:
 
 ## Runtime API Access
 
-The Correlation Agent calls the runtime REST API at `http://localhost:9090` using `web_fetch`. All endpoints use GET requests with query parameters.
+The Correlation Agent calls the runtime REST API at `http://localhost:9090` using `web_fetch`. All endpoints use GET requests with query parameters. Pass the auth token as `?token=<AUTOPILOT_MCP_AUTH>` on every request.
 
-> **Note**: These endpoints use GET with query parameters because OpenClaw's `web_fetch` tool only supports GET requests.
+> **Note**: These endpoints use GET with query parameters because OpenClaw's `web_fetch` tool only supports GET requests (no custom headers).
 
 ### List Cases (Find Triaged Cases)
 
-```
-GET http://localhost:9090/api/cases
-```
+    web_fetch(url="http://localhost:9090/api/cases?token=<AUTOPILOT_MCP_AUTH>")
 
 Filter the response for cases with `status: "triaged"` to identify cases ready for correlation.
 
 ### Read Full Case Evidence Pack
 
-```
-GET http://localhost:9090/api/cases/{case_id}
-```
+    web_fetch(url="http://localhost:9090/api/cases/{case_id}?token=<AUTOPILOT_MCP_AUTH>")
 
 Returns the complete case object including entities, timeline, MITRE mappings, and evidence references.
 
@@ -114,9 +110,7 @@ Returns the complete case object including entities, timeline, MITRE mappings, a
 
 After computing entity overlaps, temporal clusters, and attack chain scores, write the correlation results back and advance the case status.
 
-```
-GET http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=correlated&data={url_encoded_json}
-```
+    web_fetch(url="http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=correlated&data={url_encoded_json}&token=<AUTOPILOT_MCP_AUTH>")
 
 The `data` parameter is a URL-encoded JSON object containing your correlation results:
 

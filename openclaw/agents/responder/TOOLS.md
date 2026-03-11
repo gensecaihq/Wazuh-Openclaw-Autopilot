@@ -4,11 +4,9 @@
 
 Trigger execution of an approved plan via the Runtime Service API.
 
-> **Note**: This endpoint uses GET with query parameters because OpenClaw's `web_fetch` tool only supports GET requests.
+> **Note**: This endpoint uses GET with query parameters because OpenClaw's `web_fetch` tool only supports GET requests (no custom headers). Pass the auth token as `?token=<AUTOPILOT_MCP_AUTH>` on every request.
 
-```
-GET http://localhost:9090/api/agent-action/execute-plan?plan_id={plan_id}&executor_id={executor_id}
-```
+    web_fetch(url="http://localhost:9090/api/agent-action/execute-plan?plan_id={plan_id}&executor_id={executor_id}&token=<AUTOPILOT_MCP_AUTH>")
 
 **Preconditions checked by the service**:
 1. Plan must be in `approved` state (Tier 1 human approval completed)
@@ -21,9 +19,7 @@ GET http://localhost:9090/api/agent-action/execute-plan?plan_id={plan_id}&execut
 
 Verify the responder capability is enabled and healthy before attempting execution.
 
-```
-GET http://localhost:9090/api/responder/status
-```
+    web_fetch(url="http://localhost:9090/api/responder/status?token=<AUTOPILOT_MCP_AUTH>")
 
 Port is configurable via `RUNTIME_PORT` env var (default: 9090).
 

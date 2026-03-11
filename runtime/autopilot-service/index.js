@@ -2747,8 +2747,18 @@ function sanitizeRequestId(rawId) {
 // Authorization validation for sensitive endpoints
 // Issue #1 fix: Uses timing-safe comparison
 // Issue #3 fix: Includes auth failure rate limiting
-function validateAuthorization(req, requiredScope = "write") {
+// Issue #17/#18 fix: Accept auth token via query parameter for agent-action
+// endpoints — OpenClaw's web_fetch tool is GET-only and cannot set headers.
+function validateAuthorization(req, requiredScope = "write", url = null) {
   const authHeader = req.headers.authorization;
+
+  // Fallback: accept token via query parameter for GET endpoints.
+  // OpenClaw's web_fetch tool only supports GET requests with no custom headers,
+  // so agents must pass the auth token as ?token=<value> in the URL.
+  // Limited to GET requests to prevent token leakage in POST/PUT bodies.
+  const queryToken = url && req.method === "GET"
+    ? url.searchParams.get("token")
+    : null;
 
   // Get client IP for auth failure tracking
   // Only trust X-Forwarded-For from loopback connections (behind a local reverse proxy)
@@ -2775,23 +2785,28 @@ function validateAuthorization(req, requiredScope = "write") {
 
   // Allow requests from localhost without auth ONLY in bootstrap mode
   // Production mode always requires token auth to prevent co-located process abuse
-  if (isLocalhost && !authHeader && config.mode === "bootstrap") {
+  if (isLocalhost && !authHeader && !queryToken && config.mode === "bootstrap") {
     return { valid: true, source: "localhost", scope: "write" };
   }
 
-  // Require authorization for non-localhost requests
-  if (!authHeader) {
+  // Resolve token: prefer Authorization header, fall back to query parameter
+  let token;
+  let tokenSource;
+  if (authHeader) {
+    // Validate Bearer token format
+    if (!authHeader.startsWith("Bearer ")) {
+      recordAuthFailure(clientIp);
+      return { valid: false, reason: "Invalid Authorization format" };
+    }
+    token = authHeader.substring(7);
+    tokenSource = "header";
+  } else if (queryToken) {
+    token = queryToken;
+    tokenSource = "query";
+  } else {
     recordAuthFailure(clientIp);
     return { valid: false, reason: "Missing Authorization header" };
   }
-
-  // Validate Bearer token format
-  if (!authHeader.startsWith("Bearer ")) {
-    recordAuthFailure(clientIp);
-    return { valid: false, reason: "Invalid Authorization format" };
-  }
-
-  const token = authHeader.substring(7);
 
   // Reject empty or too-short tokens before comparison
   if (!token || token.length < 8) {
@@ -2802,7 +2817,7 @@ function validateAuthorization(req, requiredScope = "write") {
   // Validate against configured MCP auth token using timing-safe comparison
   if (config.mcpAuth && config.mcpAuth.length >= 8 && secureCompare(token, config.mcpAuth)) {
     clearAuthFailures(clientIp); // Clear on success
-    return { valid: true, source: "api_token", scope: "write" };
+    return { valid: true, source: tokenSource === "query" ? "api_token_query" : "api_token", scope: "write" };
   }
 
   // Also check for internal service token (environment variable)
@@ -3017,7 +3032,7 @@ function createServer() {
 
       // Cases API - GET all
       if (url.pathname === "/api/cases" && req.method === "GET") {
-        const authResult = validateAuthorization(req, "read");
+        const authResult = validateAuthorization(req, "read", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3033,7 +3048,7 @@ function createServer() {
       // Cases API - POST create
       if (url.pathname === "/api/cases" && req.method === "POST") {
         // Require authorization for write operations
-        const authResult = validateAuthorization(req, "write");
+        const authResult = validateAuthorization(req, "write", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3054,7 +3069,7 @@ function createServer() {
 
       // Cases API - GET single
       if (url.pathname.startsWith("/api/cases/") && req.method === "GET") {
-        const authResult = validateAuthorization(req, "read");
+        const authResult = validateAuthorization(req, "read", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3081,7 +3096,7 @@ function createServer() {
       // Cases API - PUT update
       if (url.pathname.startsWith("/api/cases/") && req.method === "PUT") {
         // Require authorization for write operations
-        const authResult = validateAuthorization(req, "write");
+        const authResult = validateAuthorization(req, "write", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3118,7 +3133,7 @@ function createServer() {
         const triageStart = Date.now();
 
         // Require authorization for alert ingestion
-        const authResult = validateAuthorization(req, "write");
+        const authResult = validateAuthorization(req, "write", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3410,7 +3425,7 @@ function createServer() {
       // RESPONDER STATUS ENDPOINT
       // =================================================================
       if (url.pathname === "/api/responder/status" && req.method === "GET") {
-        const authResult = validateAuthorization(req, "read");
+        const authResult = validateAuthorization(req, "read", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3426,12 +3441,13 @@ function createServer() {
       // AGENT ACTION ENDPOINTS — GET-based write-back for OpenClaw agents
       // OpenClaw's web_fetch tool is GET-only (no method/body/headers params).
       // These endpoints let agents advance the pipeline via GET + query params.
-      // Same auth & validation as POST/PUT counterparts.
+      // Auth: Bearer header OR ?token= query parameter (for web_fetch compat).
+      // Same validation as POST/PUT counterparts.
       // =================================================================
 
       // Agent action: update case status (replaces PUT /api/cases/:id)
       if (url.pathname === "/api/agent-action/update-case" && req.method === "GET") {
-        const authResult = validateAuthorization(req, "write");
+        const authResult = validateAuthorization(req, "write", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3508,7 +3524,7 @@ function createServer() {
 
       // Agent action: create response plan (replaces POST /api/plans)
       if (url.pathname === "/api/agent-action/create-plan" && req.method === "GET") {
-        const authResult = validateAuthorization(req, "write");
+        const authResult = validateAuthorization(req, "write", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3602,7 +3618,7 @@ function createServer() {
 
       // Agent action: approve plan (replaces POST /api/plans/:id/approve)
       if (url.pathname === "/api/agent-action/approve-plan" && req.method === "GET") {
-        const authResult = validateAuthorization(req, "write");
+        const authResult = validateAuthorization(req, "write", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3658,7 +3674,7 @@ function createServer() {
 
       // Agent action: execute plan (replaces POST /api/plans/:id/execute)
       if (url.pathname === "/api/agent-action/execute-plan" && req.method === "GET") {
-        const authResult = validateAuthorization(req, "write");
+        const authResult = validateAuthorization(req, "write", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3719,7 +3735,7 @@ function createServer() {
 
       // List plans
       if (url.pathname === "/api/plans" && req.method === "GET") {
-        const authResult = validateAuthorization(req, "read");
+        const authResult = validateAuthorization(req, "read", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3735,7 +3751,7 @@ function createServer() {
 
       // Create plan (Response Planner agent creates plans)
       if (url.pathname === "/api/plans" && req.method === "POST") {
-        const authResult = validateAuthorization(req, "write");
+        const authResult = validateAuthorization(req, "write", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3798,7 +3814,7 @@ function createServer() {
 
       // Get single plan
       if (url.pathname.match(/^\/api\/plans\/[^/]+$/) && req.method === "GET") {
-        const authResult = validateAuthorization(req, "read");
+        const authResult = validateAuthorization(req, "read", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3821,7 +3837,7 @@ function createServer() {
 
       // TIER 1: Approve plan
       if (url.pathname.match(/^\/api\/plans\/[^/]+\/approve$/) && req.method === "POST") {
-        const authResult = validateAuthorization(req, "write");
+        const authResult = validateAuthorization(req, "write", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3871,7 +3887,7 @@ function createServer() {
 
       // Reject plan
       if (url.pathname.match(/^\/api\/plans\/[^/]+\/reject$/) && req.method === "POST") {
-        const authResult = validateAuthorization(req, "write");
+        const authResult = validateAuthorization(req, "write", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3904,7 +3920,7 @@ function createServer() {
 
       // TIER 2: Execute plan
       if (url.pathname.match(/^\/api\/plans\/[^/]+\/execute$/) && req.method === "POST") {
-        const authResult = validateAuthorization(req, "write");
+        const authResult = validateAuthorization(req, "write", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;
@@ -3969,7 +3985,7 @@ function createServer() {
       // CASE FEEDBACK ENDPOINT
       // =================================================================
       if (url.pathname.match(/^\/api\/cases\/[^/]+\/feedback$/) && req.method === "POST") {
-        const authResult = validateAuthorization(req, "write");
+        const authResult = validateAuthorization(req, "write", url);
         if (!authResult.valid) {
           sendAuthError(res, authResult, requestId);
           return;

@@ -852,7 +852,10 @@ deploy_agents() {
       },
       "sandbox": {
         "mode": "all",
-        "scope": "session"
+        "scope": "session",
+        "tools": {
+          "alsoAllow": ["web_fetch"]
+        }
       },
       "heartbeat": {
         "every": "30m",
@@ -981,7 +984,7 @@ deploy_agents() {
     "deny": ["browser", "canvas"],
     "web": {
       "search": {"enabled": false},
-      "fetch": {"enabled": true, "allowPrivateNetwork": true}
+      "fetch": {"enabled": true}
     }
   },
 
