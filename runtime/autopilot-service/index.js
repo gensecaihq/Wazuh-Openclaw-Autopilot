@@ -1248,6 +1248,51 @@ const MAX_ACTIONS_PER_PLAN = 10;
 // Bug #7 fix: Track plans currently being executed to prevent race conditions
 const executingPlans = new Set();
 
+// Plan persistence: save plan to disk so it survives service restarts
+async function savePlanToDisk(plan) {
+  try {
+    const plansDir = path.join(config.dataDir, "plans");
+    await ensureDir(plansDir);
+    await atomicWriteFile(
+      path.join(plansDir, `${plan.plan_id}.json`),
+      JSON.stringify(plan, null, 2),
+    );
+  } catch (err) {
+    log("warn", "plans", "Failed to persist plan to disk", {
+      plan_id: plan.plan_id,
+      error: err.message,
+    });
+  }
+}
+
+// Load all plans from disk on startup
+async function loadPlansFromDisk() {
+  const plansDir = path.join(config.dataDir, "plans");
+  try {
+    await ensureDir(plansDir);
+    const entries = await fs.readdir(plansDir);
+    let loaded = 0;
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) continue;
+      try {
+        const content = await fs.readFile(path.join(plansDir, entry), "utf8");
+        const plan = JSON.parse(content);
+        if (plan.plan_id) {
+          responsePlans.set(plan.plan_id, plan);
+          loaded++;
+        }
+      } catch {
+        // Skip corrupt plan files
+      }
+    }
+    if (loaded > 0) {
+      log("info", "plans", "Loaded plans from disk", { count: loaded });
+    }
+  } catch {
+    // Plans directory doesn't exist yet — will be created on first plan
+  }
+}
+
 // Plan states
 const PLAN_STATES = {
   PROPOSED: "proposed",
@@ -1359,6 +1404,7 @@ function createResponsePlan(planData) {
   };
 
   responsePlans.set(planId, plan);
+  savePlanToDisk(plan); // async, fire-and-forget
   incrementMetric("plans_created_total");
   log("info", "plans", "Response plan created", {
     plan_id: planId,
@@ -1404,6 +1450,7 @@ function getPlan(planId, { updateExpiry = true } = {}) {
     if (new Date(plan.expires_at).getTime() < now) {
       plan.state = PLAN_STATES.EXPIRED;
       plan.updated_at = new Date(now).toISOString();
+      savePlanToDisk(plan); // persist expiry
       incrementMetric("plans_expired_total");
       log("info", "plans", "Plan expired", { plan_id: planId });
     }
@@ -1469,12 +1516,24 @@ function approvePlan(planId, approverId, reason = "") {
   // Extend expiry after approval (give time for execution)
   plan.expires_at = new Date(now + config.planExpiryMinutes * 60 * 1000).toISOString();
 
+  savePlanToDisk(plan); // persist state change
   incrementMetric("plans_approved_total");
   log("info", "plans", "Plan approved (Tier 1)", {
     plan_id: planId,
     approver_id: approverId,
     case_id: plan.case_id,
   });
+
+  // Sync case status to "approved" so stalled pipeline detector doesn't re-dispatch
+  if (plan.case_id) {
+    updateCase(plan.case_id, { status: "approved" }).catch((err) => {
+      log("warn", "plans", "Failed to sync case status on plan approval", {
+        plan_id: planId,
+        case_id: plan.case_id,
+        error: err.message,
+      });
+    });
+  }
 
   return plan;
 }
@@ -1498,6 +1557,7 @@ function rejectPlan(planId, rejectorId, reason = "") {
   plan.rejected_at = now;
   plan.rejection_reason = reason;
   plan.updated_at = now;
+  savePlanToDisk(plan); // persist state change
 
   incrementMetric("plans_rejected_total");
   log("info", "plans", "Plan rejected", {
@@ -1587,6 +1647,7 @@ async function executePlan(planId, executorId) {
     plan.state = PLAN_STATES.FAILED;
     plan.updated_at = new Date().toISOString();
     plan.execution_result = { success: false, reason: twExecResult.reason };
+    savePlanToDisk(plan); // persist state change
     executingPlans.delete(planId);
     incrementMetric("executions_failed_total");
     return plan;
@@ -1737,6 +1798,7 @@ async function executePlan(planId, executorId) {
       plan.updated_at = new Date().toISOString();
       incrementMetric("executions_failed_total");
     }
+    savePlanToDisk(plan); // persist final state
   }
 }
 
@@ -1974,8 +2036,9 @@ function policyCheckAction(actionType, confidence = 0) {
   }
 
   // Check minimum confidence
+  // When minConfidence is configured, reject if confidence is unknown (0) or below threshold
   const minConfidence = parseFloat(actionConfig.min_confidence) || 0;
-  if (confidence > 0 && confidence < minConfidence) {
+  if (minConfidence > 0 && confidence < minConfidence) {
     return { allowed: false, reason: `Confidence ${confidence} below minimum ${minConfidence} for '${actionType}'` };
   }
 
@@ -3469,7 +3532,8 @@ function createServer() {
         }
 
         const ALLOWED_DATA_FIELDS = ["title", "summary", "severity", "confidence", "correlation", "findings", "recommended_response", "iocs", "enrichment_data", "mitre", "entities", "timeline"];
-        const STRING_FIELDS = ["title", "summary", "severity", "confidence", "recommended_response"];
+        const STRING_FIELDS = ["title", "summary", "severity", "recommended_response"];
+        const NUMBER_FIELDS = ["confidence"];
         const OBJECT_FIELDS = ["correlation", "enrichment_data", "mitre"];
         const ARRAY_FIELDS = ["findings", "iocs", "entities", "timeline"];
         const MAX_DATA_SIZE = 512 * 1024; // 512 KB
@@ -3490,6 +3554,7 @@ function createServer() {
               if (!ALLOWED_DATA_FIELDS.includes(key)) continue;
               const val = parsed[key];
               if (STRING_FIELDS.includes(key) && typeof val !== "string") continue;
+              if (NUMBER_FIELDS.includes(key) && typeof val !== "number") continue;
               if (OBJECT_FIELDS.includes(key) && (typeof val !== "object" || val === null || Array.isArray(val))) continue;
               if (ARRAY_FIELDS.includes(key) && !Array.isArray(val)) continue;
               updates[key] = val;
@@ -3628,6 +3693,12 @@ function createServer() {
         const approverId = url.searchParams.get("approver_id");
         const decision = url.searchParams.get("decision") || "allow";
         const reason = url.searchParams.get("reason") || "";
+
+        const VALID_DECISIONS = ["allow", "deny", "escalate"];
+        if (!VALID_DECISIONS.includes(decision)) {
+          sendJsonError(res, 400, `Invalid decision: must be one of ${VALID_DECISIONS.join(", ")}`, requestId);
+          return;
+        }
 
         if (!planId || !isValidPlanId(planId)) {
           sendJsonError(res, 400, "Invalid or missing plan_id", requestId);
@@ -4270,6 +4341,9 @@ async function main() {
 
   await validateStartup();
 
+  // Load persisted plans from disk
+  await loadPlansFromDisk();
+
   // Setup cleanup intervals for memory management
   setupCleanupIntervals();
 
@@ -4376,6 +4450,9 @@ module.exports = {
   parseJsonBody,
   createServer,
   sendJsonError,
+  // Plan persistence
+  savePlanToDisk,
+  loadPlansFromDisk,
   // Stalled pipeline
   checkStalledPipeline,
   // Utilities

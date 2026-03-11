@@ -980,7 +980,7 @@ deploy_agents() {
 
   "tools": {
     "profile": "minimal",
-    "alsoAllow": ["read", "edit", "write", "exec", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+    "alsoAllow": ["read", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
     "deny": ["browser", "canvas"],
     "web": {
       "search": {"enabled": false},

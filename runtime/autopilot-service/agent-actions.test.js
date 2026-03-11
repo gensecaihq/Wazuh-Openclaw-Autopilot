@@ -348,3 +348,102 @@ describe("GET /api/agent-action/execute-plan", () => {
     assert.equal(res.body.ok, true);
   });
 });
+
+// ===================================================================
+// Bug fix tests: confidence, decision validation, plan persistence
+// ===================================================================
+
+describe("Bug fixes: confidence, decision validation, plan persistence", () => {
+  let server;
+
+  before(() => {
+    ensureTestDirs();
+    server = createServer();
+    return new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  });
+
+  after(() => {
+    return new Promise((resolve) => server.close(() => { rmTestDir(); resolve(); }));
+  });
+
+  it("update-case accepts numeric confidence in data param", async () => {
+    const alert = await ingestAlert(server, `confidence-test-${Date.now()}`);
+    const caseId = alert.case_id;
+
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${caseId}&data=${encodeURIComponent(JSON.stringify({ confidence: 0.85 }))}`);
+    assert.equal(res.status, 200);
+
+    // Verify the confidence was actually set
+    const caseRes = await request(server, "GET", `/api/cases/${caseId}`);
+    assert.equal(caseRes.body.confidence, 0.85);
+  });
+
+  it("update-case rejects non-numeric confidence in data param", async () => {
+    const alert = await ingestAlert(server, `confidence-str-${Date.now()}`);
+    const caseId = alert.case_id;
+
+    // String confidence should be silently dropped (type mismatch), but status should still work
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${caseId}&status=triaged&data=${encodeURIComponent(JSON.stringify({ confidence: "high" }))}`);
+    assert.equal(res.status, 200);
+
+    // Verify the original confidence (from alert ingestion) is preserved
+    const caseRes = await request(server, "GET", `/api/cases/${caseId}`);
+    assert.notEqual(caseRes.body.confidence, "high");
+  });
+
+  it("approve-plan rejects invalid decision values", async () => {
+    const alert = await ingestAlert(server, `decision-test-${Date.now()}`);
+    const caseId = alert.case_id;
+
+    // Create plan
+    const planRes = await request(server, "GET",
+      `/api/agent-action/create-plan?case_id=${caseId}&title=Test&risk_level=low&actions=${encodeURIComponent(JSON.stringify([{ type: "block_ip", target: "1.2.3.4" }]))}`);
+    assert.equal(planRes.status, 201);
+    const planId = planRes.body.plan_id;
+
+    // Try invalid decision
+    const res = await request(server, "GET",
+      `/api/agent-action/approve-plan?plan_id=${planId}&approver_id=approver-001&decision=maybe`);
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("Invalid decision"));
+  });
+
+  it("approve-plan accepts valid decision values (allow, deny, escalate)", async () => {
+    const alert = await ingestAlert(server, `valid-decision-${Date.now()}`);
+    const caseId = alert.case_id;
+
+    // Create plan and deny it
+    const planRes = await request(server, "GET",
+      `/api/agent-action/create-plan?case_id=${caseId}&title=Test&risk_level=low&actions=${encodeURIComponent(JSON.stringify([{ type: "block_ip", target: "5.6.7.8" }]))}`);
+    const planId = planRes.body.plan_id;
+
+    const denyRes = await request(server, "GET",
+      `/api/agent-action/approve-plan?plan_id=${planId}&approver_id=approver-001&decision=deny`);
+    assert.equal(denyRes.status, 200);
+    assert.equal(denyRes.body.state, "rejected");
+  });
+
+  it("plans are persisted to disk and survive in-memory clear", async () => {
+    const alert = await ingestAlert(server, `persist-test-${Date.now()}`);
+    const caseId = alert.case_id;
+
+    const planRes = await request(server, "GET",
+      `/api/agent-action/create-plan?case_id=${caseId}&title=Persist%20Test&risk_level=low&actions=${encodeURIComponent(JSON.stringify([{ type: "block_ip", target: "9.8.7.6" }]))}`);
+    assert.equal(planRes.status, 201);
+    const planId = planRes.body.plan_id;
+
+    // Verify the plan file exists on disk
+    const planFile = path.join(TEST_DATA_DIR, "plans", `${planId}.json`);
+
+    // Give a moment for async save
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.ok(fs.existsSync(planFile), `Plan file should exist at ${planFile}`);
+    const saved = JSON.parse(fs.readFileSync(planFile, "utf8"));
+    assert.equal(saved.plan_id, planId);
+    assert.equal(saved.state, "proposed");
+    assert.equal(saved.title, "Persist Test");
+  });
+});

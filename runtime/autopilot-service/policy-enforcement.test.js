@@ -15,6 +15,7 @@ process.env.AUTOPILOT_DATA_DIR = path.join(os.tmpdir(), `autopilot-policy-test-$
 
 const {
   loadPolicyConfig,
+  policyCheckAction,
   policyCheckTimeWindow,
   policyCheckActionRateLimit,
   policyCheckIdempotency,
@@ -524,6 +525,64 @@ idempotency:
 
       result = policyCheckIdempotency("block_ip", "10.0.0.1");
       assert.strictEqual(result.allowed, true);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ============================================================================
+// policyCheckAction — min_confidence enforcement
+// ============================================================================
+
+describe("Policy Enforcement - policyCheckAction min_confidence", () => {
+  it("denies action when confidence is 0 (unknown) and min_confidence is configured", async () => {
+    const tmpDir = path.join(os.tmpdir(), `autopilot-confidence-test-${Date.now()}`);
+    await fs.mkdir(path.join(tmpDir, "policies"), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, "policies", "policy.yaml"), `
+actions:
+  enabled: true
+  deny_unlisted: false
+  allowlist:
+    block_ip:
+      enabled: true
+      min_confidence: 0.7
+`);
+    try {
+      await loadPolicyConfig(tmpDir);
+
+      // Confidence 0 (unknown) should be denied when min_confidence is set
+      const result = policyCheckAction("block_ip", 0);
+      assert.strictEqual(result.allowed, false, "confidence=0 should be denied when min_confidence=0.7");
+      assert.ok(result.reason.includes("below minimum"));
+
+      // Confidence above threshold should be allowed
+      const allowed = policyCheckAction("block_ip", 0.85);
+      assert.strictEqual(allowed.allowed, true);
+
+      // Confidence below threshold should be denied
+      const denied = policyCheckAction("block_ip", 0.5);
+      assert.strictEqual(denied.allowed, false);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows action when no min_confidence is configured", async () => {
+    const tmpDir = path.join(os.tmpdir(), `autopilot-noconf-test-${Date.now()}`);
+    await fs.mkdir(path.join(tmpDir, "policies"), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, "policies", "policy.yaml"), `
+actions:
+  enabled: true
+  deny_unlisted: false
+  allowlist:
+    block_ip:
+      enabled: true
+`);
+    try {
+      await loadPolicyConfig(tmpDir);
+      const result = policyCheckAction("block_ip", 0);
+      assert.strictEqual(result.allowed, true, "confidence=0 should be allowed when no min_confidence");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
