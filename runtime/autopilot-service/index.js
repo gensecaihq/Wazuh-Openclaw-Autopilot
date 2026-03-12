@@ -3655,6 +3655,7 @@ function createServer() {
 
           try {
             await updateCase(caseId, {
+              status: "planned",
               plans: [{
                 plan_id: plan.plan_id,
                 state: plan.state,
@@ -3862,9 +3863,10 @@ function createServer() {
         try {
           const plan = createResponsePlan(body);
 
-          // Also update the case with the proposed plan
+          // Also update the case with the proposed plan and advance status to planned
           try {
             await updateCase(body.case_id, {
+              status: "planned",
               plans: [{
                 plan_id: plan.plan_id,
                 state: plan.state,
