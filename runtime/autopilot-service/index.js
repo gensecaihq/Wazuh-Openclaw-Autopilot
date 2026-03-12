@@ -3636,16 +3636,21 @@ function createServer() {
           return;
         }
 
-        // Verify case exists
+        // Verify case exists and get its confidence for policy checks
+        let caseData;
         try {
-          await getCase(caseId);
+          caseData = await getCase(caseId);
         } catch {
           sendJsonError(res, 404, `Case ${caseId} not found — cannot create plan for non-existent case`, requestId);
           return;
         }
 
+        // Use explicit confidence param if provided, otherwise inherit from case
+        const confidenceParam = url.searchParams.get("confidence");
+        const confidence = confidenceParam !== null ? parseFloat(confidenceParam) : (caseData.confidence || 0);
+
         try {
-          const planData = { case_id: caseId, title, description, risk_level: riskLevel, actions };
+          const planData = { case_id: caseId, title, description, risk_level: riskLevel, actions, confidence };
           const plan = createResponsePlan(planData);
 
           try {
@@ -3840,12 +3845,18 @@ function createServer() {
           return;
         }
 
-        // Verify case exists before creating plan
+        // Verify case exists and inherit confidence for policy checks
+        let planCaseData;
         try {
-          await getCase(body.case_id);
+          planCaseData = await getCase(body.case_id);
         } catch (e) {
           sendJsonError(res, 404, `Case ${body.case_id} not found — cannot create plan for non-existent case`, requestId);
           return;
+        }
+
+        // If confidence not provided in body, inherit from case
+        if (body.confidence === undefined || body.confidence === null) {
+          body.confidence = planCaseData.confidence || 0;
         }
 
         try {
