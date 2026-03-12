@@ -376,7 +376,8 @@ describe("Plan Execution (Responder Enabled)", () => {
     const mcpCall = mcpRequestLog[0];
     assert.equal(mcpCall.method, "POST");
     assert.ok(mcpCall.url.includes("block_ip"));
-    assert.deepStrictEqual(mcpCall.body, { ip: "10.0.0.42", direction: "both" });
+    // buildMcpParams injects action.target as the target param name (fallback: "target")
+    assert.deepStrictEqual(mcpCall.body, { ip: "10.0.0.42", direction: "both", target: "10.0.0.42" });
     assert.ok(mcpCall.headers["authorization"]);
     assert.ok(mcpCall.headers["x-correlation-id"]);
   });

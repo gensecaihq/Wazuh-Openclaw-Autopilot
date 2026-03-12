@@ -1704,7 +1704,8 @@ async function executePlan(planId, executorId) {
 
         // Call MCP tool for the action
         const correlationId = `${planId}-${action.type}-${Date.now()}`;
-        const mcpResult = await callMcpTool(action.type, action.params || {}, correlationId);
+        const mcpParams = buildMcpParams(action);
+        const mcpResult = await callMcpTool(action.type, mcpParams, correlationId);
 
         // Record successful execution for rate limiting and dedup tracking
         if (mcpResult.success) {
@@ -1953,9 +1954,9 @@ async function loadToolmap() {
         get_rule_info: { mcp_tool: "get_wazuh_rules_summary", enabled: true },
       },
       action_operations: {
-        block_ip: { mcp_tool: "wazuh_block_ip", enabled: false },
-        isolate_host: { mcp_tool: "wazuh_isolate_host", enabled: false },
-        kill_process: { mcp_tool: "wazuh_kill_process", enabled: false },
+        block_ip: { mcp_tool: "wazuh_block_ip", enabled: false, target_param: "ip_address" },
+        isolate_host: { mcp_tool: "wazuh_isolate_host", enabled: false, target_param: "agent_id" },
+        kill_process: { mcp_tool: "wazuh_kill_process", enabled: false, target_param: "agent_id" },
       },
     };
     return toolmapConfig;
@@ -2403,6 +2404,71 @@ function isToolEnabled(logicalName) {
   }
 
   return true;
+}
+
+// Parse human-readable duration strings to integer seconds
+// Supports: "24h", "30m", "2d", "1h30m", "3600", "86400s", etc.
+function parseDurationToSeconds(value) {
+  if (typeof value === "number") return Math.floor(value);
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  // Pure integer string (already seconds)
+  if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10);
+
+  // Duration with units: "24h", "30m", "2d", "1h30m", "90s"
+  const units = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
+  let total = 0;
+  let matched = false;
+  const regex = /(\d+)\s*([smhdw])/gi;
+  let match;
+  while ((match = regex.exec(trimmed)) !== null) {
+    const num = parseInt(match[1], 10);
+    const unit = match[2].toLowerCase();
+    total += num * (units[unit] || 0);
+    matched = true;
+  }
+
+  return matched ? total : null;
+}
+
+// Build MCP tool call params from plan action
+// Maps action.target to the correct MCP parameter name using toolmap config
+// Coerces duration strings to integer seconds
+function buildMcpParams(action) {
+  const params = { ...(action.params || {}) };
+
+  // Determine which MCP parameter action.target maps to
+  let targetParamName = "target"; // default fallback
+  if (toolmapConfig && toolmapConfig.action_operations) {
+    const toolConfig = toolmapConfig.action_operations[action.type];
+    if (toolConfig && toolConfig.target_param) {
+      targetParamName = toolConfig.target_param;
+    } else if (toolConfig && Array.isArray(toolConfig.parameters)) {
+      // Use the first required parameter as the target param
+      const requiredParam = toolConfig.parameters.find((p) => p.required === true || p.required === "true");
+      if (requiredParam) {
+        targetParamName = requiredParam.name;
+      }
+    }
+  }
+
+  // Inject action.target as the resolved parameter name (don't overwrite if already set)
+  if (action.target && !params[targetParamName]) {
+    params[targetParamName] = action.target;
+  }
+
+  // Coerce duration-like values to integer seconds
+  if (params.duration !== undefined) {
+    const seconds = parseDurationToSeconds(params.duration);
+    if (seconds !== null) {
+      params.duration = seconds;
+    }
+  }
+
+  return params;
 }
 
 async function callMcpTool(toolName, params, correlationId) {
@@ -4421,6 +4487,8 @@ module.exports = {
   loadToolmap,
   resolveMcpTool,
   isToolEnabled,
+  buildMcpParams,
+  parseDurationToSeconds,
   // Gateway dispatch
   dispatchToGateway,
   // Enrichment

@@ -505,6 +505,7 @@ action_operations:
     enabled: false
     risk_level: low
     reversible: true
+    target_param: ip_address
     parameters:
       - name: ip_address
         type: string
@@ -530,6 +531,7 @@ action_operations:
     enabled: false
     risk_level: medium
     reversible: true
+    target_param: agent_id
     parameters:
       - name: agent_id
         type: string
@@ -549,6 +551,7 @@ action_operations:
     enabled: false
     risk_level: medium
     reversible: false
+    target_param: agent_id
     parameters:
       - name: agent_id
         type: string
@@ -569,6 +572,7 @@ action_operations:
     enabled: false
     risk_level: high
     reversible: true
+    target_param: agent_id
     parameters:
       - name: agent_id
         type: string
@@ -591,6 +595,7 @@ action_operations:
     enabled: false
     risk_level: low
     reversible: true
+    target_param: agent_id
     parameters:
       - name: agent_id
         type: string
@@ -613,6 +618,7 @@ action_operations:
     enabled: false
     risk_level: high
     reversible: false
+    target_param: agent_id
     parameters:
       - name: agent_id
         type: string
@@ -632,6 +638,7 @@ action_operations:
     enabled: false
     risk_level: medium
     reversible: true
+    target_param: src_ip
     parameters:
       - name: agent_id
         type: string
@@ -653,6 +660,7 @@ action_operations:
     enabled: false
     risk_level: medium
     reversible: true
+    target_param: src_ip
     parameters:
       - name: agent_id
         type: string

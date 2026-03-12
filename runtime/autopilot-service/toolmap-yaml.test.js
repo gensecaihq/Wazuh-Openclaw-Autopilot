@@ -21,6 +21,8 @@ const {
   loadToolmap,
   resolveMcpTool,
   isToolEnabled,
+  buildMcpParams,
+  parseDurationToSeconds,
 } = require("./index.js");
 
 const dataDir = process.env.AUTOPILOT_DATA_DIR;
@@ -190,5 +192,104 @@ describe("loadToolmap, resolveMcpTool, isToolEnabled", () => {
   it("isToolEnabled returns true for unknown tools (default)", async () => {
     await loadToolmap();
     assert.equal(isToolEnabled("nonexistent_tool"), true);
+  });
+});
+
+describe("parseDurationToSeconds", () => {
+  it("parses integer seconds", () => {
+    assert.equal(parseDurationToSeconds(3600), 3600);
+    assert.equal(parseDurationToSeconds(0), 0);
+  });
+
+  it("parses pure numeric strings as seconds", () => {
+    assert.equal(parseDurationToSeconds("86400"), 86400);
+    assert.equal(parseDurationToSeconds("0"), 0);
+  });
+
+  it("parses hour strings", () => {
+    assert.equal(parseDurationToSeconds("24h"), 86400);
+    assert.equal(parseDurationToSeconds("1h"), 3600);
+  });
+
+  it("parses minute strings", () => {
+    assert.equal(parseDurationToSeconds("30m"), 1800);
+  });
+
+  it("parses day strings", () => {
+    assert.equal(parseDurationToSeconds("2d"), 172800);
+  });
+
+  it("parses compound durations", () => {
+    assert.equal(parseDurationToSeconds("1h30m"), 5400);
+    assert.equal(parseDurationToSeconds("1d12h"), 129600);
+  });
+
+  it("parses seconds suffix", () => {
+    assert.equal(parseDurationToSeconds("90s"), 90);
+  });
+
+  it("returns null for invalid input", () => {
+    assert.equal(parseDurationToSeconds("forever"), null);
+    assert.equal(parseDurationToSeconds(""), null);
+    assert.equal(parseDurationToSeconds(null), null);
+    assert.equal(parseDurationToSeconds(undefined), null);
+  });
+});
+
+describe("buildMcpParams", () => {
+  it("injects action.target as target param using toolmap target_param", async () => {
+    // Load default toolmap which has block_ip.target_param = ip_address
+    await loadToolmap();
+    const params = buildMcpParams({
+      type: "block_ip",
+      target: "192.168.1.100",
+      params: { duration: "24h" },
+    });
+    assert.equal(params.ip_address, "192.168.1.100");
+    assert.equal(params.duration, 86400);
+  });
+
+  it("falls back to first required param from toolmap when no target_param", async () => {
+    await loadToolmap();
+    // kill_process has target_param = agent_id
+    const params = buildMcpParams({
+      type: "kill_process",
+      target: "002",
+      params: { process_id: 1234 },
+    });
+    assert.equal(params.agent_id, "002");
+    assert.equal(params.process_id, 1234);
+  });
+
+  it("does not overwrite existing param with same name as target_param", async () => {
+    await loadToolmap();
+    const params = buildMcpParams({
+      type: "block_ip",
+      target: "192.168.1.100",
+      params: { ip_address: "10.0.0.1", duration: 300 },
+    });
+    // Existing ip_address should not be overwritten
+    assert.equal(params.ip_address, "10.0.0.1");
+  });
+
+  it("coerces duration strings to integer seconds", async () => {
+    await loadToolmap();
+    const params = buildMcpParams({
+      type: "block_ip",
+      target: "192.168.1.100",
+      params: { duration: "1h30m" },
+    });
+    assert.equal(params.duration, 5400);
+  });
+
+  it("uses target as fallback param name when no toolmap loaded", () => {
+    // Without toolmap, falls back to "target"
+    const params = buildMcpParams({
+      type: "unknown_action",
+      target: "some-target",
+      params: { extra: "value" },
+    });
+    assert.equal(params.target, "some-target");
+    assert.equal(params.extra, "value");
   });
 });
