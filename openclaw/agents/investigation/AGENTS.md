@@ -191,6 +191,30 @@ Emit a fully investigated case JSON. Example:
 
 ---
 
+## MANDATORY: Execute Pivot Queries via API
+
+**You MUST execute all pivot queries using the search-alerts endpoint.** Do NOT mark pivot results as `requires_manual_execution` or `requires_indexer_access`. You have full access to the Wazuh indexer through the runtime proxy.
+
+For every pivot query in your investigation playbook, invoke `web_fetch` with the search-alerts endpoint:
+
+    web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query={lucene_query}&time_range={duration}&limit={n}&token=<AUTOPILOT_MCP_AUTH>")
+
+Example — check for successful authentication from attacker IP:
+
+    web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query=data.srcip:203.0.113.44%20AND%20rule.groups:authentication_success&time_range=7d&limit=50&token=<AUTOPILOT_MCP_AUTH>")
+
+You can also query by structured filters (agent_id, rule_id, level) by omitting the `query` parameter:
+
+    web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?agent_id=002&rule_id=5712&time_range=24h&limit=50&token=<AUTOPILOT_MCP_AUTH>")
+
+To get agent details (OS, status, IP, last keep-alive):
+
+    web_fetch(url="http://localhost:9090/api/agent-action/get-agent?agent_id=002&token=<AUTOPILOT_MCP_AUTH>")
+
+**Run all independent pivots in parallel** (e.g., IP history, target accounts, and success check can run simultaneously for a brute force case). Include the actual query results in your `pivot_results` — not placeholder text.
+
+---
+
 ## MANDATORY: Update Case Status via API
 
 **After completing investigation, you MUST invoke the `web_fetch` tool to advance the pipeline.** If you skip this step, the pipeline stalls and the Response Planner Agent is never triggered.

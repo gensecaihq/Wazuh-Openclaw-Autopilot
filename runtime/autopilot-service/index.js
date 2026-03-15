@@ -1404,7 +1404,9 @@ function createResponsePlan(planData) {
   };
 
   responsePlans.set(planId, plan);
-  savePlanToDisk(plan); // async, fire-and-forget
+  savePlanToDisk(plan).catch((err) => {
+    log("error", "plans", "Failed to persist plan to disk", { plan_id: planId, error: err.message });
+  });
   incrementMetric("plans_created_total");
   log("info", "plans", "Response plan created", {
     plan_id: planId,
@@ -1497,6 +1499,7 @@ function approvePlan(planId, approverId, reason = "") {
   if (new Date(plan.expires_at).getTime() < now) {
     plan.state = PLAN_STATES.EXPIRED;
     plan.updated_at = new Date(now).toISOString();
+    savePlanToDisk(plan); // persist expired state to survive restarts
     incrementMetric("plans_expired_total");
     log("info", "plans", "Plan expired", { plan_id: planId });
     throw new Error("Plan has expired");
@@ -1595,6 +1598,7 @@ async function executePlan(planId, executorId) {
   if (new Date(plan.expires_at).getTime() < nowTs) {
     plan.state = PLAN_STATES.EXPIRED;
     plan.updated_at = new Date(nowTs).toISOString();
+    savePlanToDisk(plan); // persist expired state to survive restarts
     incrementMetric("plans_expired_total");
     log("info", "plans", "Plan expired", { plan_id: planId });
     throw new Error("Plan has expired - approval is no longer valid");
@@ -2465,6 +2469,9 @@ function buildMcpParams(action) {
     const seconds = parseDurationToSeconds(params.duration);
     if (seconds !== null) {
       params.duration = seconds;
+    } else if (typeof params.duration === "string") {
+      log("warn", "mcp", "Could not parse duration value, removing", { duration: params.duration, action: action.type });
+      delete params.duration;
     }
   }
 
@@ -3701,6 +3708,10 @@ function createServer() {
           sendJsonError(res, 400, "actions parameter must be a non-empty JSON array", requestId);
           return;
         }
+        if (actions.length > MAX_ACTIONS_PER_PLAN) {
+          sendJsonError(res, 400, `actions array exceeds maximum of ${MAX_ACTIONS_PER_PLAN} actions`, requestId);
+          return;
+        }
 
         // Verify case exists and get its confidence for policy checks
         let caseData;
@@ -3713,7 +3724,15 @@ function createServer() {
 
         // Use explicit confidence param if provided, otherwise inherit from case
         const confidenceParam = url.searchParams.get("confidence");
-        const confidence = confidenceParam !== null ? parseFloat(confidenceParam) : (caseData.confidence || 0);
+        let confidence = caseData.confidence || 0;
+        if (confidenceParam !== null) {
+          const parsed = parseFloat(confidenceParam);
+          if (Number.isNaN(parsed) || parsed < 0 || parsed > 1) {
+            sendJsonError(res, 400, "confidence must be a number between 0 and 1", requestId);
+            return;
+          }
+          confidence = parsed;
+        }
 
         try {
           const planData = { case_id: caseId, title, description, risk_level: riskLevel, actions, confidence };
@@ -3868,6 +3887,135 @@ function createServer() {
             return;
           }
           sendJsonError(res, err.message.includes("not found") ? 404 : 400, err.message, requestId);
+        }
+        return;
+      }
+
+      // =================================================================
+      // AGENT-ACTION: SEARCH ALERTS — Proxy read queries to Wazuh MCP
+      // =================================================================
+      if (url.pathname === "/api/agent-action/search-alerts" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "read", url);
+        if (!authResult.valid) {
+          sendAuthError(res, authResult, requestId);
+          return;
+        }
+
+        const query = url.searchParams.get("query") || "";
+        const timeRange = url.searchParams.get("time_range") || "24h";
+        const limitParam = url.searchParams.get("limit");
+        const ruleId = url.searchParams.get("rule_id");
+        const agentId = url.searchParams.get("agent_id");
+        const level = url.searchParams.get("level");
+
+        // Validate limit
+        let limit = 50;
+        if (limitParam) {
+          limit = parseInt(limitParam, 10);
+          if (Number.isNaN(limit) || limit < 1 || limit > 500) {
+            sendJsonError(res, 400, "limit must be a number between 1 and 500", requestId);
+            return;
+          }
+        }
+
+        // Validate time_range format (e.g., "24h", "7d", "30m", "168h")
+        if (!/^\d+[smhdw]$/.test(timeRange)) {
+          sendJsonError(res, 400, "time_range must be a duration like 24h, 7d, 30m", requestId);
+          return;
+        }
+
+        if (!config.mcpUrl) {
+          sendJsonError(res, 503, "MCP server not configured — cannot proxy alert queries", requestId);
+          return;
+        }
+
+        try {
+          let mcpResult;
+          const correlationId = `search-${requestId}`;
+
+          if (query) {
+            // Use search_security_events for free-text/field queries
+            mcpResult = await callMcpTool("search_events", {
+              query,
+              time_range: timeRange,
+              limit,
+            }, correlationId);
+          } else {
+            // Use get_wazuh_alerts for structured filter queries
+            const params = { limit };
+            if (ruleId) params.rule_id = ruleId;
+            if (agentId) params.agent_id = agentId;
+            if (level) params.level = level;
+            // Convert time_range to timestamp_start
+            const durationSec = parseDurationToSeconds(timeRange);
+            if (durationSec) {
+              params.timestamp_start = new Date(Date.now() - durationSec * 1000).toISOString();
+            }
+            mcpResult = await callMcpTool("get_alert", params, correlationId);
+          }
+
+          log("info", "agent-action", "Search alerts proxy completed", {
+            query: query || "(structured)",
+            time_range: timeRange,
+            limit,
+            request_id: requestId,
+          });
+
+          res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
+          res.end(JSON.stringify({
+            ok: true,
+            query: query || null,
+            time_range: timeRange,
+            limit,
+            results: mcpResult,
+          }));
+        } catch (err) {
+          log("error", "agent-action", "Search alerts proxy failed", {
+            error: err.message,
+            request_id: requestId,
+          });
+          sendJsonError(res, 502, `MCP query failed: ${err.message}`, requestId);
+        }
+        return;
+      }
+
+      // =================================================================
+      // AGENT-ACTION: GET AGENT INFO — Proxy agent queries to Wazuh MCP
+      // =================================================================
+      if (url.pathname === "/api/agent-action/get-agent" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "read", url);
+        if (!authResult.valid) {
+          sendAuthError(res, authResult, requestId);
+          return;
+        }
+
+        const agentId = url.searchParams.get("agent_id");
+        if (!agentId) {
+          sendJsonError(res, 400, "agent_id parameter is required", requestId);
+          return;
+        }
+
+        if (!config.mcpUrl) {
+          sendJsonError(res, 503, "MCP server not configured — cannot proxy agent queries", requestId);
+          return;
+        }
+
+        try {
+          const correlationId = `agent-info-${requestId}`;
+          const mcpResult = await callMcpTool("get_agent", { agent_id: agentId }, correlationId);
+
+          res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
+          res.end(JSON.stringify({
+            ok: true,
+            agent_id: agentId,
+            results: mcpResult,
+          }));
+        } catch (err) {
+          log("error", "agent-action", "Get agent proxy failed", {
+            error: err.message,
+            request_id: requestId,
+          });
+          sendJsonError(res, 502, `MCP query failed: ${err.message}`, requestId);
         }
         return;
       }

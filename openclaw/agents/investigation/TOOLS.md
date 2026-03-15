@@ -108,6 +108,60 @@ The Investigation Agent calls the runtime REST API at `http://localhost:9090` us
 
 Returns the full case object including triage data, correlation results, entities, and evidence references. Use this as the starting point for pivot queries against the Wazuh indexer.
 
+### Search Alerts (Wazuh Indexer Pivot Queries)
+
+Use this endpoint to execute pivot queries against the Wazuh indexer. This is how you answer investigation questions like "did the attacker successfully authenticate?" or "what other hosts did this IP target?"
+
+**Free-text / field query** (uses `search_security_events` MCP tool):
+
+    web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query={query_string}&time_range={duration}&limit={n}&token=<AUTOPILOT_MCP_AUTH>")
+
+Parameters:
+- `query` — Lucene-style query string (e.g., `data.srcip:146.190.134.221 AND rule.groups:authentication_success`)
+- `time_range` — lookback duration (e.g., `24h`, `7d`, `168h`, `30m`). Default: `24h`
+- `limit` — max results to return (1-500). Default: `50`
+
+**Structured filter query** (uses `get_wazuh_alerts` MCP tool — omit `query` param):
+
+    web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?rule_id={id}&agent_id={id}&level={level}&time_range={duration}&limit={n}&token=<AUTOPILOT_MCP_AUTH>")
+
+Parameters:
+- `rule_id` — filter by Wazuh rule ID (e.g., `5712`)
+- `agent_id` — filter by agent ID (e.g., `002`)
+- `level` — filter by rule level (e.g., `12`)
+- `time_range` — lookback duration. Default: `24h`
+- `limit` — max results. Default: `50`
+
+**Example pivot queries for brute force investigation:**
+
+1. Check for successful authentication from attacker IP:
+```
+web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query=data.srcip:146.190.134.221%20AND%20rule.groups:authentication_success&time_range=7d&limit=50&token=<AUTOPILOT_MCP_AUTH>")
+```
+
+2. Find all accounts targeted by attacker IP:
+```
+web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query=data.srcip:146.190.134.221%20AND%20data.dstuser:*&time_range=7d&limit=100&token=<AUTOPILOT_MCP_AUTH>")
+```
+
+3. Get full attack history for an IP:
+```
+web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query=data.srcip:146.190.134.221%20AND%20rule.groups:authentication&time_range=168h&limit=200&token=<AUTOPILOT_MCP_AUTH>")
+```
+
+4. Get high-severity alerts for a specific agent:
+```
+web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?agent_id=002&level=12&time_range=24h&limit=50&token=<AUTOPILOT_MCP_AUTH>")
+```
+
+Do NOT mark pivot results as `requires_manual_execution`. Always execute them using this endpoint and include the actual results in your findings.
+
+### Get Agent Information
+
+    web_fetch(url="http://localhost:9090/api/agent-action/get-agent?agent_id={id}&token=<AUTOPILOT_MCP_AUTH>")
+
+Returns agent details (name, IP, OS, status, last keep-alive) from the Wazuh manager. Use this to verify agent connectivity and gather host context during investigation.
+
 ### Update Case with Investigation Findings
 
 After completing all pivot queries, baseline comparisons, and IOC extraction, write the findings back and advance the case status.
