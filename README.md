@@ -180,6 +180,7 @@ OpenClaw is model-agnostic and supports 10+ LLM providers. Configure your prefer
 | [Mistral](https://console.mistral.ai/) | `mistral-large-latest`, `codestral-latest` | European provider | `MISTRAL_API_KEY` |
 | [xAI](https://console.x.ai/) | `grok-2`, `grok-3` | Real-time knowledge | `XAI_API_KEY` |
 | [Ollama](https://ollama.ai/) | `llama3.3`, `mistral`, `codellama` | **Local/free** inference | N/A |
+| [vLLM](https://github.com/vllm-project/vllm) | Any HuggingFace model | **GPU inference** — self-hosted, OpenAI-compatible | `VLLM_API_KEY` |
 | [Together](https://together.xyz/) | Various open-source | Open-source hosting | `TOGETHER_API_KEY` |
 | [Cerebras](https://cerebras.ai/) | Cerebras models | Ultra-fast inference | `CEREBRAS_API_KEY` |
 
@@ -218,6 +219,7 @@ As of early 2026, **Anthropic and Google have banned** the use of subscription-p
 | High-volume triage | `groq/llama-3.3-70b-versatile` | Fast & cost-effective |
 | Heartbeats/checks | `anthropic/claude-haiku-4-5` | Low cost |
 | Air-gapped deployment | `ollama/llama3.3` | No external API calls |
+| GPU self-hosted | `vllm/qwen3-32b` | Best open-source tool calling |
 | Safest cloud option | `openrouter/anthropic/claude-sonnet-4-5` | No ban risk via OpenRouter |
 
 ---
@@ -296,6 +298,41 @@ Environment="OPENCLAW_LLM_MODE=cloud"   # Preserves proxy vars, sets NO_PROXY fo
 ```
 
 See [Air-Gapped Deployment Guide](docs/AIR_GAPPED_DEPLOYMENT.md) for the preload script that supports both modes.
+
+### Path D: Self-Hosted GPU Inference with vLLM
+
+> **Status: Stable. Recommended for teams with GPU hardware.**
+
+Run open-source models at scale using [vLLM](https://github.com/vllm-project/vllm), which provides an OpenAI-compatible API with native tool calling support. Supports NVIDIA and AMD GPUs.
+
+| | Details |
+|---|---|
+| **Setup** | Start vLLM with `--enable-auto-tool-choice`, use `openclaw-vllm.json` config |
+| **Pros** | Zero API costs, full data sovereignty, production-grade throughput, supports 70B+ models |
+| **Cons** | Requires GPU hardware (or cloud GPU credits), model download time |
+| **Guide** | [vLLM Deployment Guide](docs/VLLM_DEPLOYMENT.md) |
+
+**Recommended models:**
+| Model | VRAM | Tool Parser | Notes |
+|-------|------|-------------|-------|
+| Qwen3 32B | ~64 GB | `hermes` | Best tool calling for agent pipelines |
+| Llama 3.3 70B | ~140 GB | `llama3_json` | Strongest reasoning |
+| DeepSeek-R1 70B | ~140 GB | `deepseek_v32` | Chain-of-thought reasoning |
+
+```bash
+# Start vLLM with tool calling (required flags)
+vllm serve Qwen/Qwen3-32B \
+  --served-model-name qwen3-32b \
+  --api-key "your-key" \
+  --enable-auto-tool-choice \
+  --tool-call-parser hermes
+
+# Use the vLLM config
+cp openclaw/openclaw-vllm.json ~/.openclaw/openclaw.json
+
+# MANDATORY: populate tool calling metadata in OpenClaw's model catalog
+openclaw models scan
+```
 
 ---
 

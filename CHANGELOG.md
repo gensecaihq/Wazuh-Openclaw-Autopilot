@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **vLLM deployment support** (addresses #22): New `openclaw/openclaw-vllm.json` config for running Wazuh Autopilot with self-hosted open-source models via vLLM. Includes pre-configured model entries for Qwen3 32B, Llama 3.3 70B, MiniMax-M2.1 139B, and DeepSeek-R1 70B with correct tool call parser settings. New `docs/VLLM_DEPLOYMENT.md` covers hardware requirements, Docker deployment, air-gapped setup, production systemd config, multi-GPU configurations, and AMD MI300X instructions. README updated with Path D for vLLM and vLLM entry in supported providers table.
+
 ### Fixed
 - **Numeric confidence silently dropped in agent-action/update-case**: The `confidence` field was listed in `STRING_FIELDS`, so agents sending `{"confidence": 0.85}` via the `data` query parameter had the value silently ignored. Moved to `NUMBER_FIELDS` with proper type validation.
 - **min_confidence policy bypass when confidence is 0**: The check `confidence > 0 && confidence < minConfidence` allowed actions with unknown confidence (default 0) to bypass minimum confidence policies. Fixed to `minConfidence > 0 && confidence < minConfidence` — unknown confidence is now correctly denied when a threshold is configured.

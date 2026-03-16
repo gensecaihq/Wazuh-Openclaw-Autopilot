@@ -1,0 +1,415 @@
+{
+  // =============================================================================
+  // WAZUH OPENCLAW AUTOPILOT — vLLM Configuration (Self-Hosted GPU Inference)
+  // =============================================================================
+  // JSON5 format: comments and trailing commas are allowed.
+  //
+  // This configuration uses vLLM as the inference backend for all agents.
+  // vLLM provides an OpenAI-compatible API, so we use "api": "openai-completions".
+  //
+  // Prerequisites:
+  //   1. Install vLLM: pip install vllm (or ROCm variant for AMD GPUs)
+  //   2. Start vLLM with tool calling enabled:
+  //
+  //      # Qwen3 32B (recommended, best tool calling — ~64GB VRAM)
+  //      vllm serve Qwen/Qwen3-32B \
+  //        --served-model-name qwen3-32b \
+  //        --api-key "${VLLM_API_KEY}" \
+  //        --port 8000 \
+  //        --enable-auto-tool-choice \
+  //        --tool-call-parser hermes \
+  //        --max-model-len 131072 \
+  //        --gpu-memory-utilization 0.95
+  //
+  //      # Llama 3.3 70B (strong reasoning — ~140GB VRAM, use --tensor-parallel-size for multi-GPU)
+  //      vllm serve meta-llama/Llama-3.3-70B-Instruct \
+  //        --served-model-name llama3.3-70b \
+  //        --api-key "${VLLM_API_KEY}" \
+  //        --port 8000 \
+  //        --enable-auto-tool-choice \
+  //        --tool-call-parser llama3_json \
+  //        --tensor-parallel-size 2 \
+  //        --max-model-len 131072 \
+  //        --gpu-memory-utilization 0.95
+  //
+  //   3. Verify: curl http://localhost:8000/v1/models -H "Authorization: Bearer $VLLM_API_KEY"
+  //   4. After copying this config to ~/.openclaw/openclaw.json, you MUST run:
+  //        openclaw models scan
+  //      This populates the model capability catalog with toolUse: true.
+  //      Without this step, the openai-completions provider will NOT send tool
+  //      definitions to vLLM, and ALL agents will silently fail — outputting
+  //      tool calls as plain text with stopReason: "stop" instead of invoking them.
+  //
+  // IMPORTANT: --enable-auto-tool-choice and --tool-call-parser are REQUIRED.
+  // Without them, vLLM ignores tool definitions and models output raw JSON text
+  // instead of invoking tools (web_fetch, etc.).
+  //
+  // Tool call parser by model family:
+  //   hermes        — Qwen3, Qwen2.5, NousResearch/Hermes models
+  //   llama3_json   — Llama 3.1, Llama 3.3
+  //   mistral       — Mistral, Mixtral
+  //   deepseek_v32  — DeepSeek-V3, DeepSeek-R1
+  //   minimax_m2    — MiniMax-M2.1
+  //   internlm      — InternLM 2.5+
+  //   jamba          — AI21 Jamba
+  //
+  // GPU memory requirements (FP16):
+  //   7-8B   → ~14 GB
+  //   14B    → ~28 GB
+  //   32B    → ~64 GB
+  //   70B    → ~140 GB (multi-GPU with --tensor-parallel-size)
+  //   139B   → ~192 GB (multi-GPU or high-VRAM accelerators)
+  //
+  // For air-gapped / offline deployment:
+  //   1. Pre-download model: huggingface-cli download <model> --local-dir /models/<name>
+  //   2. Set env: HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+  //   3. Point vLLM at local path: vllm serve /models/<name> ...
+  // =============================================================================
+
+  // ---------------------------------------------------------------------------
+  // GATEWAY
+  // ---------------------------------------------------------------------------
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": "${OPENCLAW_TOKEN}"
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // LOGGING
+  // ---------------------------------------------------------------------------
+  "logging": {
+    "redactSensitive": "tools"
+  },
+
+  // ---------------------------------------------------------------------------
+  // CUSTOM MODEL PROVIDERS — vLLM via OpenAI-compatible API
+  // ---------------------------------------------------------------------------
+  // vLLM exposes an OpenAI-compatible endpoint at /v1. Use "api": "openai-completions".
+  //
+  // CRITICAL: The model "id" MUST match the --served-model-name you passed to vLLM.
+  // If they don't match, OpenClaw sends requests for a model vLLM doesn't recognize
+  // and you get 404 errors.
+  //
+  // CRITICAL: Set "reasoning": true ONLY for models started with --reasoning-parser.
+  // If the model doesn't support reasoning and you set this to true, vLLM returns
+  // errors. If the model does support reasoning but you set false, you lose the
+  // chain-of-thought capability.
+  // ---------------------------------------------------------------------------
+  "models": {
+    "providers": {
+      "vllm": {
+        "baseUrl": "http://127.0.0.1:8000/v1",
+        "api": "openai-completions",
+        "apiKey": "${VLLM_API_KEY}",
+        "models": [
+          // ---------------------------------------------------------------
+          // Qwen3 32B — RECOMMENDED for Wazuh Autopilot
+          // Best open-source tool calling, hermes-format native support.
+          // Requires: ~64 GB VRAM (FP16)
+          // vLLM flags: --tool-call-parser hermes
+          // ---------------------------------------------------------------
+          {
+            "id": "qwen3-32b",
+            "name": "Qwen3 32B (vLLM)",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+
+          // ---------------------------------------------------------------
+          // Llama 3.3 70B — Strong general reasoning + tool calling
+          // Requires: ~140 GB VRAM (FP16), use --tensor-parallel-size 2
+          // vLLM flags: --tool-call-parser llama3_json
+          // ---------------------------------------------------------------
+          {
+            "id": "llama3.3-70b",
+            "name": "Llama 3.3 70B (vLLM)",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          },
+
+          // ---------------------------------------------------------------
+          // DeepSeek-R1 distill 70B — Reasoning model with tool support
+          // Requires: ~140 GB VRAM (FP16), use --tensor-parallel-size 2
+          // vLLM flags: --tool-call-parser deepseek_v32 --reasoning-parser deepseek_r1
+          // ---------------------------------------------------------------
+          {
+            "id": "deepseek-r1-70b",
+            "name": "DeepSeek-R1 Distill 70B (vLLM)",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 131072,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // AGENT CONFIGURATION
+  // ---------------------------------------------------------------------------
+  "agents": {
+    "defaults": {
+      "workspace": "~/.openclaw/wazuh-autopilot/workspace",
+
+      // Primary: Qwen3 32B (best tool calling), fallback: Llama 3.3 70B
+      // Change these to match whichever model you're actually running.
+      // Format: "provider/model-id" where provider = the key in models.providers
+      "model": {
+        "primary": "vllm/qwen3-32b",
+        "fallbacks": ["vllm/llama3.3-70b"]
+      },
+
+      "models": {
+        "vllm/qwen3-32b": { "alias": "qwen" },
+        "vllm/llama3.3-70b": { "alias": "llama" },
+        "vllm/deepseek-r1-70b": { "alias": "deepseek" }
+      },
+
+      "sandbox": {
+        "mode": "all",
+        "scope": "session",
+        // Issue #18 fix: web_fetch is not in the sandbox default allow list.
+        // Without this, agents get "Tool web_fetch not found" even when
+        // tools.alsoAllow includes web_fetch at the agent level.
+        "tools": {
+          "alsoAllow": ["web_fetch"]
+        }
+      },
+
+      "heartbeat": {
+        "every": "30m",
+        "model": "vllm/qwen3-32b"
+      },
+
+      // Local embeddings — no cloud API needed
+      "memorySearch": {
+        "sources": ["memory", "sessions"],
+        "provider": "local",
+        "model": "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M.gguf"
+      },
+
+      // vLLM is single-model-at-a-time — limit concurrency to avoid OOM.
+      // Increase if running multiple vLLM instances behind a load balancer.
+      "maxConcurrent": 2,
+
+      // vLLM inference is slower than cloud APIs — allow more time.
+      // 32B models: 600-900s is usually sufficient.
+      // 70B+ models: consider 1200s for complex investigation tasks.
+      "timeoutSeconds": 900
+    },
+
+    "list": [
+      {
+        "id": "wazuh-triage",
+        "default": true,
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/triage",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/triage",
+        "tools": {
+          "profile": "minimal",
+          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "exec", "delete", "browser"]
+        },
+        "heartbeat": { "every": "10m" }
+      },
+      {
+        "id": "wazuh-correlation",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/correlation",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/correlation",
+        "tools": {
+          "profile": "minimal",
+          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "exec", "delete", "browser"]
+        },
+        "heartbeat": { "every": "5m" }
+      },
+      {
+        "id": "wazuh-investigation",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/investigation",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/investigation",
+        "tools": {
+          "profile": "minimal",
+          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "exec", "delete", "browser"]
+        }
+      },
+      {
+        "id": "wazuh-response-planner",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/response-planner",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/response-planner",
+        "tools": {
+          "profile": "minimal",
+          "alsoAllow": ["read", "write", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["exec", "delete", "browser"]
+        }
+      },
+      {
+        "id": "wazuh-policy-guard",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/policy-guard",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/policy-guard",
+        "tools": {
+          "profile": "minimal",
+          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["write", "exec", "delete", "browser"]
+        }
+      },
+      {
+        "id": "wazuh-responder",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/responder",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/responder",
+        "model": {
+          "primary": "vllm/qwen3-32b",
+          "fallbacks": ["vllm/llama3.3-70b"]
+        },
+        "tools": {
+          "profile": "coding",
+          "alsoAllow": ["read", "write", "exec", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["browser", "delete"],
+          "elevated": { "enabled": true }
+        },
+        "sandbox": {
+          "mode": "all",
+          "scope": "agent"
+        }
+      },
+      {
+        "id": "wazuh-reporting",
+        "workspace": "~/.openclaw/wazuh-autopilot/agents/reporting",
+        "agentDir": "~/.openclaw/wazuh-autopilot/agents/reporting",
+        "model": "vllm/qwen3-32b",
+        "tools": {
+          "profile": "minimal",
+          "alsoAllow": ["read", "write", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "deny": ["exec", "delete", "browser"]
+        }
+      }
+    ]
+  },
+
+  // ---------------------------------------------------------------------------
+  // CHANNEL CONFIGURATION
+  // ---------------------------------------------------------------------------
+  // Slack is optional. Without it, agents operate via REST API and heartbeats.
+  // To enable Slack, uncomment and configure:
+  //
+  // "channels": {
+  //   "slack": {
+  //     "enabled": true,
+  //     "botToken": "${SLACK_BOT_TOKEN}",
+  //     "appToken": "${SLACK_APP_TOKEN}",
+  //     "dmPolicy": "allowlist",
+  //     "groupPolicy": "allowlist"
+  //   }
+  // },
+  //
+  // "bindings": [
+  //   { "agentId": "wazuh-responder", "match": { "channel": "slack", "peer": { "kind": "group", "id": "approvals" } } },
+  //   { "agentId": "wazuh-triage", "match": { "channel": "slack", "peer": { "kind": "group", "id": "*" } } }
+  // ],
+  // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+  // GLOBAL TOOL POLICY
+  // ---------------------------------------------------------------------------
+  "tools": {
+    "profile": "minimal",
+    "alsoAllow": ["read", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+    "deny": ["browser", "canvas"],
+    "web": {
+      "search": { "enabled": false },
+      "fetch": { "enabled": true }
+    }
+  },
+
+  // ---------------------------------------------------------------------------
+  // CRON
+  // ---------------------------------------------------------------------------
+  "cron": {
+    "enabled": true,
+    "maxConcurrentRuns": 2
+  },
+
+  // ---------------------------------------------------------------------------
+  // HOOKS — Webhook endpoints for Wazuh alert routing
+  // ---------------------------------------------------------------------------
+  "hooks": {
+    "enabled": true,
+    "path": "/webhook",
+    "token": "${OPENCLAW_WEBHOOK_TOKEN}",
+    "mappings": [
+      {
+        "match": { "path": "wazuh-alert" },
+        "action": "agent",
+        "agentId": "wazuh-triage",
+        "messageTemplate": "{{message}}",
+        "name": "Wazuh Alert Triage",
+        "allowUnsafeExternalContent": true
+      },
+      {
+        "match": { "path": "case-created" },
+        "action": "agent",
+        "agentId": "wazuh-correlation",
+        "messageTemplate": "{{message}}",
+        "name": "Wazuh Correlation",
+        "allowUnsafeExternalContent": true
+      },
+      {
+        "match": { "path": "investigation-request" },
+        "action": "agent",
+        "agentId": "wazuh-investigation",
+        "messageTemplate": "{{message}}",
+        "name": "Wazuh Investigation",
+        "allowUnsafeExternalContent": true
+      },
+      {
+        "match": { "path": "plan-request" },
+        "action": "agent",
+        "agentId": "wazuh-response-planner",
+        "messageTemplate": "{{message}}",
+        "name": "Wazuh Response Planning",
+        "allowUnsafeExternalContent": true
+      },
+      {
+        "match": { "path": "policy-check" },
+        "action": "agent",
+        "agentId": "wazuh-policy-guard",
+        "messageTemplate": "{{message}}",
+        "name": "Wazuh Policy Check",
+        "allowUnsafeExternalContent": true
+      },
+      {
+        "match": { "path": "execute-action" },
+        "action": "agent",
+        "agentId": "wazuh-responder",
+        "messageTemplate": "{{message}}",
+        "name": "Wazuh Action Execution",
+        "allowUnsafeExternalContent": true
+      }
+    ]
+  },
+
+  // ---------------------------------------------------------------------------
+  // ENVIRONMENT VARIABLES
+  // ---------------------------------------------------------------------------
+  "env": {
+    "OPENCLAW_TOKEN": "${OPENCLAW_TOKEN}",
+    "VLLM_API_KEY": "${VLLM_API_KEY}",
+    "OPENCLAW_WEBHOOK_TOKEN": "${OPENCLAW_WEBHOOK_TOKEN}",
+    "MCP_URL": "${MCP_URL}",
+    "AUTOPILOT_MCP_AUTH": "${AUTOPILOT_MCP_AUTH}",
+    "OPENCLAW_GATEWAY_URL": "${OPENCLAW_GATEWAY_URL}",
+    "AUTOPILOT_RUNTIME_URL": "${AUTOPILOT_RUNTIME_URL}"
+  }
+}
