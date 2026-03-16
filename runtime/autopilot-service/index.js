@@ -1025,6 +1025,19 @@ async function updateCase(caseId, updates) {
       evidencePack.feedback.push(updates.appendFeedback);
     }
 
+    // Agent investigation/correlation output fields — direct assignment (latest wins)
+    if (updates.investigation_notes !== undefined) evidencePack.investigation_notes = updates.investigation_notes;
+    if (updates.findings !== undefined) evidencePack.findings = updates.findings;
+    if (updates.pivot_results !== undefined) evidencePack.pivot_results = updates.pivot_results;
+    if (updates.enrichment_data !== undefined) evidencePack.enrichment_data = updates.enrichment_data;
+    if (updates.key_questions_answered !== undefined) evidencePack.key_questions_answered = updates.key_questions_answered;
+    if (updates.recommended_response !== undefined) evidencePack.recommended_response = updates.recommended_response;
+    if (updates.correlation !== undefined) evidencePack.correlation = updates.correlation;
+    if (updates.related_cases !== undefined) evidencePack.related_cases = updates.related_cases;
+    // iocs_identified or iocs — normalize to iocs_identified
+    if (updates.iocs_identified !== undefined) evidencePack.iocs_identified = updates.iocs_identified;
+    if (updates.iocs !== undefined) evidencePack.iocs_identified = updates.iocs;
+
     await atomicWriteFile(packPath, JSON.stringify(evidencePack, null, 2));
 
     // Update summary
@@ -3604,11 +3617,20 @@ function createServer() {
           return;
         }
 
-        const ALLOWED_DATA_FIELDS = ["title", "summary", "severity", "confidence", "correlation", "findings", "recommended_response", "iocs", "enrichment_data", "mitre", "entities", "timeline"];
-        const STRING_FIELDS = ["title", "summary", "severity", "recommended_response"];
+        const ALLOWED_DATA_FIELDS = [
+          "title", "summary", "severity", "confidence",
+          // Correlation agent output
+          "correlation", "related_cases",
+          // Investigation agent output
+          "findings", "investigation_notes", "pivot_results", "enrichment_data",
+          "iocs_identified", "iocs", "key_questions_answered", "recommended_response",
+          // Shared fields
+          "mitre", "entities", "timeline",
+        ];
+        const STRING_FIELDS = ["title", "summary", "severity", "investigation_notes"];
         const NUMBER_FIELDS = ["confidence"];
-        const OBJECT_FIELDS = ["correlation", "enrichment_data", "mitre"];
-        const ARRAY_FIELDS = ["findings", "iocs", "entities", "timeline"];
+        const OBJECT_FIELDS = ["correlation", "enrichment_data", "mitre", "findings", "pivot_results", "key_questions_answered"];
+        const ARRAY_FIELDS = ["iocs_identified", "iocs", "entities", "timeline", "recommended_response", "related_cases"];
         const MAX_DATA_SIZE = 512 * 1024; // 512 KB
         const updates = {};
         if (status) updates.status = status;

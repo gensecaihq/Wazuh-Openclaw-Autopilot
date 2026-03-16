@@ -1337,6 +1337,89 @@ describe("appendFeedback in updateCase", () => {
   });
 });
 
+describe("Agent output fields in updateCase", () => {
+  const tmpDir = path.join(os.tmpdir(), `agent-output-${Date.now()}`);
+
+  before(async () => {
+    process.env.AUTOPILOT_DATA_DIR = tmpDir;
+    await fs.mkdir(path.join(tmpDir, "cases"), { recursive: true });
+  });
+
+  after(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("persists investigation agent output fields", async () => {
+    const caseId = `CASE-${Date.now()}-invest01`;
+    await createCase(caseId, { title: "Test Investigation", severity: "high" });
+    // Walk through required status transitions
+    await updateCase(caseId, { status: "triaged" });
+    await updateCase(caseId, { status: "correlated" });
+    await updateCase(caseId, {
+      status: "investigated",
+      investigation_notes: "Brute force from 203.0.113.44 targeting root",
+      findings: { classification: "suspicious_activity", severity: "high", confidence: 0.92 },
+      pivot_results: { ip_history: { total_events: 42, successful_auths: 0 } },
+      enrichment_data: { baseline_comparison: { deviation_sigma: 3.1 } },
+      iocs_identified: [{ type: "ip", value: "203.0.113.44", context: "brute_force" }],
+      key_questions_answered: { successful_login: false, lateral_movement_detected: false },
+      recommended_response: ["Block 203.0.113.44", "Review SSH logs"],
+      related_cases: ["CASE-20260310-abc123"],
+    });
+    const result = await getCase(caseId);
+    assert.strictEqual(result.status, "investigated");
+    assert.strictEqual(result.investigation_notes, "Brute force from 203.0.113.44 targeting root");
+    assert.deepStrictEqual(result.findings, { classification: "suspicious_activity", severity: "high", confidence: 0.92 });
+    assert.strictEqual(result.pivot_results.ip_history.total_events, 42);
+    assert.strictEqual(result.enrichment_data.baseline_comparison.deviation_sigma, 3.1);
+    assert.strictEqual(result.iocs_identified.length, 1);
+    assert.strictEqual(result.iocs_identified[0].value, "203.0.113.44");
+    assert.strictEqual(result.key_questions_answered.successful_login, false);
+    assert.deepStrictEqual(result.recommended_response, ["Block 203.0.113.44", "Review SSH logs"]);
+    assert.deepStrictEqual(result.related_cases, ["CASE-20260310-abc123"]);
+  });
+
+  it("persists correlation agent output fields", async () => {
+    const caseId = `CASE-${Date.now()}-corr01`;
+    await createCase(caseId, { title: "Test Correlation", severity: "medium" });
+    await updateCase(caseId, { status: "triaged" });
+    await updateCase(caseId, {
+      status: "correlated",
+      correlation: { correlation_score: 0.87, attack_pattern: "brute_force", blast_radius: { hosts: 2 } },
+    });
+    const result = await getCase(caseId);
+    assert.strictEqual(result.correlation.correlation_score, 0.87);
+    assert.strictEqual(result.correlation.attack_pattern, "brute_force");
+  });
+
+  it("normalizes iocs to iocs_identified", async () => {
+    const caseId = `CASE-${Date.now()}-iocs01`;
+    await createCase(caseId, { title: "Test IOCs", severity: "low" });
+    await updateCase(caseId, {
+      iocs: [{ type: "ip", value: "10.0.0.1" }],
+    });
+    const result = await getCase(caseId);
+    assert.ok(result.iocs_identified, "iocs should be normalized to iocs_identified");
+    assert.strictEqual(result.iocs_identified[0].value, "10.0.0.1");
+  });
+
+  it("overwrites investigation fields on re-investigation", async () => {
+    const caseId = `CASE-${Date.now()}-reinvest01`;
+    await createCase(caseId, { title: "Test Re-investigation", severity: "high" });
+    await updateCase(caseId, {
+      investigation_notes: "First pass",
+      findings: { classification: "reconnaissance", confidence: 0.5 },
+    });
+    await updateCase(caseId, {
+      investigation_notes: "Second pass with more data",
+      findings: { classification: "confirmed_compromise", confidence: 0.95 },
+    });
+    const result = await getCase(caseId);
+    assert.strictEqual(result.investigation_notes, "Second pass with more data");
+    assert.strictEqual(result.findings.classification, "confirmed_compromise");
+  });
+});
+
 // Run if executed directly
 if (require.main === module) {
   console.log("Running tests...");
