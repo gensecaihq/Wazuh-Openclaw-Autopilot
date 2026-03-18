@@ -1294,8 +1294,12 @@ async function loadPlansFromDisk() {
           responsePlans.set(plan.plan_id, plan);
           loaded++;
         }
-      } catch {
-        // Skip corrupt plan files
+      } catch (err) {
+        // H5 audit fix: Log corrupted plan files for operational visibility
+        log("warn", "plans", "Skipped corrupt plan file during load", {
+          file: entry,
+          error: err.message,
+        });
       }
     }
     if (loaded > 0) {
@@ -3336,7 +3340,12 @@ function createServer() {
           return;
         }
 
-        const alert = await parseJsonBody(req);
+        const rawAlert = await parseJsonBody(req);
+
+        // CRIT-1 audit fix: Sanitize attacker-controlled alert fields before processing.
+        // Wazuh alert fields (SSH banners, HTTP user-agents, filenames) can contain
+        // control characters and prompt injection payloads.
+        const alert = sanitizeAlertPayload(rawAlert);
 
         // Normalize alert_id from Wazuh native format
         if (!alert.alert_id && (alert.id || alert._id)) {

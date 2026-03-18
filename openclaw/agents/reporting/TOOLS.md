@@ -5,7 +5,7 @@
 Query the Prometheus endpoint to retrieve SOC operational metrics.
 
 ```
-GET http://localhost:9090/metrics
+GET http://localhost:9090/metrics?token=<AUTOPILOT_MCP_AUTH>
 ```
 
 **Key metrics to extract**:
@@ -105,9 +105,9 @@ The Reporting Agent calls the runtime REST API at `http://localhost:9090` using 
 
 ### Prometheus Metrics
 
-The `/metrics` endpoint does not require auth:
+The `/metrics` endpoint requires auth via query param:
 
-    web_fetch(url="http://localhost:9090/metrics")
+    web_fetch(url="http://localhost:9090/metrics?token=<AUTOPILOT_MCP_AUTH>")
 
 ### Case Summaries for Report Generation
 

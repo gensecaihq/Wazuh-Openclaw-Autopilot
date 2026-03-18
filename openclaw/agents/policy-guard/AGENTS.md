@@ -112,7 +112,7 @@ Evaluate each check in order. If any check fails, immediately deny with the corr
 
 ## Confidence Thresholds by Action Risk
 
-Read confidence thresholds from the per-action `min_confidence` values in policy.yaml -- they override these defaults.
+Use the following confidence thresholds for your policy evaluation. The runtime service also independently enforces these thresholds (from `policy.yaml`) at the plan creation and execution stages — your evaluation is a defense-in-depth layer.
 
 | Risk Level | Default Minimum Confidence |
 |------------|---------------------------|
@@ -200,6 +200,17 @@ Every decision must be a structured JSON object:
   "token_id": "TKN-xxxxxxxx"
 }
 ```
+
+---
+
+## Token Resolution
+
+All API URLs in this document use `<AUTOPILOT_MCP_AUTH>` as a placeholder for the authentication token. To resolve the actual token value:
+
+1. Read the environment variable `AUTOPILOT_MCP_AUTH` from your runtime context
+2. Replace the literal string `<AUTOPILOT_MCP_AUTH>` in each URL with the actual token value before calling `web_fetch`
+
+If the environment variable is not set and the runtime is in bootstrap mode (localhost), you may omit the `&token=...` parameter entirely — bootstrap mode allows unauthenticated localhost requests. In production mode, the token is **required** for every API call.
 
 ---
 

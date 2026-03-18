@@ -65,7 +65,7 @@ If not met, deny with `DUAL_APPROVAL_REQUIRED`.
 
 ## Confidence Threshold Check
 
-Read confidence thresholds from the per-action `min_confidence` values in policy.yaml -- they override these defaults.
+Use the following confidence thresholds for your evaluation. The runtime service independently enforces these same thresholds (from `policy.yaml`) at plan creation and execution — your check is a defense-in-depth layer.
 
 | Risk Level | Default Minimum Confidence |
 |------------|---------------------------|

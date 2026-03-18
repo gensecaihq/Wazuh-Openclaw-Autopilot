@@ -41,6 +41,17 @@ Every response plan requires TWO separate human approvals before execution:
 
 This separation prevents accidental execution -- a human must consciously make two separate decisions.
 
+## Token Resolution
+
+All API URLs in this document use `<AUTOPILOT_MCP_AUTH>` as a placeholder for the authentication token. To resolve the actual token value:
+
+1. Read the environment variable `AUTOPILOT_MCP_AUTH` from your runtime context
+2. Replace the literal string `<AUTOPILOT_MCP_AUTH>` in each URL with the actual token value before calling `web_fetch`
+
+If the environment variable is not set and the runtime is in bootstrap mode (localhost), you may omit the `&token=...` parameter entirely — bootstrap mode allows unauthenticated localhost requests. In production mode, the token is **required** for every API call.
+
+---
+
 ## MANDATORY: Submit Plan via API
 
 **After creating your plan, you MUST invoke the `web_fetch` tool to submit it.** If you skip this step, no plan is registered and no Slack approval request is posted.
