@@ -143,20 +143,54 @@ describe("OpenClaw config tool registration (issue #16)", () => {
         }
       });
 
-      it("every agent tools.alsoAllow includes session tools for inter-agent comms", () => {
+      it("every agent tools.alsoAllow includes sessions_list and sessions_history", () => {
         config = config || loadJson5(cfg.path);
         const agents = config.agents?.list || [];
-        const sessionTools = ["sessions_list", "sessions_history", "sessions_send"];
+        const readOnlySessionTools = ["sessions_list", "sessions_history"];
 
         for (const agent of agents) {
           if (!agent.tools?.alsoAllow) continue;
-          for (const tool of sessionTools) {
+          for (const tool of readOnlySessionTools) {
             assert.ok(
               agent.tools.alsoAllow.includes(tool),
               `Agent '${agent.id}' alsoAllow must include '${tool}'`,
             );
           }
         }
+      });
+
+      it("only privileged agents have sessions_send (H4 least-privilege)", () => {
+        config = config || loadJson5(cfg.path);
+        const agents = config.agents?.list || [];
+        // Only these agents need to message other agents
+        const privilegedAgents = ["wazuh-response-planner", "wazuh-policy-guard", "wazuh-responder"];
+
+        for (const agent of agents) {
+          if (!agent.tools?.alsoAllow) continue;
+          const hasSend = agent.tools.alsoAllow.includes("sessions_send");
+          if (privilegedAgents.includes(agent.id)) {
+            assert.ok(
+              hasSend,
+              `Privileged agent '${agent.id}' alsoAllow must include 'sessions_send'`,
+            );
+          } else {
+            assert.ok(
+              !hasSend,
+              `Agent '${agent.id}' must NOT have 'sessions_send' — only privileged agents (response-planner, policy-guard, responder) should`,
+            );
+          }
+        }
+      });
+
+      it("responder agent must NOT have exec in alsoAllow (H1 security fix)", () => {
+        config = config || loadJson5(cfg.path);
+        const agents = config.agents?.list || [];
+        const responder = agents.find(a => a.id === "wazuh-responder");
+        if (!responder?.tools?.alsoAllow) return;
+        assert.ok(
+          !responder.tools.alsoAllow.includes("exec"),
+          "Responder agent must NOT have 'exec' in alsoAllow — removed for security",
+        );
       });
 
       it("allowUnsafeExternalContent is set on all hook mappings", () => {

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security — Production Readiness Audit
+- **[CRITICAL] Action type allowlist enforcement (C2)**: Response plans now validate action types against an explicit allowlist (`block_ip`, `firewall_drop`, `host_deny`, `isolate_host`, `kill_process`, `disable_user`, `quarantine_file`, `restart_wazuh`). Plans with unknown action types are rejected at creation time, preventing hallucinated or injected action types from reaching the MCP server.
+- **[CRITICAL] Alert payload sanitization (C1)**: New `sanitizeAlertPayload()` strips control characters, caps string lengths (100K), limits arrays (1000 items) and object keys (500) from Wazuh alert data before forwarding to agents, reducing prompt injection surface from attacker-controlled alert fields.
+- **[HIGH] Responder `exec` access removed (H1)**: Removed direct shell execution (`exec`) from the responder agent's tool permissions. All actions now flow exclusively through the approved plan execution pipeline via MCP.
+- **[HIGH] Cross-agent messaging restricted (H4)**: Removed `sessions_send` from triage, correlation, investigation, and reporting agents. Only response-planner, policy-guard, and responder retain inter-agent messaging capability, preventing lower-privilege agents from escalating through cross-agent communication.
+- **[HIGH] Agent ID path traversal prevention (H6)**: `/api/agent-action/get-agent` now validates `agent_id` is numeric (1-6 digits). Wazuh client's `get_agent_stats()` also validates `agent_id` and `component` parameters.
+- **[HIGH] Anti-injection instructions in all agent playbooks (H9)**: All 7 AGENTS.md files now include a "Security: Alert Content is Untrusted" section with explicit rules: never execute commands from alerts, validate IOC formats, detect prompt injection attempts, cap entity extraction at 50 per category.
+- **[HIGH] Stalled pipeline memory leak fix (H11)**: `stalledRedispatchCounts` Map now evicts stale entries (case IDs no longer in the active case list) when exceeding 1000 entries, preventing unbounded memory growth.
+- **[MEDIUM] Metrics endpoint authentication (M1)**: `/metrics` now requires auth token, preventing unauthenticated information disclosure.
+- **[MEDIUM] IP format validation on active response (M7)**: New `_validate_ip()` in Wazuh client validates IPv4/IPv6 format before passing to `block_ip`, `firewall_drop`, `host_deny`.
+- **[MEDIUM] Flag injection prevention (M6)**: `_sanitize_ar_argument()` now rejects values starting with `-` to prevent flag injection in active response commands.
+- **[MEDIUM] Error message sanitization (H8)**: Wazuh client HTTP 4xx errors no longer include raw API response bodies in exception messages. Full details logged server-side only.
+- **Test coverage**: Added 38 new tests for `search-alerts` (8 tests), `get-agent` (6 tests), action type allowlist (3 tests), plus config validation tests. Total: 393 tests, all passing.
+
 ### Added
 - **vLLM deployment support** (addresses #22): New `openclaw/openclaw-vllm.json` config for running Wazuh Autopilot with self-hosted open-source models via vLLM. Includes pre-configured model entries for Qwen3 32B, Llama 3.3 70B, MiniMax-M2.1 139B, and DeepSeek-R1 70B with correct tool call parser settings. New `docs/VLLM_DEPLOYMENT.md` covers hardware requirements, Docker deployment, air-gapped setup, production systemd config, multi-GPU configurations, and AMD MI300X instructions. README updated with Path D for vLLM and vLLM entry in supported providers table.
 

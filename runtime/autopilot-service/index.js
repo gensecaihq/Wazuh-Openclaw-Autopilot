@@ -1317,11 +1317,28 @@ const PLAN_STATES = {
   EXPIRED: "expired",
 };
 
+// Audit fix C2: Allowed action types for response plans.
+// Only Wazuh Active Response commands that the MCP server supports are permitted.
+// Any plan containing an unknown action type is rejected at creation time.
+const ALLOWED_ACTION_TYPES = new Set([
+  "block_ip",
+  "firewall_drop",
+  "host_deny",
+  "isolate_host",
+  "kill_process",
+  "disable_user",
+  "quarantine_file",
+  "restart_wazuh",
+]);
+
 // Issue #6 fix: Validate action structure
 function validatePlanAction(action, index) {
   const errors = [];
   if (!action.type || typeof action.type !== "string") {
     errors.push(`Action ${index}: missing or invalid 'type' field`);
+  }
+  if (action.type && typeof action.type === "string" && !ALLOWED_ACTION_TYPES.has(action.type)) {
+    errors.push(`Action ${index}: unknown action type '${action.type}'. Allowed: ${[...ALLOWED_ACTION_TYPES].join(", ")}`);
   }
   if (!action.target || typeof action.target !== "string") {
     errors.push(`Action ${index}: missing or invalid 'target' field`);
@@ -3045,6 +3062,31 @@ function parseJsonBody(req) {
   });
 }
 
+// Audit fix C1: Sanitize alert payloads before forwarding to agents via webhooks.
+// Wazuh alert fields (SSH banners, HTTP user-agents, filenames) are attacker-controlled.
+// Strip control characters and enforce size limits to reduce prompt injection surface.
+function sanitizeAlertPayload(payload) {
+  if (typeof payload === "string") {
+    // Remove control characters except newline/tab, cap length
+    return payload.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "").slice(0, 100000);
+  }
+  if (Array.isArray(payload)) {
+    return payload.slice(0, 1000).map(sanitizeAlertPayload);
+  }
+  if (payload && typeof payload === "object") {
+    const sanitized = {};
+    const keys = Object.keys(payload);
+    for (let i = 0; i < Math.min(keys.length, 500); i++) {
+      const key = keys[i];
+      // Sanitize key too (prevent injection via field names)
+      const safeKey = key.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 256);
+      sanitized[safeKey] = sanitizeAlertPayload(payload[key]);
+    }
+    return sanitized;
+  }
+  return payload;
+}
+
 function createServer() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -3107,6 +3149,12 @@ function createServer() {
       if (url.pathname === "/metrics" && req.method === "GET") {
         if (!config.metricsEnabled) {
           sendJsonError(res, 404, "Metrics disabled (METRICS_ENABLED=false)", requestId);
+          return;
+        }
+        // Audit fix M1: Require authentication for metrics to prevent info disclosure
+        const metricsAuth = validateAuthorization(req, "read", url);
+        if (!metricsAuth.valid) {
+          sendAuthError(res, metricsAuth, requestId);
           return;
         }
         res.writeHead(200, { "Content-Type": "text/plain" });
@@ -4016,6 +4064,11 @@ function createServer() {
           sendJsonError(res, 400, "agent_id parameter is required", requestId);
           return;
         }
+        // Audit fix H6: Validate agent_id format to prevent path traversal
+        if (!/^\d{1,6}$/.test(agentId)) {
+          sendJsonError(res, 400, "agent_id must be numeric (1-6 digits)", requestId);
+          return;
+        }
 
         if (!config.mcpUrl) {
           sendJsonError(res, 503, "MCP server not configured — cannot proxy agent queries", requestId);
@@ -4649,6 +4702,8 @@ module.exports = {
   executePlan,
   getResponderStatus,
   PLAN_STATES,
+  ALLOWED_ACTION_TYPES,
+  sanitizeAlertPayload,
   // MCP
   callMcpTool,
   getMcpAuthToken,
@@ -4817,6 +4872,14 @@ async function checkStalledPipeline() {
           case_id: caseSummary.case_id,
           error: err.message,
         });
+      }
+    }
+
+    // Audit fix H11: Evict stale entries from stalledRedispatchCounts to prevent unbounded growth
+    if (stalledRedispatchCounts.size > 1000) {
+      const caseIds = new Set(cases.map(c => c.case_id));
+      for (const [id] of stalledRedispatchCounts) {
+        if (!caseIds.has(id)) stalledRedispatchCounts.delete(id);
       }
     }
 

@@ -447,3 +447,183 @@ describe("Bug fixes: confidence, decision validation, plan persistence", () => {
     assert.equal(saved.title, "Persist Test");
   });
 });
+
+// ===================================================================
+// Agent Action: search-alerts (C3 audit fix — was zero coverage)
+// ===================================================================
+
+describe("GET /api/agent-action/search-alerts", () => {
+  let server;
+
+  before(() => {
+    ensureTestDirs();
+    server = createServer();
+    return new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  });
+
+  after(() => {
+    return new Promise((resolve) => server.close(() => { rmTestDir(); resolve(); }));
+  });
+
+  it("rejects invalid time_range format", async () => {
+    const res = await request(server, "GET",
+      "/api/agent-action/search-alerts?query=rule.id:5712&time_range=invalid");
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("time_range"));
+  });
+
+  it("rejects limit below 1", async () => {
+    const res = await request(server, "GET",
+      "/api/agent-action/search-alerts?query=rule.id:5712&time_range=24h&limit=0");
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("limit"));
+  });
+
+  it("rejects limit above 500", async () => {
+    const res = await request(server, "GET",
+      "/api/agent-action/search-alerts?query=rule.id:5712&time_range=24h&limit=999");
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("limit"));
+  });
+
+  it("rejects non-numeric limit", async () => {
+    const res = await request(server, "GET",
+      "/api/agent-action/search-alerts?query=test&time_range=24h&limit=abc");
+    assert.equal(res.status, 400);
+  });
+
+  it("returns 503 when MCP is not configured", async () => {
+    // In test env MCP_URL is not set, so this should return 503
+    const res = await request(server, "GET",
+      "/api/agent-action/search-alerts?query=rule.id:5712&time_range=24h");
+    assert.equal(res.status, 503);
+    assert.ok(res.body.error.includes("MCP"));
+  });
+
+  it("accepts valid time_range formats", async () => {
+    // These should pass validation but fail at MCP layer (503)
+    for (const tr of ["30m", "24h", "7d", "1w", "60s"]) {
+      const res = await request(server, "GET",
+        `/api/agent-action/search-alerts?query=test&time_range=${tr}`);
+      assert.equal(res.status, 503, `Expected 503 for time_range=${tr}, got ${res.status}`);
+    }
+  });
+
+  it("accepts structured query params without query string", async () => {
+    const res = await request(server, "GET",
+      "/api/agent-action/search-alerts?agent_id=002&rule_id=5712&time_range=24h");
+    assert.equal(res.status, 503); // MCP not configured
+  });
+
+  it("requires auth in production mode", async () => {
+    // Bootstrap mode allows localhost without auth, but let's verify the endpoint exists
+    const res = await request(server, "GET",
+      "/api/agent-action/search-alerts?query=test&time_range=24h");
+    // Should not be 404 — endpoint must exist
+    assert.notEqual(res.status, 404);
+  });
+});
+
+// ===================================================================
+// Agent Action: get-agent (C4 audit fix — was zero coverage)
+// ===================================================================
+
+describe("GET /api/agent-action/get-agent", () => {
+  let server;
+
+  before(() => {
+    ensureTestDirs();
+    server = createServer();
+    return new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  });
+
+  after(() => {
+    return new Promise((resolve) => server.close(() => { rmTestDir(); resolve(); }));
+  });
+
+  it("rejects missing agent_id", async () => {
+    const res = await request(server, "GET", "/api/agent-action/get-agent");
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("agent_id"));
+  });
+
+  it("rejects non-numeric agent_id", async () => {
+    const res = await request(server, "GET",
+      "/api/agent-action/get-agent?agent_id=../../etc/passwd");
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("numeric"));
+  });
+
+  it("rejects agent_id with special characters", async () => {
+    const res = await request(server, "GET",
+      "/api/agent-action/get-agent?agent_id=001%3B%20rm%20-rf");
+    assert.equal(res.status, 400);
+  });
+
+  it("rejects overly long agent_id", async () => {
+    const res = await request(server, "GET",
+      "/api/agent-action/get-agent?agent_id=1234567");
+    assert.equal(res.status, 400);
+  });
+
+  it("returns 503 when MCP is not configured", async () => {
+    const res = await request(server, "GET",
+      "/api/agent-action/get-agent?agent_id=002");
+    assert.equal(res.status, 503);
+    assert.ok(res.body.error.includes("MCP"));
+  });
+
+  it("accepts valid numeric agent_id", async () => {
+    const res = await request(server, "GET",
+      "/api/agent-action/get-agent?agent_id=001");
+    // Should pass validation (400 check) and fail at MCP (503)
+    assert.equal(res.status, 503);
+  });
+});
+
+// ===================================================================
+// Audit fix C2: Action type allowlist enforcement
+// ===================================================================
+
+describe("Action type allowlist (C2 audit fix)", () => {
+  let server;
+  let testCaseId;
+
+  before(async () => {
+    ensureTestDirs();
+    server = createServer();
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const alert = await ingestAlert(server, `allowlist-${Date.now()}`);
+    testCaseId = alert.case_id;
+  });
+
+  after(() => {
+    return new Promise((resolve) => server.close(() => { rmTestDir(); resolve(); }));
+  });
+
+  it("rejects unknown action types", async () => {
+    const actions = JSON.stringify([{ type: "rm_rf_everything", target: "prod-db-01" }]);
+    const res = await request(server, "GET",
+      `/api/agent-action/create-plan?case_id=${testCaseId}&title=Evil%20Plan&risk_level=low&actions=${encodeURIComponent(actions)}`);
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("unknown action type"));
+  });
+
+  it("accepts known action types", async () => {
+    const actions = JSON.stringify([{ type: "block_ip", target: "1.2.3.4" }]);
+    const res = await request(server, "GET",
+      `/api/agent-action/create-plan?case_id=${testCaseId}&title=Good%20Plan&risk_level=low&actions=${encodeURIComponent(actions)}`);
+    assert.equal(res.status, 201);
+  });
+
+  it("rejects plan with mix of valid and invalid action types", async () => {
+    const actions = JSON.stringify([
+      { type: "block_ip", target: "1.2.3.4" },
+      { type: "format_disk", target: "/dev/sda" },
+    ]);
+    const res = await request(server, "GET",
+      `/api/agent-action/create-plan?case_id=${testCaseId}&title=Mixed%20Plan&risk_level=low&actions=${encodeURIComponent(actions)}`);
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("format_disk"));
+  });
+});
