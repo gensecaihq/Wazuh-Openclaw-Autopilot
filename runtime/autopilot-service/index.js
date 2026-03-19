@@ -99,6 +99,8 @@ const config = {
   enrichmentCacheTtlMs: parseInt(process.env.ENRICHMENT_CACHE_TTL_MS || "3600000", 10),
   enrichmentErrorCacheTtlMs: parseInt(process.env.ENRICHMENT_ERROR_CACHE_TTL_MS || "300000", 10),
   enrichmentTimeoutMs: parseInt(process.env.ENRICHMENT_TIMEOUT_MS || "5000", 10),
+  // Webhook dispatch timeout per attempt
+  webhookDispatchTimeoutMs: parseInt(process.env.WEBHOOK_DISPATCH_TIMEOUT_MS || "10000", 10),
   // Alert grouping
   alertGroupEnabled: process.env.ALERT_GROUP_ENABLED !== "false",
   alertGroupWindowMs: parseInt(process.env.ALERT_GROUP_WINDOW_MS || "3600000", 10),
@@ -310,7 +312,7 @@ async function dispatchToGateway(webhookPath, payload) {
     let timeoutId;
     try {
       const controller = new AbortController();
-      timeoutId = setTimeout(() => controller.abort(), 10000);
+      timeoutId = setTimeout(() => controller.abort(), config.webhookDispatchTimeoutMs);
 
       const response = await fetch(url, {
         method: "POST",
@@ -378,6 +380,130 @@ async function dispatchToGateway(webhookPath, payload) {
   // All attempts exhausted
   incrementMetric("webhook_dispatch_failures_total");
   log("warn", "dispatch", "Webhook dispatch failed after retries", { path: webhookPath });
+  queueFailedDispatch(webhookPath, outgoingPayload).catch(() => {});
+}
+
+// =============================================================================
+// WEBHOOK DEAD-LETTER QUEUE (DLQ)
+// =============================================================================
+
+const MAX_DLQ_SIZE = 500;
+const DLQ_RETRY_BATCH = 20; // max items per retry cycle
+
+async function getDlqPath() {
+  return path.join(config.dataDir, "state", "dlq.json");
+}
+
+async function loadDlq() {
+  try {
+    const content = await fs.readFile(await getDlqPath(), "utf8");
+    const entries = JSON.parse(content);
+    return Array.isArray(entries) ? entries : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveDlq(entries) {
+  await atomicWriteFile(await getDlqPath(), JSON.stringify(entries, null, 2));
+}
+
+async function queueFailedDispatch(webhookPathOrEntry, payload) {
+  try {
+    const entries = await loadDlq();
+    if (entries.length >= MAX_DLQ_SIZE) {
+      // Evict oldest entries to make room
+      entries.splice(0, entries.length - MAX_DLQ_SIZE + 1);
+      incrementMetric("webhook_dlq_evictions_total");
+    }
+    // Support both signatures: (webhookPath, payload) and (entryObject)
+    let entry;
+    if (typeof webhookPathOrEntry === "object" && webhookPathOrEntry !== null) {
+      entry = {
+        ...webhookPathOrEntry,
+        queued_at: new Date().toISOString(),
+        attempts: 0,
+      };
+    } else {
+      entry = {
+        webhookPath: webhookPathOrEntry,
+        payload,
+        queued_at: new Date().toISOString(),
+        attempts: 0,
+      };
+    }
+    entries.push(entry);
+    await saveDlq(entries);
+    incrementMetric("webhook_dlq_queued_total");
+    log("info", "dispatch", "Failed dispatch queued to DLQ", { path: entry.webhookPath || entry.webhook_url, dlq_size: entries.length });
+  } catch (err) {
+    log("warn", "dispatch", "Failed to write to DLQ", { error: err.message });
+  }
+}
+
+async function retryDlqDispatches() {
+  let entries;
+  try {
+    entries = await loadDlq();
+  } catch {
+    return;
+  }
+  if (entries.length === 0) return;
+
+  const webhookToken = config.openclawWebhookToken || config.openclawToken;
+  if (!config.openclawGatewayUrl || !webhookToken) return;
+
+  const batch = entries.splice(0, DLQ_RETRY_BATCH);
+  const failed = [];
+
+  for (const entry of batch) {
+    try {
+      const url = `${config.openclawGatewayUrl}${entry.webhookPath}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), config.webhookDispatchTimeoutMs);
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${webhookToken}`,
+        },
+        body: JSON.stringify(entry.payload),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+      await response.text().catch(() => "");
+
+      if (response.ok) {
+        incrementMetric("webhook_dlq_retried_success_total");
+        log("info", "dispatch", "DLQ retry succeeded", { path: entry.webhookPath });
+      } else {
+        entry.attempts++;
+        entry.last_retry = new Date().toISOString();
+        if (entry.attempts < 10) {
+          failed.push(entry);
+        } else {
+          incrementMetric("webhook_dlq_expired_total");
+          log("warn", "dispatch", "DLQ entry expired after max attempts", { path: entry.webhookPath, attempts: entry.attempts });
+        }
+      }
+    } catch (err) {
+      entry.attempts++;
+      entry.last_retry = new Date().toISOString();
+      if (entry.attempts < 10) {
+        failed.push(entry);
+      }
+    }
+  }
+
+  // Re-save: failed retries + remaining unprocessed entries
+  const remaining = [...failed, ...entries];
+  try {
+    await saveDlq(remaining);
+  } catch (err) {
+    log("warn", "dispatch", "Failed to save DLQ after retry", { error: err.message });
+  }
 }
 
 // =============================================================================
@@ -1740,10 +1866,16 @@ async function executePlan(planId, executorId) {
           continue;
         }
 
-        // Call MCP tool for the action
+        // Call MCP tool for the action with per-action timeout
         const correlationId = `${planId}-${action.type}-${Date.now()}`;
         const mcpParams = buildMcpParams(action);
-        const mcpResult = await callMcpTool(action.type, mcpParams, correlationId);
+        const actionTimeoutMs = config.mcpTimeoutMs * 2; // allow 2x MCP timeout per action
+        const mcpResult = await Promise.race([
+          callMcpTool(action.type, mcpParams, correlationId),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`Action timed out after ${actionTimeoutMs}ms`)), actionTimeoutMs)
+          ),
+        ]);
 
         // Record successful execution for rate limiting and dedup tracking
         if (mcpResult.success) {
@@ -1962,6 +2094,26 @@ async function loadToolmap() {
   try {
     const content = await fs.readFile(toolmapPath, "utf8");
     toolmapConfig = parseSimpleYaml(content);
+
+    // H4 audit fix: Validate toolmap structure — each entry needs mcp_tool
+    const validationErrors = [];
+    for (const section of ["read_operations", "action_operations"]) {
+      if (toolmapConfig[section] && typeof toolmapConfig[section] === "object") {
+        for (const [name, entry] of Object.entries(toolmapConfig[section])) {
+          if (!entry || typeof entry !== "object") {
+            validationErrors.push(`${section}.${name}: not an object`);
+          } else if (!entry.mcp_tool || typeof entry.mcp_tool !== "string") {
+            validationErrors.push(`${section}.${name}: missing or invalid mcp_tool`);
+          }
+        }
+      }
+    }
+    if (validationErrors.length > 0) {
+      log("warn", "mcp", "Toolmap has validation warnings", {
+        path: toolmapPath,
+        errors: validationErrors.slice(0, 10),
+      });
+    }
 
     // Count loaded tools
     let toolCount = 0;
@@ -2512,8 +2664,55 @@ function buildMcpParams(action) {
   return params;
 }
 
+// MCP Circuit Breaker — prevents hammering a down MCP server
+const mcpCircuitBreaker = {
+  failures: 0,
+  state: "closed", // "closed" (normal), "open" (tripped), "half-open" (probing)
+  openedAt: 0,
+  cooldownMs: 30000,
+  threshold: 5,
+};
+
+function mcpCircuitBreakerCheck() {
+  if (mcpCircuitBreaker.state === "closed") return { allowed: true };
+  if (mcpCircuitBreaker.state === "open") {
+    if (Date.now() - mcpCircuitBreaker.openedAt >= mcpCircuitBreaker.cooldownMs) {
+      mcpCircuitBreaker.state = "half-open";
+      return { allowed: true };
+    }
+    return { allowed: false, reason: "MCP circuit breaker open — server unreachable" };
+  }
+  // half-open: allow one probe
+  return { allowed: true };
+}
+
+function mcpCircuitBreakerRecord(success) {
+  if (success) {
+    mcpCircuitBreaker.failures = 0;
+    mcpCircuitBreaker.state = "closed";
+  } else {
+    mcpCircuitBreaker.failures++;
+    if (mcpCircuitBreaker.failures >= mcpCircuitBreaker.threshold) {
+      mcpCircuitBreaker.state = "open";
+      mcpCircuitBreaker.openedAt = Date.now();
+      log("warn", "mcp", "Circuit breaker OPEN — MCP server unreachable", {
+        failures: mcpCircuitBreaker.failures,
+        cooldown_ms: mcpCircuitBreaker.cooldownMs,
+      });
+      incrementMetric("mcp_circuit_breaker_trips_total");
+    }
+  }
+}
+
 async function callMcpTool(toolName, params, correlationId) {
   const startTime = Date.now();
+
+  // Circuit breaker: fail fast if MCP server is known to be down
+  const cbCheck = mcpCircuitBreakerCheck();
+  if (!cbCheck.allowed) {
+    incrementMetric("mcp_circuit_breaker_rejections_total");
+    throw new Error(cbCheck.reason);
+  }
 
   if (!config.mcpUrl) {
     incrementMetric("errors_total", { component: "mcp" });
@@ -2675,6 +2874,8 @@ async function callMcpTool(toolName, params, correlationId) {
         ...(attempt > 0 && { attempts: attempt + 1 }),
       });
 
+      mcpCircuitBreakerRecord(response.ok);
+
       return {
         success: response.ok,
         data: responseData,
@@ -2709,6 +2910,8 @@ async function callMcpTool(toolName, params, correlationId) {
     incrementMetric("errors_total", { component: "mcp" });
     recordLatency("mcp_tool_call_latency_seconds", latencySeconds, { tool: toolName });
   }
+
+  mcpCircuitBreakerRecord(false);
 
   log("error", "mcp", "Tool call failed after retries", {
     tool: toolName,
@@ -4722,9 +4925,15 @@ module.exports = {
   resolveMcpTool,
   isToolEnabled,
   buildMcpParams,
+  mcpCircuitBreaker,
+  mcpCircuitBreakerCheck,
+  mcpCircuitBreakerRecord,
   parseDurationToSeconds,
   // Gateway dispatch
   dispatchToGateway,
+  queueFailedDispatch,
+  retryDlqDispatches,
+  loadDlq,
   // Enrichment
   isPrivateIp,
   enrichIpAddress,
@@ -5069,6 +5278,10 @@ function setupCleanupIntervals() {
     }
   }, 300000);
   cleanupIntervals.push(dedupCleanup);
+
+  // Webhook DLQ retry
+  const dlqRetry = setInterval(() => retryDlqDispatches().catch(() => {}), 5 * 60 * 1000);
+  cleanupIntervals.push(dlqRetry);
 
   // Stalled pipeline detection
   if (config.stalledPipelineEnabled) {
