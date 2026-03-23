@@ -83,9 +83,11 @@ Set `status=triaged` to hand off to the Correlation Agent. The runtime automatic
 
     web_fetch(url="http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=triaged&token=<AUTOPILOT_MCP_AUTH>")
 
-To include additional data (e.g., entities, timeline), URL-encode a JSON object in the `data` parameter:
+To include additional data (e.g., entities, timeline, auto_verdict), URL-encode a JSON object in the `data` parameter:
 
     web_fetch(url="http://localhost:9090/api/agent-action/update-case?case_id={case_id}&status=triaged&data={url_encoded_json}&token=<AUTOPILOT_MCP_AUTH>")
+
+The `data` JSON object should include your triage output fields: `title`, `summary`, `severity`, `confidence`, `auto_verdict`, `verdict_reason`, `mitre`, `entities`, `timeline`. See AGENTS.md for the full output format and auto-verdict categories.
 
 **Note**: Setting `status=triaged` automatically triggers the Correlation Agent.
 

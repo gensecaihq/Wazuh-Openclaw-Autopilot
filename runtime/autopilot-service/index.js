@@ -1151,6 +1151,10 @@ async function updateCase(caseId, updates) {
       evidencePack.feedback.push(updates.appendFeedback);
     }
 
+    // Triage agent auto-verdict — direct assignment (latest wins, separate from analyst feedback verdict)
+    if (updates.auto_verdict !== undefined) evidencePack.auto_verdict = updates.auto_verdict;
+    if (updates.verdict_reason !== undefined) evidencePack.verdict_reason = updates.verdict_reason;
+
     // Agent investigation/correlation output fields — direct assignment (latest wins)
     if (updates.investigation_notes !== undefined) evidencePack.investigation_notes = updates.investigation_notes;
     if (updates.findings !== undefined) evidencePack.findings = updates.findings;
@@ -1485,6 +1489,16 @@ function validatePlanAction(action, index) {
   }
   if (!action.target || typeof action.target !== "string") {
     errors.push(`Action ${index}: missing or invalid 'target' field`);
+  }
+  // Rollback metadata validation (optional fields)
+  if (action.rollback_available !== undefined && typeof action.rollback_available !== "boolean") {
+    errors.push(`Action ${index}: 'rollback_available' must be a boolean`);
+  }
+  if (action.rollback_command !== undefined && typeof action.rollback_command !== "string") {
+    errors.push(`Action ${index}: 'rollback_command' must be a string`);
+  }
+  if (action.rollback_note !== undefined && typeof action.rollback_note !== "string") {
+    errors.push(`Action ${index}: 'rollback_note' must be a string`);
   }
   return errors;
 }
@@ -3911,6 +3925,8 @@ function createServer() {
 
         const ALLOWED_DATA_FIELDS = [
           "title", "summary", "severity", "confidence",
+          // Triage agent output
+          "auto_verdict", "verdict_reason",
           // Correlation agent output
           "correlation", "related_cases",
           // Investigation agent output
@@ -3919,7 +3935,7 @@ function createServer() {
           // Shared fields
           "mitre", "entities", "timeline",
         ];
-        const STRING_FIELDS = ["title", "summary", "severity", "investigation_notes"];
+        const STRING_FIELDS = ["title", "summary", "severity", "investigation_notes", "auto_verdict", "verdict_reason"];
         const NUMBER_FIELDS = ["confidence"];
         const OBJECT_FIELDS = ["correlation", "enrichment_data", "mitre", "findings", "pivot_results", "key_questions_answered"];
         const ARRAY_FIELDS = ["iocs_identified", "iocs", "entities", "timeline", "recommended_response", "related_cases"];

@@ -105,6 +105,56 @@ describe("Evidence Pack Management", () => {
     assert.strictEqual(updated.entities.length, 1);
   });
 
+  it("should store auto_verdict and verdict_reason via updateCase", async () => {
+    await createCase("CASE-TEST-VERDICT-001", {
+      title: "Verdict Test Case",
+      severity: "medium",
+    });
+
+    const updated = await updateCase("CASE-TEST-VERDICT-001", {
+      auto_verdict: "true_positive",
+      verdict_reason: "47 failed SSH attempts from single external IP with no prior benign history",
+    });
+
+    assert.strictEqual(updated.auto_verdict, "true_positive");
+    assert.strictEqual(updated.verdict_reason, "47 failed SSH attempts from single external IP with no prior benign history");
+  });
+
+  it("auto_verdict does not conflict with analyst feedback verdict", async () => {
+    await createCase("CASE-TEST-VERDICT-002", {
+      title: "Verdict Conflict Test",
+      severity: "high",
+    });
+
+    const updated = await updateCase("CASE-TEST-VERDICT-002", {
+      auto_verdict: "false_positive",
+      verdict_reason: "Internal vulnerability scanner activity",
+      feedback: [{ verdict: "true_positive", analyst: "analyst-001", comment: "Actually malicious" }],
+    });
+
+    assert.strictEqual(updated.auto_verdict, "false_positive");
+    assert.strictEqual(updated.feedback[0].verdict, "true_positive");
+  });
+
+  it("auto_verdict persists through status transitions", async () => {
+    await createCase("CASE-TEST-VERDICT-003", {
+      title: "Verdict Persistence Test",
+      severity: "low",
+    });
+
+    await updateCase("CASE-TEST-VERDICT-003", {
+      auto_verdict: "informational",
+      verdict_reason: "Login event, no threat",
+    });
+
+    const afterStatusChange = await updateCase("CASE-TEST-VERDICT-003", {
+      status: "triaged",
+    });
+
+    assert.strictEqual(afterStatusChange.auto_verdict, "informational");
+    assert.strictEqual(afterStatusChange.verdict_reason, "Login event, no threat");
+  });
+
   it("should get a case by ID", async () => {
     await createCase("CASE-TEST-003", {
       title: "Retrievable Case",
@@ -388,6 +438,64 @@ describe("Response Plans - Two-Tier Approval", () => {
     assert.strictEqual(approved.approver_id, "USER-APPROVER-001");
     assert.strictEqual(approved.approval_reason, "Looks correct");
     assert.ok(approved.approved_at);
+  });
+
+  it("should accept plan actions with rollback metadata", () => {
+    const plan = createResponsePlan({
+      case_id: "CASE-ROLLBACK-001",
+      title: "Rollback Metadata Test",
+      actions: [{
+        type: "block_ip",
+        target: "10.0.0.1",
+        params: { duration: "24h" },
+        rollback_available: true,
+        rollback_command: "firewall-drop-unblock",
+        rollback_note: "Removes firewall block rule",
+      }],
+    });
+
+    assert.strictEqual(plan.actions[0].rollback_available, true);
+    assert.strictEqual(plan.actions[0].rollback_command, "firewall-drop-unblock");
+    assert.strictEqual(plan.actions[0].rollback_note, "Removes firewall block rule");
+  });
+
+  it("should accept plan actions without rollback metadata (backward compatible)", () => {
+    const plan = createResponsePlan({
+      case_id: "CASE-ROLLBACK-002",
+      title: "No Rollback Test",
+      actions: [{ type: "block_ip", target: "10.0.0.2" }],
+    });
+
+    assert.strictEqual(plan.actions[0].rollback_available, undefined);
+    assert.strictEqual(plan.actions[0].rollback_command, undefined);
+  });
+
+  it("should reject invalid rollback_available type", () => {
+    assert.throws(() => {
+      createResponsePlan({
+        case_id: "CASE-ROLLBACK-003",
+        title: "Invalid Rollback",
+        actions: [{
+          type: "block_ip",
+          target: "10.0.0.3",
+          rollback_available: "yes",
+        }],
+      });
+    }, /rollback_available.*must be a boolean/);
+  });
+
+  it("should reject invalid rollback_command type", () => {
+    assert.throws(() => {
+      createResponsePlan({
+        case_id: "CASE-ROLLBACK-004",
+        title: "Invalid Rollback Command",
+        actions: [{
+          type: "block_ip",
+          target: "10.0.0.4",
+          rollback_command: 123,
+        }],
+      });
+    }, /rollback_command.*must be a string/);
   });
 
   it("should reject a plan", () => {

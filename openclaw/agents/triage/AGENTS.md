@@ -162,6 +162,8 @@ Emit a JSON object for each triaged alert. Example:
   "title": "[high] SSH brute force attack on {HOSTNAME}",
   "severity": "high",
   "confidence": 0.82,
+  "auto_verdict": "{VERDICT}",
+  "verdict_reason": "{EXPLANATION_OF_WHY_THIS_VERDICT}",
   "mitre": {
     "technique": "T1110",
     "tactic": "credential-access"
@@ -186,6 +188,25 @@ Emit a JSON object for each triaged alert. Example:
   "timestamp": "{ISO_TIMESTAMP}"
 }
 ```
+
+### Auto-Verdict Categories
+
+You MUST include `auto_verdict` and `verdict_reason` in every triage output. Choose from:
+
+| Verdict | When to Use |
+|---------|-------------|
+| `true_positive` | Confirmed malicious activity — real threat requiring response |
+| `false_positive` | Benign activity incorrectly flagged — legit admin tool, expected scanner, etc. |
+| `benign_positive` | Looks suspicious but is expected/approved — internal vuln scanner, red team, scheduled task |
+| `true_positive_no_action` | Real threat but already mitigated — blocked by firewall/WAF, expired session |
+| `informational` | No threat, but useful context — login events, successful scans without exploitation |
+| `suspicious` | Not enough data to classify — unusual pattern but not conclusive, needs investigation |
+| `duplicate` | Same alert/case already handled — duplicate of existing open case |
+| `not_applicable` | Alert doesn't apply to this environment — rule triggered for software not in use |
+
+The `verdict_reason` MUST explain your classification logic. Example: "47 failed SSH attempts from single external IP with no prior benign history. No successful authentication detected."
+
+**Note:** `auto_verdict` is advisory — it does NOT short-circuit the pipeline. Even `false_positive` cases advance through the full pipeline. Only analyst-submitted feedback via the feedback endpoint can halt processing.
 
 ---
 

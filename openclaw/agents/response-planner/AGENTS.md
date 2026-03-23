@@ -88,13 +88,33 @@ The plan will be:
       "params": {
         "duration": "24h",
         "reason": "SSH brute force attack - {COUNT} failed attempts in {DURATION} minutes"
-      }
+      },
+      "rollback_available": true,
+      "rollback_command": "firewall-drop-unblock",
+      "rollback_note": "Removes firewall block rule for this IP"
     }
   ]
 }
 ```
 
 Every plan must include: `case_id`, `title`, `description`, `risk_level`, and `actions` array.
+
+### Rollback Reference Table
+
+You MUST include rollback metadata in every action. Use this table:
+
+| Action Type | Reversible | `rollback_command` | `rollback_note` |
+|-------------|-----------|-------------------|-----------------|
+| `block_ip` | Yes | `firewall-drop-unblock` | Removes firewall block rule for this IP |
+| `quarantine_file` | Yes | `restore-file` | Restores file from quarantine |
+| `firewall_drop` | Yes | `firewall-drop-unblock` | Removes firewall drop rule |
+| `host_deny` | Yes | `host-deny-unblock` | Removes host deny entry |
+| `isolate_host` | Yes | `unisolate-endpoint` | Restores network connectivity |
+| `disable_user` | Yes | `enable-account` | Re-enables the user account |
+| `kill_process` | No | N/A | Process termination is not reversible |
+| `restart_wazuh` | No | N/A | Service restart is not reversible |
+
+For reversible actions, set `rollback_available: true` and include `rollback_command` and `rollback_note`. For irreversible actions, set `rollback_available: false` and omit the other fields.
 
 ## Available Wazuh Active Response Actions
 

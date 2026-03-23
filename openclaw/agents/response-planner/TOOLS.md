@@ -31,10 +31,15 @@ Build the request URL with these query parameters:
     "params": {
       "duration": "24h",
       "reason": "Human-readable justification"
-    }
+    },
+    "rollback_available": true,
+    "rollback_command": "firewall-drop-unblock",
+    "rollback_note": "Removes firewall block rule"
   }
 ]
 ```
+
+Every action MUST include rollback metadata. See the Rollback Reference Table in AGENTS.md for the correct `rollback_command` and `rollback_note` per action type.
 
 ### Validating Your Request
 
