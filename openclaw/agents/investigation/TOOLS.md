@@ -117,7 +117,7 @@ Use this endpoint to execute pivot queries against the Wazuh indexer. This is ho
     web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query={query_string}&time_range={duration}&limit={n}&token=<AUTOPILOT_MCP_AUTH>")
 
 Parameters:
-- `query` — Lucene-style query string (e.g., `data.srcip:146.190.134.221 AND rule.groups:authentication_success`)
+- `query` — Lucene-style query string (e.g., `data.srcip:{SOURCE_IP} AND rule.groups:authentication_success`)
 - `time_range` — lookback duration (e.g., `24h`, `7d`, `168h`, `30m`). Default: `24h`
 - `limit` — max results to return (1-500). Default: `50`
 
@@ -136,17 +136,17 @@ Parameters:
 
 1. Check for successful authentication from attacker IP:
 ```
-web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query=data.srcip:146.190.134.221%20AND%20rule.groups:authentication_success&time_range=7d&limit=50&token=<AUTOPILOT_MCP_AUTH>")
+web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query=data.srcip:{SOURCE_IP}%20AND%20rule.groups:authentication_success&time_range=7d&limit=50&token=<AUTOPILOT_MCP_AUTH>")
 ```
 
 2. Find all accounts targeted by attacker IP:
 ```
-web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query=data.srcip:146.190.134.221%20AND%20data.dstuser:*&time_range=7d&limit=100&token=<AUTOPILOT_MCP_AUTH>")
+web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query=data.srcip:{SOURCE_IP}%20AND%20data.dstuser:*&time_range=7d&limit=100&token=<AUTOPILOT_MCP_AUTH>")
 ```
 
 3. Get full attack history for an IP:
 ```
-web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query=data.srcip:146.190.134.221%20AND%20rule.groups:authentication&time_range=168h&limit=200&token=<AUTOPILOT_MCP_AUTH>")
+web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query=data.srcip:{SOURCE_IP}%20AND%20rule.groups:authentication&time_range=168h&limit=200&token=<AUTOPILOT_MCP_AUTH>")
 ```
 
 4. Get high-severity alerts for a specific agent:

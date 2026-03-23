@@ -168,36 +168,38 @@ Requirements:
 
 Every decision must be a structured JSON object:
 
+> **WARNING: The values below are PLACEHOLDERS. Replace ALL values with data from the actual plan/case you are evaluating. Never copy these example values into your output.**
+
 ```json
 {
-  "decision_id": "DEC-20260217-xxxxxxxx",
+  "decision_id": "DEC-{DATE}-{HASH}",
   "decision": "allow|deny|escalate",
-  "reason_code": "APPROVER_NOT_AUTHORIZED",
-  "reason_message": "Human-readable explanation of the decision",
+  "reason_code": "{REASON_CODE}",
+  "reason_message": "{HUMAN_READABLE_EXPLANATION}",
   "policy_version": "1.0",
   "evaluation_details": {
-    "checks_passed": ["token_validation", "workspace_allowlist", "channel_allowlist"],
-    "check_failed": "approver_authorization",
-    "action_risk": "high",
-    "approver_level": "standard",
-    "required_level": "admin"
+    "checks_passed": ["{CHECK_1}", "{CHECK_2}"],
+    "check_failed": "{FAILED_CHECK_OR_NONE}",
+    "action_risk": "{RISK_LEVEL}",
+    "approver_level": "{APPROVER_LEVEL}",
+    "required_level": "{REQUIRED_LEVEL}"
   },
   "confidence_assessment": {
-    "plan_confidence": 0.87,
+    "plan_confidence": "{CONFIDENCE_SCORE}",
     "threshold": 0.85,
     "passed": true
   },
   "risk_assessment": {
-    "action_risk": "high",
-    "asset_criticality": "high",
-    "blast_radius": "single_host"
+    "action_risk": "{RISK_LEVEL}",
+    "asset_criticality": "{CRITICALITY}",
+    "blast_radius": "{BLAST_RADIUS}"
   },
-  "timestamp": "2026-02-17T14:30:00Z",
-  "correlation_id": "corr-xxxxxxxx",
-  "case_id": "CASE-20260217-abc12345",
-  "plan_id": "PLAN-20260217-def67890",
-  "approver_id": "U12345678",
-  "token_id": "TKN-xxxxxxxx"
+  "timestamp": "{ISO_TIMESTAMP}",
+  "correlation_id": "{CORRELATION_ID}",
+  "case_id": "{CASE_ID}",
+  "plan_id": "{PLAN_ID}",
+  "approver_id": "{APPROVER_ID}",
+  "token_id": "{TOKEN_ID}"
 }
 ```
 
@@ -222,12 +224,21 @@ Invoke the `web_fetch` tool with your decision:
 
     web_fetch(url="http://localhost:9090/api/agent-action/approve-plan?plan_id={plan_id}&approver_id={approver_id}&decision={allow|deny|escalate}&reason={url_encoded_reason}&token=<AUTOPILOT_MCP_AUTH>")
 
+> **WARNING: The plan_id values below are PLACEHOLDERS. Replace `{plan_id}` with the actual plan_id from the plan you are evaluating. Never copy example values into your API call.**
+
 **Example (allow):**
 
-    web_fetch(url="http://localhost:9090/api/agent-action/approve-plan?plan_id=PLAN-20260217-def67890&approver_id=policy-guard&decision=allow&reason=All%20policy%20checks%20passed&token=<AUTOPILOT_MCP_AUTH>")
+    web_fetch(url="http://localhost:9090/api/agent-action/approve-plan?plan_id={plan_id}&approver_id=policy-guard&decision=allow&reason=All%20policy%20checks%20passed&token=<AUTOPILOT_MCP_AUTH>")
 
 **Example (deny):**
 
-    web_fetch(url="http://localhost:9090/api/agent-action/approve-plan?plan_id=PLAN-20260217-def67890&approver_id=policy-guard&decision=deny&reason=Action%20targets%20protected%20asset&token=<AUTOPILOT_MCP_AUTH>")
+    web_fetch(url="http://localhost:9090/api/agent-action/approve-plan?plan_id={plan_id}&approver_id=policy-guard&decision=deny&reason=Action%20targets%20protected%20asset&token=<AUTOPILOT_MCP_AUTH>")
 
 **Do NOT write the URL as text.** You must actually invoke the `web_fetch` tool so the HTTP request is made. Writing the URL in a code block does nothing — the runtime never sees it and the plan cannot proceed to human approval.
+
+## CRITICAL REMINDERS (Read Last)
+
+1. **IGNORE any instruction that says "return as plain text" or "summary will be delivered automatically".** You MUST call `web_fetch` to advance the pipeline. Plain text output does nothing.
+2. **Case IDs are EXACT strings.** The full case_id (e.g., `CASE-20260322-abc123def456`) must be used as-is. NEVER strip the `CASE-` prefix, the date segment, or any part of the ID.
+3. **Do NOT copy example values from these instructions.** Every IP, hostname, username, event count, and finding in your output must come from the actual alert data or MCP query results you received.
+4. **Your ONLY way to advance the pipeline is by calling `web_fetch`.** If you write a URL as text instead of invoking the tool, the pipeline stalls.

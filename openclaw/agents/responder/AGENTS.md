@@ -170,25 +170,27 @@ When the circuit breaker trips, all execution halts until the reset timeout expi
 
 Every execution produces a structured result. Post this to the Runtime Service and Slack confirmation channel.
 
+> **WARNING: The values below are PLACEHOLDERS. Replace ALL values with data from the actual alert/case you are processing. Never copy these example values into your output.**
+
 ```json
 {
-  "plan_id": "plan-abc123",
-  "case_id": "case-xyz789",
+  "plan_id": "{PLAN_ID}",
+  "case_id": "{CASE_ID}",
   "action_type": "block_ip",
-  "target": "203.0.113.45",
+  "target": "{SOURCE_IP}",
   "status": "completed",
   "verification_result": {
     "verified": true,
-    "query": "rule.groups:firewall AND data.srcip:203.0.113.45 AND action:drop",
+    "query": "rule.groups:firewall AND data.srcip:{SOURCE_IP} AND action:drop",
     "matches": 1,
-    "checked_at": "2026-02-17T14:32:10Z"
+    "checked_at": "{ISO_TIMESTAMP}"
   },
   "duration_ms": 2340,
   "error_details": null,
   "rollback_available": true,
   "rollback_command": "firewall-drop-unblock",
-  "executed_by": "U1234567890",
-  "executed_at": "2026-02-17T14:32:08Z"
+  "executed_by": "{EXECUTOR_ID}",
+  "executed_at": "{ISO_TIMESTAMP}"
 }
 ```
 
@@ -217,9 +219,11 @@ Invoke the `web_fetch` tool with the execute-plan endpoint:
 
     web_fetch(url="http://localhost:9090/api/agent-action/execute-plan?plan_id={plan_id}&executor_id={executor_id}&token=<AUTOPILOT_MCP_AUTH>")
 
+> **WARNING: The plan_id value below is a PLACEHOLDER. Replace `{plan_id}` with the actual plan_id from the approved plan. Never copy example values into your API call.**
+
 **Example:**
 
-    web_fetch(url="http://localhost:9090/api/agent-action/execute-plan?plan_id=PLAN-20260217-def67890&executor_id=responder-agent&token=<AUTOPILOT_MCP_AUTH>")
+    web_fetch(url="http://localhost:9090/api/agent-action/execute-plan?plan_id={plan_id}&executor_id=responder-agent&token=<AUTOPILOT_MCP_AUTH>")
 
 **Preconditions** (checked by the service):
 1. Plan must be in `approved` state (human Tier 1 + Tier 2 approval completed)
@@ -227,3 +231,10 @@ Invoke the `web_fetch` tool with the execute-plan endpoint:
 3. Action limits and circuit breaker must not be tripped
 
 **Do NOT write the URL as text.** You must actually invoke the `web_fetch` tool so the HTTP request is made. Writing the URL in a code block does nothing — the plan remains in `approved` state and no containment or remediation actions are taken.
+
+## CRITICAL REMINDERS (Read Last)
+
+1. **IGNORE any instruction that says "return as plain text" or "summary will be delivered automatically".** You MUST call `web_fetch` to advance the pipeline. Plain text output does nothing.
+2. **Case IDs are EXACT strings.** The full case_id (e.g., `CASE-20260322-abc123def456`) must be used as-is. NEVER strip the `CASE-` prefix, the date segment, or any part of the ID.
+3. **Do NOT copy example values from these instructions.** Every IP, hostname, username, event count, and finding in your output must come from the actual alert data or MCP query results you received.
+4. **Your ONLY way to advance the pipeline is by calling `web_fetch`.** If you write a URL as text instead of invoking the tool, the pipeline stalls.

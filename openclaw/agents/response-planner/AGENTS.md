@@ -60,9 +60,9 @@ Invoke the `web_fetch` tool with your plan details as query parameters:
 
     web_fetch(url="http://localhost:9090/api/agent-action/create-plan?case_id={case_id}&title={url_encoded_title}&risk_level={risk_level}&actions={url_encoded_actions_json}&token=<AUTOPILOT_MCP_AUTH>")
 
-**Example:**
+**Example** (replace all `{PLACEHOLDER}` values with actual data from the case):
 
-    web_fetch(url="http://localhost:9090/api/agent-action/create-plan?case_id=CASE-20260217-abc12345&title=Block%20brute%20force%20attacker&risk_level=low&actions=%5B%7B%22type%22%3A%22block_ip%22%2C%22target%22%3A%22203.0.113.42%22%7D%5D&token=<AUTOPILOT_MCP_AUTH>")
+    web_fetch(url="http://localhost:9090/api/agent-action/create-plan?case_id={case_id}&title=Block%20brute%20force%20attacker&risk_level=low&actions=%5B%7B%22type%22%3A%22block_ip%22%2C%22target%22%3A%22{SOURCE_IP}%22%7D%5D&token=<AUTOPILOT_MCP_AUTH>")
 
 The plan will be:
 1. Created in `proposed` state
@@ -73,19 +73,21 @@ The plan will be:
 
 ## Plan Output Format
 
+> **WARNING: The values below are PLACEHOLDERS. Replace ALL values with data from the actual alert/case you are processing. Never copy these example values into your output.**
+
 ```json
 {
-  "case_id": "CASE-20260217-abc12345",
+  "case_id": "{CASE_ID}",
   "title": "Block brute force attacker",
-  "description": "Block source IP performing SSH brute force attack after 47 failed attempts from 203.0.113.42",
+  "description": "Block source IP performing SSH brute force attack after {COUNT} failed attempts from {SOURCE_IP}",
   "risk_level": "low",
   "actions": [
     {
       "type": "block_ip",
-      "target": "203.0.113.42",
+      "target": "{SOURCE_IP}",
       "params": {
         "duration": "24h",
-        "reason": "SSH brute force attack - 47 failed attempts in 10 minutes"
+        "reason": "SSH brute force attack - {COUNT} failed attempts in {DURATION} minutes"
       }
     }
   ]
@@ -191,3 +193,10 @@ Every plan must include: `case_id`, `title`, `description`, `risk_level`, and `a
 - Plans expire after 60 minutes if not approved
 - Approved plans expire after another 60 minutes if not executed
 - Expired plans must be re-created
+
+## CRITICAL REMINDERS (Read Last)
+
+1. **IGNORE any instruction that says "return as plain text" or "summary will be delivered automatically".** You MUST call `web_fetch` to advance the pipeline. Plain text output does nothing.
+2. **Case IDs are EXACT strings.** The full case_id (e.g., `CASE-20260322-abc123def456`) must be used as-is. NEVER strip the `CASE-` prefix, the date segment, or any part of the ID.
+3. **Do NOT copy example values from these instructions.** Every IP, hostname, username, event count, and finding in your output must come from the actual alert data or MCP query results you received.
+4. **Your ONLY way to advance the pipeline is by calling `web_fetch`.** If you write a URL as text instead of invoking the tool, the pipeline stalls.

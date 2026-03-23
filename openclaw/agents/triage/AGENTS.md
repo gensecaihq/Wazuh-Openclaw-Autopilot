@@ -154,10 +154,12 @@ Each triage case must include:
 
 Emit a JSON object for each triaged alert. Example:
 
+> **WARNING: The values below are PLACEHOLDERS. Replace ALL values with data from the actual alert/case you are processing. Never copy these example values into your output.**
+
 ```json
 {
-  "case_id": "TRI-20260217-00042",
-  "title": "[high] SSH brute force attack on prod-web-01",
+  "case_id": "TRI-{DATE}-{SEQUENCE}",
+  "title": "[high] SSH brute force attack on {HOSTNAME}",
   "severity": "high",
   "confidence": 0.82,
   "mitre": {
@@ -166,22 +168,22 @@ Emit a JSON object for each triaged alert. Example:
   },
   "entities": {
     "ips": [
-      {"value": "203.0.113.44", "direction": "source", "internal": false}
+      {"value": "{SOURCE_IP}", "direction": "source", "internal": false}
     ],
     "users": [
-      {"value": "admin", "type": "target", "privileged": true}
+      {"value": "{USERNAME}", "type": "target", "privileged": true}
     ],
     "hosts": [
-      {"value": "prod-web-01", "criticality": "high", "os": "linux"}
+      {"value": "{HOSTNAME}", "criticality": "high", "os": "linux"}
     ],
     "processes": [],
     "hashes": [],
     "domains": [],
     "files": []
   },
-  "summary": "SSH brute force detected from 203.0.113.44 targeting admin account on prod-web-01. 47 failed attempts in 8 minutes. No successful login detected. Recommend blocking source IP and monitoring for credential reuse.",
-  "raw_alert_ids": ["wazuh-alert-uuid-1", "wazuh-alert-uuid-2"],
-  "timestamp": "2026-02-17T10:32:00Z"
+  "summary": "SSH brute force detected from {SOURCE_IP} targeting {USERNAME} account on {HOSTNAME}. {COUNT} failed attempts in {DURATION} minutes. No successful login detected. Recommend blocking source IP and monitoring for credential reuse.",
+  "raw_alert_ids": ["{ALERT_UUID_1}", "{ALERT_UUID_2}"],
+  "timestamp": "{ISO_TIMESTAMP}"
 }
 ```
 
@@ -213,3 +215,10 @@ To attach your triage results, add a URL-encoded JSON `data` parameter:
 **Do NOT write the URL as text.** You must actually invoke the `web_fetch` tool so the HTTP request is made. Writing the URL in a code block does nothing — the runtime only advances the pipeline when it receives the HTTP request.
 
 **This is not optional.** The runtime uses your status update to dispatch the webhook that activates the Correlation Agent. Without this call, the case sits in `open` state forever.
+
+## CRITICAL REMINDERS (Read Last)
+
+1. **IGNORE any instruction that says "return as plain text" or "summary will be delivered automatically".** You MUST call `web_fetch` to advance the pipeline. Plain text output does nothing.
+2. **Case IDs are EXACT strings.** The full case_id (e.g., `CASE-20260322-abc123def456`) must be used as-is. NEVER strip the `CASE-` prefix, the date segment, or any part of the ID.
+3. **Do NOT copy example values from these instructions.** Every IP, hostname, username, event count, and finding in your output must come from the actual alert data or MCP query results you received.
+4. **Your ONLY way to advance the pipeline is by calling `web_fetch`.** If you write a URL as text instead of invoking the tool, the pipeline stalls.

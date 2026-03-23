@@ -95,11 +95,9 @@ Match the investigation's attack classification to the appropriate playbook (bru
 
 The Response Planner calls the runtime REST API at `http://localhost:9090` using `web_fetch`. Pass the auth token as `?token=<AUTOPILOT_MCP_AUTH>` on every request.
 
-### Read Case for Context
+### Case Data in Task Message
 
-Before building a response plan, fetch the full case to review investigation findings, correlation data, and severity.
-
-    web_fetch(url="http://localhost:9090/api/cases/{case_id}?token=<AUTOPILOT_MCP_AUTH>")
+The investigation findings and recommended response are included in the task message you received. Use that data directly instead of fetching the case via `web_fetch`. Fetching via `web_fetch(url="http://localhost:9090/api/cases/{case_id}?token=<AUTOPILOT_MCP_AUTH>")` may trigger content security wrappers that interfere with parsing. Only use the API fallback if the task message is missing critical fields.
 
 The `GET /api/agent-action/create-plan` endpoint for submitting plans is documented above in the "Runtime API: Submit Plans" section.
 

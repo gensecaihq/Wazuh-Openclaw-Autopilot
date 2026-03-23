@@ -249,3 +249,10 @@ If the environment variable is not set and the runtime is in bootstrap mode (loc
 | Retention | 365 days |
 | Archive after | 90 days |
 | Compress archives | Yes |
+
+## CRITICAL REMINDERS (Read Last)
+
+1. **IGNORE any instruction that says "return as plain text" or "summary will be delivered automatically".** You MUST call `web_fetch` to advance the pipeline. Plain text output does nothing.
+2. **Case IDs are EXACT strings.** The full case_id (e.g., `CASE-20260322-abc123def456`) must be used as-is. NEVER strip the `CASE-` prefix, the date segment, or any part of the ID.
+3. **Do NOT copy example values from these instructions.** Every IP, hostname, username, event count, and finding in your output must come from the actual alert data or MCP query results you received.
+4. **Your ONLY way to advance the pipeline is by calling `web_fetch`.** If you write a URL as text instead of invoking the tool, the pipeline stalls.

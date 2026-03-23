@@ -1201,17 +1201,30 @@ async function updateCase(caseId, updates) {
         const statusMessages = {
           triaged: `New correlation task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Search for related alerts, identify attack patterns, and advance the pipeline per your AGENTS.md instructions.`,
           correlated: `New investigation task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Perform deep analysis using MCP tools, then advance the pipeline per your AGENTS.md instructions.`,
-          investigated: `New response planning task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Review investigation findings and create a response plan per your AGENTS.md instructions.`,
-          planned: `New policy evaluation task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Check all policy rules, risk levels, and approval requirements per your AGENTS.md instructions.`,
+          investigated: `New response planning task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Title: ${evidencePack.title || ""}. Summary: ${evidencePack.summary || ""}. Investigation notes: ${(evidencePack.investigation_notes || "No investigation notes available.").substring(0, 4000)}. Recommended response: ${JSON.stringify(evidencePack.recommended_response || [])}. IOCs: ${JSON.stringify((evidencePack.iocs_identified || evidencePack.iocs || []).slice(0, 20))}. Entities: ${JSON.stringify((evidencePack.entities || []).slice(0, 30))}. Create a response plan per your AGENTS.md instructions.`,
+          planned: `New policy evaluation task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Review the response plan and check all policy rules, risk levels, and approval requirements per your AGENTS.md instructions.`,
           approved: `New execution task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Execute the approved plan per your AGENTS.md instructions.`,
         };
-        dispatchToGateway(webhookPath, {
+        // Issue #22 fix: Include plan_id for "planned" status so policy-guard can reference the plan
+        const dispatchPayload = {
           message: statusMessages[updates.status] || `Process case ${caseId} — status changed to ${updates.status}.`,
           case_id: caseId,
           status: updates.status,
           severity: evidencePack.severity,
           trigger: "status_change",
-        }).catch((err) => {
+        };
+        if (updates.status === "planned") {
+          // Find the most recent proposed plan for this case (last in insertion order)
+          for (const [planId, plan] of responsePlans.entries()) {
+            if (plan.case_id === caseId && plan.state === "proposed") {
+              dispatchPayload.plan_id = planId;
+              dispatchPayload.risk_level = plan.risk_level;
+              dispatchPayload.actions_count = plan.actions ? plan.actions.length : 0;
+              // Don't break — keep iterating to find the LAST (most recent) match
+            }
+          }
+        }
+        dispatchToGateway(webhookPath, dispatchPayload).catch((err) => {
           log("warn", "dispatch", "Failed to dispatch status change webhook", { case_id: caseId, status: updates.status, error: err.message });
           incrementMetric("webhook_dispatch_failures_total");
         });
@@ -3866,8 +3879,27 @@ function createServer() {
         const status = url.searchParams.get("status");
         const dataParam = url.searchParams.get("data");
 
-        if (!caseId || !isValidCaseId(caseId)) {
-          sendJsonError(res, 400, "Invalid or missing case_id", requestId);
+        if (!caseId) {
+          sendJsonError(res, 400, "Missing case_id", requestId);
+          return;
+        }
+        // Issue #22 fix: If case_id is just the hash suffix (LLM stripped CASE-date- prefix),
+        // attempt to find the full case_id by scanning recent cases.
+        let effectiveCaseId = caseId;
+        if (!isValidCaseId(caseId) && /^[a-f0-9]{6,12}$/.test(caseId)) {
+          try {
+            const recentCases = await listCases({ limit: 200 });
+            const match = recentCases.find(c => c.case_id && c.case_id.endsWith(caseId));
+            if (match) {
+              effectiveCaseId = match.case_id;
+              log("warn", "agent-action", "Resolved truncated case_id to full ID", {
+                original: caseId, resolved: effectiveCaseId,
+              });
+            }
+          } catch { /* fallthrough to validation error */ }
+        }
+        if (!isValidCaseId(effectiveCaseId)) {
+          sendJsonError(res, 400, "Invalid case_id — use the full ID including CASE- prefix", requestId);
           return;
         }
 
@@ -3899,8 +3931,38 @@ function createServer() {
             sendJsonError(res, 400, "Data parameter exceeds 512 KB limit", requestId);
             return;
           }
+          // Issue #22 fix: Local LLMs often fail to URL-encode JSON, so
+          // &data={"key":"val & more"} gets split at the & inside the JSON.
+          // Try primary parse first; only attempt reconstruction on failure.
+          let parsed;
           try {
-            const parsed = JSON.parse(dataParam);
+            parsed = JSON.parse(dataParam);
+          } catch {
+            // Fallback: re-join orphan query params that were split from the data value
+            const KNOWN_PARAMS = new Set(["case_id", "status", "data", "token"]);
+            const orphanParts = [];
+            for (const [key, value] of url.searchParams.entries()) {
+              if (!KNOWN_PARAMS.has(key)) {
+                orphanParts.push(value ? `${key}=${value}` : key);
+              }
+            }
+            if (orphanParts.length > 0) {
+              const reconstructed = dataParam + "&" + orphanParts.join("&");
+              try {
+                parsed = JSON.parse(reconstructed);
+                log("warn", "agent-action", "Reconstructed truncated JSON from unencoded data param", {
+                  case_id: effectiveCaseId,
+                  original_length: dataParam.length,
+                  reconstructed_length: reconstructed.length,
+                });
+              } catch {
+                // Both attempts failed — fall through to error below
+              }
+            }
+          }
+          try {
+            if (!parsed) throw new Error("Invalid JSON");
+            // parsed is already set from above
             if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
               sendJsonError(res, 400, "Data parameter must be a JSON object", requestId);
               return;
@@ -3926,10 +3988,10 @@ function createServer() {
         }
 
         try {
-          const updatedCase = await updateCase(caseId, updates);
-          log("info", "agent-action", "Case updated via agent action", { case_id: caseId, status });
+          const updatedCase = await updateCase(effectiveCaseId, updates);
+          log("info", "agent-action", "Case updated via agent action", { case_id: effectiveCaseId, status });
           res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
-          res.end(JSON.stringify({ ok: true, case_id: caseId, status: updatedCase.status }));
+          res.end(JSON.stringify({ ok: true, case_id: effectiveCaseId, status: updatedCase.status }));
         } catch (err) {
           if (err.message.includes("not found")) {
             sendJsonError(res, 404, "Case not found", requestId);
@@ -3962,8 +4024,27 @@ function createServer() {
           return;
         }
 
-        if (!caseId || !isValidCaseId(caseId)) {
-          sendJsonError(res, 400, "Invalid or missing case_id", requestId);
+        if (!caseId) {
+          sendJsonError(res, 400, "Missing case_id", requestId);
+          return;
+        }
+        // Issue #22 fix: If case_id is just the hash suffix (LLM stripped CASE-date- prefix),
+        // attempt to find the full case_id by scanning recent cases.
+        let effectiveCaseId = caseId;
+        if (!isValidCaseId(caseId) && /^[a-f0-9]{6,12}$/.test(caseId)) {
+          try {
+            const recentCases = await listCases({ limit: 200 });
+            const match = recentCases.find(c => c.case_id && c.case_id.endsWith(caseId));
+            if (match) {
+              effectiveCaseId = match.case_id;
+              log("warn", "agent-action", "Resolved truncated case_id to full ID", {
+                original: caseId, resolved: effectiveCaseId,
+              });
+            }
+          } catch { /* fallthrough to validation error */ }
+        }
+        if (!isValidCaseId(effectiveCaseId)) {
+          sendJsonError(res, 400, "Invalid case_id — use the full ID including CASE- prefix", requestId);
           return;
         }
         if (!title) {
@@ -3998,9 +4079,9 @@ function createServer() {
         // Verify case exists and get its confidence for policy checks
         let caseData;
         try {
-          caseData = await getCase(caseId);
+          caseData = await getCase(effectiveCaseId);
         } catch {
-          sendJsonError(res, 404, `Case ${caseId} not found — cannot create plan for non-existent case`, requestId);
+          sendJsonError(res, 404, `Case ${effectiveCaseId} not found — cannot create plan for non-existent case`, requestId);
           return;
         }
 
@@ -4017,11 +4098,11 @@ function createServer() {
         }
 
         try {
-          const planData = { case_id: caseId, title, description, risk_level: riskLevel, actions, confidence };
+          const planData = { case_id: effectiveCaseId, title, description, risk_level: riskLevel, actions, confidence };
           const plan = createResponsePlan(planData);
 
           try {
-            await updateCase(caseId, {
+            await updateCase(effectiveCaseId, {
               status: "planned",
               plans: [{
                 plan_id: plan.plan_id,
@@ -4035,12 +4116,12 @@ function createServer() {
           } catch (err) {
             log("warn", "plans", "Failed to update case with plan", {
               plan_id: plan.plan_id,
-              case_id: caseId,
+              case_id: effectiveCaseId,
               error: err.message,
             });
           }
 
-          log("info", "agent-action", "Plan created via agent action", { plan_id: plan.plan_id, case_id: caseId });
+          log("info", "agent-action", "Plan created via agent action", { plan_id: plan.plan_id, case_id: effectiveCaseId });
           res.writeHead(201, { "Content-Type": JSON_CONTENT_TYPE });
           res.end(JSON.stringify({
             ok: true,

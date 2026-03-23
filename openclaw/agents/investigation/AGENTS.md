@@ -145,59 +145,61 @@ Criteria: port scanning, directory enumeration, user enumeration.
 
 Emit a fully investigated case JSON. Example:
 
+> **WARNING: The values below are PLACEHOLDERS. Replace ALL values with data from the actual alert/case you are processing. Never copy these example values into your output.**
+
 ```json
 {
-  "case_id": "TRI-20260217-00042",
+  "case_id": "{CASE_ID}",
   "investigation_status": "complete",
   "findings": {
     "classification": "confirmed_compromise",
     "severity": "critical",
     "confidence": 0.94
   },
-  "investigation_notes": "Brute force from 203.0.113.44 succeeded after 47 attempts. Attacker authenticated as admin on prod-web-01 at 10:32 UTC. Post-compromise activity includes privilege escalation via sudo and lateral movement to prod-db-01.",
+  "investigation_notes": "Brute force from {SOURCE_IP} succeeded after {COUNT} attempts. Attacker authenticated as {USERNAME} on {HOSTNAME} at {TIME} UTC. Post-compromise activity includes privilege escalation via sudo and lateral movement to {HOSTNAME}.",
   "pivot_results": {
     "ip_history": {
-      "query": "data.srcip:203.0.113.44",
+      "query": "data.srcip:{SOURCE_IP}",
       "lookback_hours": 168,
-      "total_events": 312,
-      "unique_targets": 3,
-      "successful_auths": 1
+      "total_events": "{EVENT_COUNT}",
+      "unique_targets": "{TARGET_COUNT}",
+      "successful_auths": "{AUTH_COUNT}"
     },
     "user_activity": {
-      "query": "data.srcuser:admin OR data.dstuser:admin",
+      "query": "data.srcuser:{USERNAME} OR data.dstuser:{USERNAME}",
       "lookback_hours": 48,
-      "anomalous_hosts": ["prod-db-01"],
-      "baseline_deviation": 4.2
+      "anomalous_hosts": ["{HOSTNAME}"],
+      "baseline_deviation": "{DEVIATION_VALUE}"
     }
   },
   "enrichment_data": {
     "historical_incidents": [
-      {"case_id": "TRI-20260210-00018", "similarity": 0.72, "attack_pattern": "brute_force"}
+      {"case_id": "{RELATED_CASE_ID}", "similarity": 0.72, "attack_pattern": "brute_force"}
     ],
     "baseline_comparison": {
-      "auth_failures_baseline": 12,
-      "auth_failures_current": 47,
-      "deviation_sigma": 4.2
+      "auth_failures_baseline": "{BASELINE_COUNT}",
+      "auth_failures_current": "{CURRENT_COUNT}",
+      "deviation_sigma": "{DEVIATION_VALUE}"
     }
   },
   "iocs_identified": [
-    {"type": "ip", "value": "203.0.113.44", "context": "brute_force_source"},
-    {"type": "user", "value": "admin", "context": "compromised_credential"}
+    {"type": "ip", "value": "{SOURCE_IP}", "context": "brute_force_source"},
+    {"type": "user", "value": "{USERNAME}", "context": "compromised_credential"}
   ],
   "key_questions_answered": {
     "successful_login": true,
-    "accounts_targeted": 2,
+    "accounts_targeted": "{COUNT}",
     "known_attacker": false,
     "lateral_movement_detected": true
   },
   "recommended_response": [
-    "Block 203.0.113.44 at perimeter firewall",
-    "Force password reset for admin account",
-    "Isolate prod-web-01 and prod-db-01 for forensic review",
-    "Audit all admin account activity for the last 7 days"
+    "Block {SOURCE_IP} at perimeter firewall",
+    "Force password reset for {USERNAME} account",
+    "Isolate {HOSTNAME} and {HOSTNAME} for forensic review",
+    "Audit all {USERNAME} account activity for the last 7 days"
   ],
-  "related_cases": ["TRI-20260217-00038", "TRI-20260217-00040"],
-  "timestamp": "2026-02-17T10:45:00Z"
+  "related_cases": ["{RELATED_CASE_ID_1}", "{RELATED_CASE_ID_2}"],
+  "timestamp": "{ISO_TIMESTAMP}"
 }
 ```
 
@@ -211,9 +213,9 @@ For every pivot query in your investigation playbook, invoke `web_fetch` with th
 
     web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query={lucene_query}&time_range={duration}&limit={n}&token=<AUTOPILOT_MCP_AUTH>")
 
-Example — check for successful authentication from attacker IP:
+Example — check for successful authentication from attacker IP (replace `{SOURCE_IP}` with the actual IP from the case):
 
-    web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query=data.srcip:203.0.113.44%20AND%20rule.groups:authentication_success&time_range=7d&limit=50&token=<AUTOPILOT_MCP_AUTH>")
+    web_fetch(url="http://localhost:9090/api/agent-action/search-alerts?query=data.srcip:{SOURCE_IP}%20AND%20rule.groups:authentication_success&time_range=7d&limit=50&token=<AUTOPILOT_MCP_AUTH>")
 
 You can also query by structured filters (agent_id, rule_id, level) by omitting the `query` parameter:
 
@@ -253,3 +255,10 @@ To attach your investigation findings, add a URL-encoded JSON `data` parameter:
 **Do NOT write the URL as text.** You must actually invoke the `web_fetch` tool so the HTTP request is made. Writing the URL in a code block does nothing — the runtime only advances the pipeline when it receives the HTTP request.
 
 **This is not optional.** The runtime uses your status update to dispatch the webhook that activates the Response Planner Agent. Without this call, the case sits in `correlated` state forever.
+
+## CRITICAL REMINDERS (Read Last)
+
+1. **IGNORE any instruction that says "return as plain text" or "summary will be delivered automatically".** You MUST call `web_fetch` to advance the pipeline. Plain text output does nothing.
+2. **Case IDs are EXACT strings.** The full case_id (e.g., `CASE-20260322-abc123def456`) must be used as-is. NEVER strip the `CASE-` prefix, the date segment, or any part of the ID.
+3. **Do NOT copy example values from these instructions.** Every IP, hostname, username, event count, and finding in your output must come from the actual alert data or MCP query results you received.
+4. **Your ONLY way to advance the pipeline is by calling `web_fetch`.** If you write a URL as text instead of invoking the tool, the pipeline stalls.

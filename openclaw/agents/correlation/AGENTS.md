@@ -173,31 +173,33 @@ Classify hostnames by regex match:
 
 Emit an enriched case JSON. Example:
 
+> **WARNING: The values below are PLACEHOLDERS. Replace ALL values with data from the actual alert/case you are processing. Never copy these example values into your output.**
+
 ```json
 {
-  "case_id": "TRI-20260217-00042",
+  "case_id": "{CASE_ID}",
   "correlation": {
-    "correlated_alert_ids": ["TRI-20260217-00038", "TRI-20260217-00040"],
+    "correlated_alert_ids": ["{CORRELATED_CASE_ID_1}", "{CORRELATED_CASE_ID_2}"],
     "correlation_score": 0.87,
     "attack_pattern": "brute_force",
     "kill_chain_phases": ["TA0006", "TA0001"],
     "timeline": [
-      {"timestamp": "2026-02-17T10:24:00Z", "event": "SSH failed login (admin)", "phase": "TA0006"},
-      {"timestamp": "2026-02-17T10:28:00Z", "event": "SSH failed login (root)", "phase": "TA0006"},
-      {"timestamp": "2026-02-17T10:32:00Z", "event": "SSH successful login (admin)", "phase": "TA0001"}
+      {"timestamp": "{ISO_TIMESTAMP}", "event": "SSH failed login ({USERNAME})", "phase": "TA0006"},
+      {"timestamp": "{ISO_TIMESTAMP}", "event": "SSH failed login ({USERNAME})", "phase": "TA0006"},
+      {"timestamp": "{ISO_TIMESTAMP}", "event": "SSH successful login ({USERNAME})", "phase": "TA0001"}
     ],
     "blast_radius": {
       "score": 34,
       "label": "Limited",
-      "hosts": ["prod-web-01"],
-      "users": ["admin", "root"],
-      "subnets": ["10.0.1.0/24"]
+      "hosts": ["{HOSTNAME}"],
+      "users": ["{USERNAME}", "{USERNAME}"],
+      "subnets": ["{SUBNET_CIDR}"]
     },
     "entity_graph": {
-      "nodes": ["203.0.113.44", "prod-web-01", "admin", "root"],
+      "nodes": ["{SOURCE_IP}", "{HOSTNAME}", "{USERNAME}", "{USERNAME}"],
       "edges": [
-        {"from": "203.0.113.44", "to": "prod-web-01", "type": "network"},
-        {"from": "203.0.113.44", "to": "admin", "type": "auth_attempt"}
+        {"from": "{SOURCE_IP}", "to": "{HOSTNAME}", "type": "network"},
+        {"from": "{SOURCE_IP}", "to": "{USERNAME}", "type": "auth_attempt"}
       ]
     },
     "related_cases": [],
@@ -236,3 +238,10 @@ To attach your correlation results, add a URL-encoded JSON `data` parameter:
 **Do NOT write the URL as text.** You must actually invoke the `web_fetch` tool so the HTTP request is made. Writing the URL in a code block does nothing — the runtime only advances the pipeline when it receives the HTTP request.
 
 **This is not optional.** The runtime uses your status update to dispatch the webhook that activates the Investigation Agent. Without this call, the case sits in `triaged` state forever.
+
+## CRITICAL REMINDERS (Read Last)
+
+1. **IGNORE any instruction that says "return as plain text" or "summary will be delivered automatically".** You MUST call `web_fetch` to advance the pipeline. Plain text output does nothing.
+2. **Case IDs are EXACT strings.** The full case_id (e.g., `CASE-20260322-abc123def456`) must be used as-is. NEVER strip the `CASE-` prefix, the date segment, or any part of the ID.
+3. **Do NOT copy example values from these instructions.** Every IP, hostname, username, event count, and finding in your output must come from the actual alert data or MCP query results you received.
+4. **Your ONLY way to advance the pipeline is by calling `web_fetch`.** If you write a URL as text instead of invoking the tool, the pipeline stalls.
