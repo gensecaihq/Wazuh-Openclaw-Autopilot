@@ -1151,6 +1151,19 @@ async function updateCase(caseId, updates) {
       evidencePack.feedback.push(updates.appendFeedback);
     }
 
+    // MITRE ATT&CK mapping — normalize to array and merge
+    if (updates.mitre !== undefined) {
+      const incoming = Array.isArray(updates.mitre) ? updates.mitre : [updates.mitre];
+      const existing = Array.isArray(evidencePack.mitre) ? evidencePack.mitre : (evidencePack.mitre ? [evidencePack.mitre] : []);
+      // Deduplicate by technique ID
+      const seen = new Map(existing.map(m => [m.technique || m.id || JSON.stringify(m), m]));
+      for (const m of incoming) {
+        const key = m.technique || m.id || JSON.stringify(m);
+        if (!seen.has(key)) seen.set(key, m);
+      }
+      evidencePack.mitre = [...seen.values()];
+    }
+
     // Triage agent auto-verdict — direct assignment (latest wins, separate from analyst feedback verdict)
     if (updates.auto_verdict !== undefined) evidencePack.auto_verdict = updates.auto_verdict;
     if (updates.verdict_reason !== undefined) evidencePack.verdict_reason = updates.verdict_reason;
@@ -3937,8 +3950,11 @@ function createServer() {
         ];
         const STRING_FIELDS = ["title", "summary", "severity", "investigation_notes", "auto_verdict", "verdict_reason"];
         const NUMBER_FIELDS = ["confidence"];
-        const OBJECT_FIELDS = ["correlation", "enrichment_data", "mitre", "findings", "pivot_results", "key_questions_answered"];
+        const OBJECT_FIELDS = ["correlation", "enrichment_data", "findings", "pivot_results", "key_questions_answered"];
         const ARRAY_FIELDS = ["iocs_identified", "iocs", "entities", "timeline", "recommended_response", "related_cases"];
+        // mitre accepts both object (single mapping) and array (multiple mappings) — normalized in updateCase()
+        const OBJECT_OR_ARRAY_FIELDS = ["mitre"];
+        const VALID_SEVERITIES = ["informational", "low", "medium", "high", "critical"];
         const MAX_DATA_SIZE = 512 * 1024; // 512 KB
         const updates = {};
         if (status) updates.status = status;
@@ -3983,14 +3999,49 @@ function createServer() {
               sendJsonError(res, 400, "Data parameter must be a JSON object", requestId);
               return;
             }
+            const skippedFields = [];
             for (const key of Object.keys(parsed)) {
               if (!ALLOWED_DATA_FIELDS.includes(key)) continue;
               const val = parsed[key];
-              if (STRING_FIELDS.includes(key) && typeof val !== "string") continue;
-              if (NUMBER_FIELDS.includes(key) && typeof val !== "number") continue;
-              if (OBJECT_FIELDS.includes(key) && (typeof val !== "object" || val === null || Array.isArray(val))) continue;
-              if (ARRAY_FIELDS.includes(key) && !Array.isArray(val)) continue;
+              if (STRING_FIELDS.includes(key) && typeof val !== "string") { skippedFields.push(key); continue; }
+              if (NUMBER_FIELDS.includes(key) && typeof val !== "number") { skippedFields.push(key); continue; }
+              if (OBJECT_FIELDS.includes(key) && (typeof val !== "object" || val === null || Array.isArray(val))) { skippedFields.push(key); continue; }
+              if (ARRAY_FIELDS.includes(key) && !Array.isArray(val)) {
+                // entities: accept nested object format {ips:[...], users:[...], ...} and normalize to flat array
+                if (key === "entities" && typeof val === "object" && val !== null) {
+                  const flat = [];
+                  const categoryToType = { ips: "ip", users: "user", hosts: "host", processes: "process", hashes: "hash", domains: "domain", files: "file", urls: "url", emails: "email" };
+                  for (const [cat, items] of Object.entries(val)) {
+                    if (!Array.isArray(items)) continue;
+                    const entityType = categoryToType[cat] || cat.replace(/s$/, "");
+                    for (const item of items) {
+                      if (typeof item === "object" && item !== null && item.value) {
+                        flat.push({ type: entityType, value: item.value, role: item.direction || item.type || item.role || "unknown", context: item.context || "" });
+                      }
+                    }
+                  }
+                  if (flat.length > 0) { updates[key] = flat; continue; }
+                }
+                skippedFields.push(key); continue;
+              }
+              if (OBJECT_OR_ARRAY_FIELDS.includes(key) && typeof val !== "object") { skippedFields.push(key); continue; }
+              // Severity enum validation
+              if (key === "severity" && !VALID_SEVERITIES.includes(val)) {
+                sendJsonError(res, 400, `Invalid severity '${val}': must be one of ${VALID_SEVERITIES.join(", ")}`, requestId);
+                return;
+              }
+              // Confidence range validation
+              if (key === "confidence" && (val < 0 || val > 1)) {
+                sendJsonError(res, 400, `Invalid confidence ${val}: must be between 0.0 and 1.0`, requestId);
+                return;
+              }
               updates[key] = val;
+            }
+            if (skippedFields.length > 0) {
+              log("warn", "agent-action", "Skipped fields with wrong type", {
+                case_id: effectiveCaseId,
+                skipped: skippedFields,
+              });
             }
           } catch {
             sendJsonError(res, 400, "Invalid JSON in data parameter", requestId);
@@ -4001,6 +4052,22 @@ function createServer() {
         if (Object.keys(updates).length === 0) {
           sendJsonError(res, 400, "No updates provided (use status and/or data params)", requestId);
           return;
+        }
+
+        // Stage-specific mandatory field checks — reject incomplete agent output
+        // Only enforced when agent provides data that produced accepted fields (status-only
+        // updates and data with only dropped/unknown fields skip this for backward compatibility)
+        const STAGE_REQUIRED_FIELDS = {
+          triaged: ["title", "severity"],
+          investigated: ["findings", "investigation_notes"],
+        };
+        const dataFieldCount = Object.keys(updates).filter(k => k !== "status").length;
+        if (status && dataParam && dataFieldCount > 0 && STAGE_REQUIRED_FIELDS[status]) {
+          const missing = STAGE_REQUIRED_FIELDS[status].filter(f => !updates[f]);
+          if (missing.length > 0) {
+            sendJsonError(res, 400, `Status '${status}' requires data fields: ${missing.join(", ")}`, requestId);
+            return;
+          }
         }
 
         try {

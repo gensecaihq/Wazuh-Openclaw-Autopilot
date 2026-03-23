@@ -155,6 +155,57 @@ describe("Evidence Pack Management", () => {
     assert.strictEqual(afterStatusChange.verdict_reason, "Login event, no threat");
   });
 
+  it("should store mitre data via updateCase", async () => {
+    await createCase("CASE-TEST-MITRE-001", {
+      title: "MITRE Test Case",
+      severity: "high",
+    });
+
+    const updated = await updateCase("CASE-TEST-MITRE-001", {
+      mitre: [{ technique: "T1110", tactic: "credential-access", name: "Brute Force" }],
+    });
+
+    assert.ok(Array.isArray(updated.mitre));
+    assert.strictEqual(updated.mitre.length, 1);
+    assert.strictEqual(updated.mitre[0].technique, "T1110");
+  });
+
+  it("should normalize single mitre object to array", async () => {
+    await createCase("CASE-TEST-MITRE-002", {
+      title: "MITRE Object Test",
+      severity: "medium",
+    });
+
+    const updated = await updateCase("CASE-TEST-MITRE-002", {
+      mitre: { technique: "T1078", tactic: "persistence", name: "Valid Accounts" },
+    });
+
+    assert.ok(Array.isArray(updated.mitre));
+    assert.strictEqual(updated.mitre.length, 1);
+    assert.strictEqual(updated.mitre[0].technique, "T1078");
+  });
+
+  it("should deduplicate mitre entries by technique", async () => {
+    await createCase("CASE-TEST-MITRE-003", {
+      title: "MITRE Dedup Test",
+      severity: "low",
+    });
+
+    await updateCase("CASE-TEST-MITRE-003", {
+      mitre: [{ technique: "T1110", tactic: "credential-access" }],
+    });
+
+    const updated = await updateCase("CASE-TEST-MITRE-003", {
+      mitre: [
+        { technique: "T1110", tactic: "credential-access" },
+        { technique: "T1078", tactic: "persistence" },
+      ],
+    });
+
+    assert.ok(Array.isArray(updated.mitre));
+    assert.strictEqual(updated.mitre.length, 2);
+  });
+
   it("should get a case by ID", async () => {
     await createCase("CASE-TEST-003", {
       title: "Retrievable Case",

@@ -72,12 +72,17 @@ function rmTestDir() {
 }
 
 // Helper: create a case via the alert endpoint (reuses existing triage logic)
+// Uses unique srcip, dstuser, and agent name per call to prevent entity-based alert grouping
+let ingestCounter = 0;
 async function ingestAlert(server, alertId = `test-${Date.now()}`) {
+  ingestCounter++;
+  const octet3 = Math.floor(ingestCounter / 255) % 255;
+  const octet4 = (ingestCounter % 255) + 1;
   const res = await request(server, "POST", "/api/alerts", {
     alert_id: alertId,
     rule: { id: "5712", level: 12, description: "SSH brute force attack" },
-    agent: { id: "001", name: "prod-web-01", ip: "10.0.1.50" },
-    data: { srcip: "185.220.101.42", dstuser: "root" },
+    agent: { id: String(ingestCounter), name: `host-${alertId}`, ip: "10.0.1.50" },
+    data: { srcip: `185.220.${octet3}.${octet4}`, dstuser: `user-${alertId}` },
   });
   return res.body;
 }
@@ -153,6 +158,90 @@ describe("GET /api/agent-action/update-case", () => {
     const res = await request(server, "GET",
       `/api/agent-action/update-case?case_id=${alert.case_id}&data=not-json`);
     assert.equal(res.status, 400);
+  });
+
+  it("rejects invalid severity enum value", async () => {
+    const alert = await ingestAlert(server, `aa-badsev-${Date.now()}`);
+    const data = JSON.stringify({ severity: "banana" });
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${alert.case_id}&data=${encodeURIComponent(data)}`);
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("Invalid severity"));
+  });
+
+  it("accepts valid severity enum values", async () => {
+    const alert = await ingestAlert(server, `aa-goodsev-${Date.now()}`);
+    const data = JSON.stringify({ severity: "critical" });
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${alert.case_id}&data=${encodeURIComponent(data)}`);
+    assert.equal(res.status, 200);
+  });
+
+  it("rejects out-of-range confidence", async () => {
+    const alert = await ingestAlert(server, `aa-badconf-${Date.now()}`);
+    const data = JSON.stringify({ confidence: 1.5 });
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${alert.case_id}&data=${encodeURIComponent(data)}`);
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("Invalid confidence"));
+  });
+
+  it("rejects negative confidence", async () => {
+    const alert = await ingestAlert(server, `aa-negconf-${Date.now()}`);
+    const data = JSON.stringify({ confidence: -0.5 });
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${alert.case_id}&data=${encodeURIComponent(data)}`);
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("Invalid confidence"));
+  });
+
+  it("rejects triaged status without required title field", async () => {
+    const alert = await ingestAlert(server, `aa-notitle-${Date.now()}`);
+    const data = JSON.stringify({ severity: "high" });
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${alert.case_id}&status=triaged&data=${encodeURIComponent(data)}`);
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("title"));
+  });
+
+  it("rejects triaged status without required severity field", async () => {
+    const alert = await ingestAlert(server, `aa-nosev-${Date.now()}`);
+    const data = JSON.stringify({ title: "Test Title" });
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${alert.case_id}&status=triaged&data=${encodeURIComponent(data)}`);
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error.includes("severity"));
+  });
+
+  it("accepts triaged status with all required fields", async () => {
+    const alert = await ingestAlert(server, `aa-goodtri-${Date.now()}`);
+    const data = JSON.stringify({ title: "SSH Brute Force", severity: "high" });
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${alert.case_id}&status=triaged&data=${encodeURIComponent(data)}`);
+    assert.equal(res.status, 200, `Expected 200 but got ${res.status}: ${JSON.stringify(res.body)}`);
+  });
+
+  it("normalizes nested entities object to flat array", async () => {
+    const alert = await ingestAlert(server, `aa-entobj-${Date.now()}`);
+    const data = JSON.stringify({
+      entities: {
+        ips: [{ value: "10.0.0.1", direction: "source" }],
+        users: [{ value: "admin", type: "target" }],
+      },
+    });
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${alert.case_id}&data=${encodeURIComponent(data)}`);
+    assert.equal(res.status, 200);
+  });
+
+  it("accepts mitre as both object and array", async () => {
+    const alert = await ingestAlert(server, `aa-mitre-${Date.now()}`);
+    const data = JSON.stringify({
+      mitre: { technique: "T1110", tactic: "credential-access" },
+    });
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${alert.case_id}&data=${encodeURIComponent(data)}`);
+    assert.equal(res.status, 200);
   });
 });
 

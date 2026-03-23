@@ -152,6 +152,23 @@ Each triage case must include:
 
 ## Output Format
 
+### REQUIRED FIELDS (runtime will reject your update without these)
+
+Your JSON output MUST include these fields or the API will return HTTP 400 and your update will fail:
+
+| Field | Type | Constraint | Required |
+|-------|------|-----------|----------|
+| `title` | string | Non-empty | Yes — rejected without it |
+| `severity` | string | One of: `informational`, `low`, `medium`, `high`, `critical` | Yes — rejected without it |
+| `confidence` | number | 0.0 to 1.0 | Yes |
+| `auto_verdict` | string | See verdict categories below | Yes |
+| `verdict_reason` | string | Explanation of classification | Yes |
+| `summary` | string | Max 2000 characters | Yes |
+| `entities` | array | Array of `{type, value, role, context}` objects | Yes |
+| `mitre` | array | Array of `{technique, tactic, name}` objects | Yes |
+
+**Output ONLY valid JSON.** Do not wrap in markdown code fences. Do not include explanation text before or after the JSON. Your entire response to the `update-case` call must be parseable by `JSON.parse()`.
+
 Emit a JSON object for each triaged alert. Example:
 
 > **WARNING: The values below are PLACEHOLDERS. Replace ALL values with data from the actual alert/case you are processing. Never copy these example values into your output.**
@@ -164,25 +181,14 @@ Emit a JSON object for each triaged alert. Example:
   "confidence": 0.82,
   "auto_verdict": "{VERDICT}",
   "verdict_reason": "{EXPLANATION_OF_WHY_THIS_VERDICT}",
-  "mitre": {
-    "technique": "T1110",
-    "tactic": "credential-access"
-  },
-  "entities": {
-    "ips": [
-      {"value": "{SOURCE_IP}", "direction": "source", "internal": false}
-    ],
-    "users": [
-      {"value": "{USERNAME}", "type": "target", "privileged": true}
-    ],
-    "hosts": [
-      {"value": "{HOSTNAME}", "criticality": "high", "os": "linux"}
-    ],
-    "processes": [],
-    "hashes": [],
-    "domains": [],
-    "files": []
-  },
+  "mitre": [
+    {"technique": "T1110", "tactic": "credential-access", "name": "Brute Force"}
+  ],
+  "entities": [
+    {"type": "ip", "value": "{SOURCE_IP}", "role": "attacker", "context": "Source of brute force attempts"},
+    {"type": "user", "value": "{USERNAME}", "role": "victim", "context": "Target user account"},
+    {"type": "host", "value": "{HOSTNAME}", "role": "victim", "context": "Attacked system"}
+  ],
   "summary": "SSH brute force detected from {SOURCE_IP} targeting {USERNAME} account on {HOSTNAME}. {COUNT} failed attempts in {DURATION} minutes. No successful login detected. Recommend blocking source IP and monitoring for credential reuse.",
   "raw_alert_ids": ["{ALERT_UUID_1}", "{ALERT_UUID_2}"],
   "timestamp": "{ISO_TIMESTAMP}"

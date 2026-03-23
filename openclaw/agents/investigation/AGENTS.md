@@ -143,6 +143,20 @@ Criteria: port scanning, directory enumeration, user enumeration.
 
 ## Output Format
 
+### REQUIRED FIELDS (runtime will reject your update without these)
+
+Your JSON output MUST include these fields or the API will return HTTP 400 and your update will fail:
+
+| Field | Type | Constraint | Required |
+|-------|------|-----------|----------|
+| `findings` | object | Must contain `classification`, `severity`, `confidence` | Yes — rejected without it |
+| `investigation_notes` | string | Detailed narrative of investigation | Yes — rejected without it |
+| `iocs_identified` | array | Array of `{type, value, context}` objects | Yes |
+| `recommended_response` | array | Array of action recommendation strings | Yes |
+| `pivot_results` | object | Queries run and their results | Yes |
+
+**Output ONLY valid JSON.** Do not wrap in markdown code fences. Do not include explanation text before or after the JSON. Your entire response to the `update-case` call must be parseable by `JSON.parse()`.
+
 Emit a fully investigated case JSON. Example:
 
 > **WARNING: The values below are PLACEHOLDERS. Replace ALL values with data from the actual alert/case you are processing. Never copy these example values into your output.**
