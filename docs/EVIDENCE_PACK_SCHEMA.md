@@ -43,6 +43,8 @@ Current version: `1.0`
 | `summary` | string | No | Detailed case summary |
 | `severity` | enum | Yes | informational, low, medium, high, critical |
 | `confidence` | float | No | Confidence score 0.0-1.0 |
+| `auto_verdict` | string | No | Agent-generated verdict (true_positive, false_positive, benign_positive, true_positive_no_action, informational, suspicious, duplicate, not_applicable) |
+| `verdict_reason` | string | No | Explanation of auto_verdict classification logic |
 
 ### Entities
 
@@ -177,7 +179,10 @@ Response plans proposed by the Response Planner agent.
             "duration": 86400
           },
           "risk": "low",
-          "reversible": true
+          "reversible": true,
+          "rollback_available": true,
+          "rollback_command": "firewall-drop-unblock",
+          "rollback_note": "Removes firewall block rule for this IP"
         }
       ],
       "status": "pending_approval"
