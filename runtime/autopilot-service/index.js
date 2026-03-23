@@ -1155,10 +1155,11 @@ async function updateCase(caseId, updates) {
     if (updates.mitre !== undefined) {
       const incoming = Array.isArray(updates.mitre) ? updates.mitre : [updates.mitre];
       const existing = Array.isArray(evidencePack.mitre) ? evidencePack.mitre : (evidencePack.mitre ? [evidencePack.mitre] : []);
-      // Deduplicate by technique ID
-      const seen = new Map(existing.map(m => [m.technique || m.technique_id || m.id || JSON.stringify(m), m]));
+      // Deduplicate by technique ID — prioritize technique_id over technique (which may be the name)
+      const mitreKey = (m) => m.technique_id || m.id || (m.technique && /^T\d{4}/.test(m.technique) ? m.technique : null) || JSON.stringify(m);
+      const seen = new Map(existing.map(m => [mitreKey(m), m]));
       for (const m of incoming) {
-        const key = m.technique || m.technique_id || m.id || JSON.stringify(m);
+        const key = mitreKey(m);
         if (!seen.has(key)) seen.set(key, m);
       }
       evidencePack.mitre = [...seen.values()];
@@ -1743,14 +1744,21 @@ function approvePlan(planId, approverId, reason = "") {
     case_id: plan.case_id,
   });
 
-  // Sync case status to "approved" so stalled pipeline detector doesn't re-dispatch
+  // Sync case status to "approved" so stalled pipeline detector doesn't re-dispatch.
+  // Skip if case is already in "approved" state (policy-guard may have set it first).
   if (plan.case_id) {
-    updateCase(plan.case_id, { status: "approved" }).catch((err) => {
-      log("warn", "plans", "Failed to sync case status on plan approval", {
-        plan_id: planId,
-        case_id: plan.case_id,
-        error: err.message,
-      });
+    getCase(plan.case_id).then((caseData) => {
+      if (caseData.status !== "approved") {
+        return updateCase(plan.case_id, { status: "approved" });
+      }
+    }).catch((err) => {
+      if (!err.message.includes("Invalid status transition")) {
+        log("warn", "plans", "Failed to sync case status on plan approval", {
+          plan_id: planId,
+          case_id: plan.case_id,
+          error: err.message,
+        });
+      }
     });
   }
 
