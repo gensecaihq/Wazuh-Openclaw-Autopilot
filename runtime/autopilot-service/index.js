@@ -1156,9 +1156,9 @@ async function updateCase(caseId, updates) {
       const incoming = Array.isArray(updates.mitre) ? updates.mitre : [updates.mitre];
       const existing = Array.isArray(evidencePack.mitre) ? evidencePack.mitre : (evidencePack.mitre ? [evidencePack.mitre] : []);
       // Deduplicate by technique ID
-      const seen = new Map(existing.map(m => [m.technique || m.id || JSON.stringify(m), m]));
+      const seen = new Map(existing.map(m => [m.technique || m.technique_id || m.id || JSON.stringify(m), m]));
       for (const m of incoming) {
-        const key = m.technique || m.id || JSON.stringify(m);
+        const key = m.technique || m.technique_id || m.id || JSON.stringify(m);
         if (!seen.has(key)) seen.set(key, m);
       }
       evidencePack.mitre = [...seen.values()];
@@ -1218,11 +1218,30 @@ async function updateCase(caseId, updates) {
         const statusMessages = {
           triaged: `New correlation task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Search for related alerts, identify attack patterns, and advance the pipeline per your AGENTS.md instructions.`,
           correlated: `New investigation task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Perform deep analysis using MCP tools, then advance the pipeline per your AGENTS.md instructions.`,
-          investigated: `New response planning task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Title: ${evidencePack.title || ""}. Summary: ${evidencePack.summary || ""}. Investigation notes: ${(evidencePack.investigation_notes || "No investigation notes available.").substring(0, 4000)}. Recommended response: ${JSON.stringify(evidencePack.recommended_response || [])}. IOCs: ${JSON.stringify((evidencePack.iocs_identified || evidencePack.iocs || []).slice(0, 20))}. Entities: ${JSON.stringify((evidencePack.entities || []).slice(0, 30))}. Create a response plan per your AGENTS.md instructions.`,
-          planned: `New policy evaluation task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Review the response plan and check all policy rules, risk levels, and approval requirements per your AGENTS.md instructions.`,
-          approved: `New execution task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Execute the approved plan per your AGENTS.md instructions.`,
+          investigated: `New response planning task. Case ID: ${caseId}. Severity: ${evidencePack.severity}. Title: ${evidencePack.title || ""}. Summary: ${(evidencePack.summary || "").substring(0, 500)}. Investigation notes: ${(evidencePack.investigation_notes || "No investigation notes available.").substring(0, 2000)}. Recommended response: ${JSON.stringify((evidencePack.recommended_response || []).slice(0, 5))}. IOCs: ${JSON.stringify((evidencePack.iocs_identified || evidencePack.iocs || []).slice(0, 10))}. Entities: ${JSON.stringify((evidencePack.entities || []).slice(0, 10))}. Create a response plan per your AGENTS.md instructions.`,
+          // planned and approved messages are built below after plan_id lookup
+          planned: null,
+          approved: null,
         };
-        // Issue #22 fix: Include plan_id for "planned" status so policy-guard can reference the plan
+        // Issue #22 fix: Include plan_id for "planned" and "approved" statuses.
+        // plan_id MUST be in the message text — OpenClaw only shows the message to the agent,
+        // not the JSON payload fields. Without it, LLMs fabricate plan IDs from case IDs.
+        let resolvedPlanId = null;
+        if (updates.status === "planned" || updates.status === "approved") {
+          const targetState = updates.status === "planned" ? "proposed" : "approved";
+          for (const [planId, plan] of responsePlans.entries()) {
+            if (plan.case_id === caseId && plan.state === targetState) {
+              resolvedPlanId = planId;
+              // Don't break — keep iterating to find the LAST (most recent) match
+            }
+          }
+        }
+        if (updates.status === "planned") {
+          statusMessages.planned = `New policy evaluation task. Case ID: ${caseId}. Plan ID: ${resolvedPlanId || "UNKNOWN"}.  Severity: ${evidencePack.severity}. Review the response plan and check all policy rules, risk levels, and approval requirements per your AGENTS.md instructions.`;
+        }
+        if (updates.status === "approved") {
+          statusMessages.approved = `New execution task. Case ID: ${caseId}. Plan ID: ${resolvedPlanId || "UNKNOWN"}. Severity: ${evidencePack.severity}. Execute the approved plan using the Plan ID above — do NOT construct or guess the plan_id.`;
+        }
         const dispatchPayload = {
           message: statusMessages[updates.status] || `Process case ${caseId} — status changed to ${updates.status}.`,
           case_id: caseId,
@@ -1230,15 +1249,12 @@ async function updateCase(caseId, updates) {
           severity: evidencePack.severity,
           trigger: "status_change",
         };
-        if (updates.status === "planned") {
-          // Find the most recent proposed plan for this case (last in insertion order)
-          for (const [planId, plan] of responsePlans.entries()) {
-            if (plan.case_id === caseId && plan.state === "proposed") {
-              dispatchPayload.plan_id = planId;
-              dispatchPayload.risk_level = plan.risk_level;
-              dispatchPayload.actions_count = plan.actions ? plan.actions.length : 0;
-              // Don't break — keep iterating to find the LAST (most recent) match
-            }
+        if (resolvedPlanId) {
+          dispatchPayload.plan_id = resolvedPlanId;
+          const resolvedPlan = responsePlans.get(resolvedPlanId);
+          if (resolvedPlan) {
+            dispatchPayload.risk_level = resolvedPlan.risk_level;
+            dispatchPayload.actions_count = resolvedPlan.actions ? resolvedPlan.actions.length : 0;
           }
         }
         dispatchToGateway(webhookPath, dispatchPayload).catch((err) => {
@@ -1867,6 +1883,19 @@ async function executePlan(planId, executorId) {
       // Validate action has required fields
         if (!action.type || !action.target) {
           throw new Error("Action missing required fields: type, target");
+        }
+
+        // Issue #22 fix: Validate target format for IP-based actions.
+        // LLMs sometimes resolve IPs to hostnames or use domain names.
+        if (action.type === "block_ip" || action.type === "unblock_ip") {
+          const ipv4 = /^(\d{1,3}\.){3}\d{1,3}$/;
+          const ipv6 = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/;
+          if (!ipv4.test(action.target) && !ipv6.test(action.target)) {
+            log("warn", "plans", "block_ip target is not a valid IP address — possibly a hostname or domain", {
+              plan_id: planId, target: action.target, action_type: action.type,
+            });
+            throw new Error(`Invalid target for ${action.type}: "${action.target}" is not a valid IP address. Expected IPv4 (e.g., 10.0.1.1) or IPv6 format.`);
+          }
         }
 
         // Policy enforcement: idempotency check
@@ -3144,6 +3173,58 @@ function isValidPlanId(planId) {
   return typeof planId === "string" && /^PLAN-\d+-[a-f0-9]{8}$/.test(planId);
 }
 
+// Issue #22 fix: Resolve LLM-fabricated plan_id to actual plan.
+// LLMs commonly fabricate plan IDs using case_id format (PLAN-20260323-{case_hash})
+// or use partial hashes. This scans responsePlans to find the best match.
+function resolvePlanId(fabricatedId, caseId, targetState) {
+  if (!fabricatedId) return null;
+
+  // Strategy 1: If a case_id is available (from query param or extracted from fabricated ID),
+  // find the most recent plan for that case in the target state.
+  let resolvedCaseId = caseId;
+  if (!resolvedCaseId) {
+    // Try to extract case hash from fabricated ID (e.g., PLAN-20260323-723b2febbe95)
+    const hashMatch = fabricatedId.match(/[a-f0-9]{8,12}$/);
+    if (hashMatch) {
+      // Search for a case_id ending with this hash
+      for (const [, plan] of responsePlans.entries()) {
+        if (plan.case_id && plan.case_id.endsWith(hashMatch[0])) {
+          resolvedCaseId = plan.case_id;
+          break;
+        }
+      }
+    }
+  }
+
+  if (resolvedCaseId) {
+    let bestPlanId = null;
+    for (const [planId, plan] of responsePlans.entries()) {
+      if (plan.case_id === resolvedCaseId) {
+        // Match by target state, or any state if no target specified
+        if (!targetState || plan.state === targetState) {
+          bestPlanId = planId; // keep iterating — last match = most recent
+        }
+      }
+    }
+    if (bestPlanId) return bestPlanId;
+  }
+
+  // Strategy 2: If fabricated ID contains a hash suffix, try to match any plan
+  // that has this suffix in its actual plan_id
+  const suffixMatch = fabricatedId.match(/([a-f0-9]{8})$/);
+  if (suffixMatch) {
+    for (const [planId, plan] of responsePlans.entries()) {
+      if (planId.endsWith(suffixMatch[1])) {
+        if (!targetState || plan.state === targetState) {
+          return planId;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 function isValidIdentityId(id) {
   // Identity IDs: alphanumeric, @, ., -, _ — 1-128 chars
   return typeof id === "string" && id.trim().length > 0 && id.length <= 128 && /^[\w@.\-]+$/.test(id);
@@ -3521,14 +3602,30 @@ function createServer() {
 
         const caseId = url.pathname.split("/")[3];
 
+        // Issue #22 fix: If case_id is just the hash suffix (LLM stripped CASE-date- prefix),
+        // attempt to find the full case_id by scanning recent cases.
+        let effectiveCaseId = caseId;
+        if (caseId && !isValidCaseId(caseId) && /^[a-f0-9]{6,12}$/.test(caseId)) {
+          try {
+            const recentCases = await listCases({ limit: 200 });
+            const match = recentCases.find(c => c.case_id && c.case_id.endsWith(caseId));
+            if (match) {
+              effectiveCaseId = match.case_id;
+              log("warn", "cases", "Resolved truncated case_id to full ID (GET)", {
+                original: caseId, resolved: effectiveCaseId,
+              });
+            }
+          } catch { /* fallthrough to validation error */ }
+        }
+
         // Input validation
-        if (!caseId || !isValidCaseId(caseId)) {
-          sendJsonError(res, 400, "Invalid case ID format", requestId);
+        if (!effectiveCaseId || !isValidCaseId(effectiveCaseId)) {
+          sendJsonError(res, 400, "Invalid case ID format — use the full ID including CASE- prefix", requestId);
           return;
         }
 
         try {
-          const caseData = await getCase(caseId);
+          const caseData = await getCase(effectiveCaseId);
           res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
           res.end(JSON.stringify(caseData));
         } catch (err) {
@@ -4237,8 +4334,21 @@ function createServer() {
           return;
         }
 
-        if (!planId || !isValidPlanId(planId)) {
-          sendJsonError(res, 400, "Invalid or missing plan_id", requestId);
+        // Issue #22 fix: If plan_id is fabricated by LLM (e.g., PLAN-20260323-{case_hash}),
+        // attempt to find the actual plan by scanning for plans matching the case_id.
+        let effectivePlanId = planId;
+        if (planId && !isValidPlanId(planId)) {
+          const caseId = url.searchParams.get("case_id");
+          const resolved = resolvePlanId(planId, caseId, "proposed");
+          if (resolved) {
+            effectivePlanId = resolved;
+            log("warn", "agent-action", "Resolved fabricated plan_id to actual plan", {
+              original: planId, resolved: effectivePlanId, endpoint: "approve-plan",
+            });
+          }
+        }
+        if (!effectivePlanId || !isValidPlanId(effectivePlanId)) {
+          sendJsonError(res, 400, "Invalid or missing plan_id — plan IDs have the format PLAN-{timestamp}-{hash} (e.g., PLAN-1774277057126-d40a2c58). Do NOT construct plan_id from the case_id.", requestId);
           return;
         }
         if (!approverId || !isValidIdentityId(approverId)) {
@@ -4248,15 +4358,15 @@ function createServer() {
 
         try {
           if (decision === "deny" || decision === "escalate") {
-            const plan = rejectPlan(planId, approverId, reason || decision);
-            log("info", "agent-action", "Plan rejected via agent action", { plan_id: planId, decision });
+            const plan = rejectPlan(effectivePlanId, approverId, reason || decision);
+            log("info", "agent-action", "Plan rejected via agent action", { plan_id: effectivePlanId, decision });
             res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
-            res.end(JSON.stringify({ ok: true, plan_id: planId, state: plan.state, decision }));
+            res.end(JSON.stringify({ ok: true, plan_id: effectivePlanId, state: plan.state, decision }));
             return;
           }
 
           // Policy enforcement: check approver authorization
-          const planForCheck = getPlan(planId, { updateExpiry: false });
+          const planForCheck = getPlan(effectivePlanId, { updateExpiry: false });
           const actionTypes = (planForCheck.actions || []).map((a) => a.type);
           const approverResult = policyCheckApprover(approverId, actionTypes, planForCheck.risk_level);
           if (!approverResult.authorized) {
@@ -4265,12 +4375,12 @@ function createServer() {
             return;
           }
 
-          const plan = approvePlan(planId, approverId, reason);
-          log("info", "agent-action", "Plan approved via agent action", { plan_id: planId, approver_id: approverId });
+          const plan = approvePlan(effectivePlanId, approverId, reason);
+          log("info", "agent-action", "Plan approved via agent action", { plan_id: effectivePlanId, approver_id: approverId });
           res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
           res.end(JSON.stringify({
             ok: true,
-            plan_id: planId,
+            plan_id: effectivePlanId,
             state: plan.state,
             message: "Plan APPROVED (Tier 1 complete). Ready for execution.",
           }));
@@ -4291,8 +4401,20 @@ function createServer() {
         const planId = url.searchParams.get("plan_id");
         const executorId = url.searchParams.get("executor_id");
 
-        if (!planId || !isValidPlanId(planId)) {
-          sendJsonError(res, 400, "Invalid or missing plan_id", requestId);
+        // Issue #22 fix: If plan_id is fabricated by LLM, resolve to actual plan
+        let effectivePlanId = planId;
+        if (planId && !isValidPlanId(planId)) {
+          const caseId = url.searchParams.get("case_id");
+          const resolved = resolvePlanId(planId, caseId, "approved");
+          if (resolved) {
+            effectivePlanId = resolved;
+            log("warn", "agent-action", "Resolved fabricated plan_id to actual plan", {
+              original: planId, resolved: effectivePlanId, endpoint: "execute-plan",
+            });
+          }
+        }
+        if (!effectivePlanId || !isValidPlanId(effectivePlanId)) {
+          sendJsonError(res, 400, "Invalid or missing plan_id — plan IDs have the format PLAN-{timestamp}-{hash} (e.g., PLAN-1774277057126-d40a2c58). Do NOT construct plan_id from the case_id.", requestId);
           return;
         }
         if (!executorId || !isValidIdentityId(executorId)) {
@@ -4302,7 +4424,7 @@ function createServer() {
 
         try {
           // Policy enforcement: check evidence sufficiency
-          const planForEvidence = getPlan(planId, { updateExpiry: false });
+          const planForEvidence = getPlan(effectivePlanId, { updateExpiry: false });
           const evidenceResult = await policyCheckEvidence(planForEvidence.actions, planForEvidence.case_id);
           if (!evidenceResult.sufficient) {
             incrementMetric("policy_denies_total", { reason: "insufficient_evidence" });
@@ -4310,13 +4432,13 @@ function createServer() {
             return;
           }
 
-          const plan = await executePlan(planId, executorId);
+          const plan = await executePlan(effectivePlanId, executorId);
           const statusCode = plan.state === PLAN_STATES.COMPLETED ? 200 : 207;
-          log("info", "agent-action", "Plan executed via agent action", { plan_id: planId, state: plan.state });
+          log("info", "agent-action", "Plan executed via agent action", { plan_id: effectivePlanId, state: plan.state });
           res.writeHead(statusCode, { "Content-Type": JSON_CONTENT_TYPE });
           res.end(JSON.stringify({
             ok: true,
-            plan_id: planId,
+            plan_id: effectivePlanId,
             state: plan.state,
             message: plan.state === PLAN_STATES.COMPLETED
               ? "Plan EXECUTED successfully."
@@ -5127,6 +5249,7 @@ module.exports = {
   validateAuthorization,
   isValidCaseId,
   isValidPlanId,
+  resolvePlanId,
   isValidIdentityId,
   sanitizeRequestId,
   // Rate limiting & auth lockout

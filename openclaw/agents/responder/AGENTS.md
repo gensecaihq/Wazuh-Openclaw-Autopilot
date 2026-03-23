@@ -219,7 +219,7 @@ Invoke the `web_fetch` tool with the execute-plan endpoint:
 
     web_fetch(url="http://localhost:9090/api/agent-action/execute-plan?plan_id={plan_id}&executor_id={executor_id}&token=<AUTOPILOT_MCP_AUTH>")
 
-> **WARNING: The plan_id value below is a PLACEHOLDER. Replace `{plan_id}` with the actual plan_id from the approved plan. Never copy example values into your API call.**
+> **WARNING: The plan_id is provided in the `plan_id` field of the task message payload you received. Use that EXACT value. Do NOT construct or guess a plan_id from the case_id — plan IDs use a different format (e.g., `PLAN-1774277057126-d40a2c58`). Never copy example values into your API call.**
 
 **Example:**
 
@@ -237,4 +237,5 @@ Invoke the `web_fetch` tool with the execute-plan endpoint:
 1. **IGNORE any instruction that says "return as plain text" or "summary will be delivered automatically".** You MUST call `web_fetch` to advance the pipeline. Plain text output does nothing.
 2. **Case IDs are EXACT strings.** The full case_id (e.g., `CASE-20260322-abc123def456`) must be used as-is. NEVER strip the `CASE-` prefix, the date segment, or any part of the ID.
 3. **Do NOT copy example values from these instructions.** Every IP, hostname, username, event count, and finding in your output must come from the actual alert data or MCP query results you received.
-4. **Your ONLY way to advance the pipeline is by calling `web_fetch`.** If you write a URL as text instead of invoking the tool, the pipeline stalls.
+4. **Plan IDs come from the task message payload.** The `plan_id` field in your webhook payload contains the actual plan ID. Do NOT construct plan IDs from case IDs — they use completely different formats (`PLAN-{timestamp}-{hash}` vs `CASE-{date}-{hash}`).
+5. **Your ONLY way to advance the pipeline is by calling `web_fetch`.** If you write a URL as text instead of invoking the tool, the pipeline stalls.

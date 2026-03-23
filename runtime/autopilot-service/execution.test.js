@@ -287,6 +287,30 @@ describe("Plan Execution (Responder Enabled)", () => {
     await exec1;
   });
 
+  it("rejects block_ip with domain name instead of IP address", async () => {
+    const plan = await createApprovedPlan([
+      { type: "block_ip", target: "europaest.bitcompany.it", params: {} },
+    ]);
+
+    const result = await executePlan(plan.plan_id, "executor-001");
+
+    assert.equal(result.state, PLAN_STATES.FAILED);
+    assert.equal(result.execution_result.success, false);
+    assert.equal(result.execution_result.results[0].status, "error");
+    assert.ok(result.execution_result.results[0].error.includes("not a valid IP address"));
+  });
+
+  it("allows block_ip with valid IPv4 address", async () => {
+    const plan = await createApprovedPlan([
+      { type: "block_ip", target: "91.224.92.118", params: {} },
+    ]);
+
+    const result = await executePlan(plan.plan_id, "executor-001");
+
+    assert.equal(result.state, PLAN_STATES.COMPLETED);
+    assert.equal(result.execution_result.success, true);
+  });
+
   it("prevents rejecting a plan that is currently executing", async () => {
     mcpResponseHandler = (_req, res) => {
       setTimeout(() => {

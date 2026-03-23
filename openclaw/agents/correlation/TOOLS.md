@@ -46,7 +46,7 @@ GET /cases/_search
 - Short-circuit: if two cases share zero entities, skip temporal and rule similarity checks entirely.
 
 ### Cross-Platform Entity Normalization
-- Hostnames: normalize to lowercase. Windows may report `PROD-WEB-01`; Linux reports `prod-web-01`.
+- Hostnames: normalize to lowercase. Windows may report `{HOSTNAME}` in uppercase; Linux reports the same hostname in lowercase.
 - IP addresses: strip leading zeros (`010.000.001.001` -> `10.0.1.1`). Normalize IPv6 to compressed form.
 - Users: normalize to lowercase. Windows domain users arrive as `DOMAIN\user`; strip the domain prefix for matching but retain it in the entity record.
 

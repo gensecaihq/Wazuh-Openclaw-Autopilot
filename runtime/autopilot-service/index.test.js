@@ -34,6 +34,8 @@ const {
   PLAN_STATES,
   validateAuthorization,
   isValidCaseId,
+  isValidPlanId,
+  resolvePlanId,
   dispatchToGateway,
   loadPolicyConfig,
   policyCheckAction,
@@ -752,6 +754,34 @@ describe("Case ID Validation", () => {
     assert.strictEqual(isValidCaseId("../etc/passwd"), false);
     assert.strictEqual(isValidCaseId("case with spaces"), false);
     assert.strictEqual(isValidCaseId("a".repeat(65)), false);
+  });
+});
+
+describe("Plan ID Validation", () => {
+  it("should accept valid plan IDs", () => {
+    assert.strictEqual(isValidPlanId("PLAN-1774277057126-d40a2c58"), true);
+    assert.strictEqual(isValidPlanId("PLAN-1234567890-abcdef01"), true);
+  });
+
+  it("should reject invalid plan IDs", () => {
+    assert.strictEqual(isValidPlanId(""), false);
+    assert.strictEqual(isValidPlanId("PLAN-20260323-723b2febbe95"), false); // LLM-fabricated from case_id
+    assert.strictEqual(isValidPlanId("plan-123-abc"), false); // lowercase
+    assert.strictEqual(isValidPlanId("CASE-20260323-abc12345"), false); // case_id format
+  });
+});
+
+describe("resolvePlanId", () => {
+  // resolvePlanId works against the in-memory responsePlans Map which is internal,
+  // so we test via createResponsePlan to populate it
+  it("should return null for null input", () => {
+    assert.strictEqual(resolvePlanId(null, null, null), null);
+    assert.strictEqual(resolvePlanId("", null, null), null);
+  });
+
+  it("should return null when no plans exist matching hash", () => {
+    const result = resolvePlanId("PLAN-20260323-ffffffff", null, "proposed");
+    assert.strictEqual(result, null);
   });
 });
 
