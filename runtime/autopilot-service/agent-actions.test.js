@@ -243,6 +243,30 @@ describe("GET /api/agent-action/update-case", () => {
       `/api/agent-action/update-case?case_id=${alert.case_id}&data=${encodeURIComponent(data)}`);
     assert.equal(res.status, 200);
   });
+  it("coerces string confidence from LLMs to number", async () => {
+    const alert = await ingestAlert(server, `aa-strconf-${Date.now()}`);
+    const data = JSON.stringify({ confidence: "0.85" });
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${alert.case_id}&data=${encodeURIComponent(data)}`);
+    assert.equal(res.status, 200);
+  });
+
+  it("normalizes uppercase severity from LLMs", async () => {
+    const alert = await ingestAlert(server, `aa-ucsev-${Date.now()}`);
+    const data = JSON.stringify({ title: "Test Title", severity: "Critical" });
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${alert.case_id}&status=triaged&data=${encodeURIComponent(data)}`);
+    assert.equal(res.status, 200);
+  });
+
+  it("skips non-numeric string confidence without crashing", async () => {
+    const alert = await ingestAlert(server, `aa-nanconf-${Date.now()}`);
+    // Include a valid field alongside the bad confidence so the update has something to apply
+    const data = JSON.stringify({ confidence: "high", summary: "Test summary" });
+    const res = await request(server, "GET",
+      `/api/agent-action/update-case?case_id=${alert.case_id}&data=${encodeURIComponent(data)}`);
+    assert.equal(res.status, 200);
+  });
 });
 
 // ===================================================================
@@ -274,6 +298,20 @@ describe("GET /api/agent-action/create-plan", () => {
     assert.equal(res.body.ok, true);
     assert.ok(res.body.plan_id);
     assert.equal(res.body.state, "proposed");
+  });
+
+  it("normalizes uppercase risk_level from LLMs", async () => {
+    const actions = JSON.stringify([{ type: "block_ip", target: "1.2.3.4" }]);
+    const res = await request(server, "GET",
+      `/api/agent-action/create-plan?case_id=${testCaseId}&title=Block%20attacker&risk_level=Low&actions=${encodeURIComponent(actions)}`);
+    assert.equal(res.status, 201, `Expected 201 but got ${res.status}: ${JSON.stringify(res.body)}`);
+  });
+
+  it("coerces string rollback_available in actions from LLMs", async () => {
+    const actions = JSON.stringify([{ type: "block_ip", target: "1.2.3.4", rollback_available: "true" }]);
+    const res = await request(server, "GET",
+      `/api/agent-action/create-plan?case_id=${testCaseId}&title=Rollback%20coerce&risk_level=low&actions=${encodeURIComponent(actions)}`);
+    assert.equal(res.status, 201, `Expected 201 but got ${res.status}: ${JSON.stringify(res.body)}`);
   });
 
   it("rejects missing case_id", async () => {

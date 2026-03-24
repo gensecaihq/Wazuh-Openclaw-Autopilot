@@ -1521,8 +1521,16 @@ function validatePlanAction(action, index) {
     errors.push(`Action ${index}: missing or invalid 'target' field`);
   }
   // Rollback metadata validation (optional fields)
-  if (action.rollback_available !== undefined && typeof action.rollback_available !== "boolean") {
-    errors.push(`Action ${index}: 'rollback_available' must be a boolean`);
+  // Coerce string booleans from LLMs (e.g. "true"/"false") to actual booleans
+  if (action.rollback_available !== undefined) {
+    if (typeof action.rollback_available === "string") {
+      const lower = action.rollback_available.toLowerCase().trim();
+      if (lower === "true") { action.rollback_available = true; }
+      else if (lower === "false") { action.rollback_available = false; }
+      else { errors.push(`Action ${index}: 'rollback_available' must be a boolean`); }
+    } else if (typeof action.rollback_available !== "boolean") {
+      errors.push(`Action ${index}: 'rollback_available' must be a boolean`);
+    }
   }
   if (action.rollback_command !== undefined && typeof action.rollback_command !== "string") {
     errors.push(`Action ${index}: 'rollback_command' must be a string`);
@@ -4109,7 +4117,13 @@ function createServer() {
               if (!ALLOWED_DATA_FIELDS.includes(key)) continue;
               const val = parsed[key];
               if (STRING_FIELDS.includes(key) && typeof val !== "string") { skippedFields.push(key); continue; }
-              if (NUMBER_FIELDS.includes(key) && typeof val !== "number") { skippedFields.push(key); continue; }
+              if (NUMBER_FIELDS.includes(key) && typeof val !== "number") {
+                // Coerce string numbers from LLMs (e.g. "0.9" → 0.9)
+                if (typeof val === "string") {
+                  const coerced = Number(val);
+                  if (!Number.isNaN(coerced)) { parsed[key] = coerced; } else { skippedFields.push(key); continue; }
+                } else { skippedFields.push(key); continue; }
+              }
               if (OBJECT_FIELDS.includes(key) && (typeof val !== "object" || val === null || Array.isArray(val))) { skippedFields.push(key); continue; }
               if (ARRAY_FIELDS.includes(key) && !Array.isArray(val)) {
                 // entities: accept nested object format {ips:[...], users:[...], ...} and normalize to flat array
@@ -4130,17 +4144,21 @@ function createServer() {
                 skippedFields.push(key); continue;
               }
               if (OBJECT_OR_ARRAY_FIELDS.includes(key) && typeof val !== "object") { skippedFields.push(key); continue; }
-              // Severity enum validation
-              if (key === "severity" && !VALID_SEVERITIES.includes(val)) {
-                sendJsonError(res, 400, `Invalid severity '${val}': must be one of ${VALID_SEVERITIES.join(", ")}`, requestId);
-                return;
+              // Severity enum validation (normalize case from LLMs e.g. "Critical" → "critical")
+              if (key === "severity") {
+                const normalized = typeof val === "string" ? val.toLowerCase().trim() : val;
+                if (!VALID_SEVERITIES.includes(normalized)) {
+                  sendJsonError(res, 400, `Invalid severity '${val}': must be one of ${VALID_SEVERITIES.join(", ")}`, requestId);
+                  return;
+                }
+                parsed[key] = normalized;
               }
               // Confidence range validation
-              if (key === "confidence" && (val < 0 || val > 1)) {
+              if (key === "confidence" && (parsed[key] < 0 || parsed[key] > 1)) {
                 sendJsonError(res, 400, `Invalid confidence ${val}: must be between 0.0 and 1.0`, requestId);
                 return;
               }
-              updates[key] = val;
+              updates[key] = parsed[key]; // Use parsed[key] to pick up coerced values
             }
             if (skippedFields.length > 0) {
               log("warn", "agent-action", "Skipped fields with wrong type", {
@@ -4203,7 +4221,8 @@ function createServer() {
         const caseId = url.searchParams.get("case_id");
         const title = url.searchParams.get("title");
         const description = url.searchParams.get("description") || "";
-        const riskLevel = url.searchParams.get("risk_level") || "medium";
+        const riskLevelRaw = url.searchParams.get("risk_level") || "medium";
+        const riskLevel = riskLevelRaw.toLowerCase().trim(); // Normalize case from LLMs
         const actionsParam = url.searchParams.get("actions");
 
         const VALID_RISK_LEVELS = ["low", "medium", "high", "critical"];
@@ -4653,6 +4672,10 @@ function createServer() {
         // If confidence not provided in body, inherit from case
         if (body.confidence === undefined || body.confidence === null) {
           body.confidence = planCaseData.confidence || 0;
+        } else if (typeof body.confidence === "string") {
+          // Coerce string numbers from LLMs (e.g. "0.9" → 0.9)
+          const parsed = parseFloat(body.confidence);
+          body.confidence = Number.isNaN(parsed) ? 0 : parsed;
         }
 
         try {
@@ -4879,6 +4902,10 @@ function createServer() {
         const body = await parseJsonBody(req);
 
         const validVerdicts = ["false_positive", "true_positive", "needs_review"];
+        // Normalize case and whitespace from LLMs (e.g. "True_Positive" → "true_positive")
+        if (body.verdict && typeof body.verdict === "string") {
+          body.verdict = body.verdict.toLowerCase().trim();
+        }
         if (!body.verdict || !validVerdicts.includes(body.verdict)) {
           sendJsonError(res, 400, `verdict must be one of: ${validVerdicts.join(", ")}`, requestId);
           return;

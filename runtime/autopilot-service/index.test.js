@@ -523,6 +523,21 @@ describe("Response Plans - Two-Tier Approval", () => {
     assert.strictEqual(plan.actions[0].rollback_command, undefined);
   });
 
+  it("should coerce string 'true'/'false' to boolean for rollback_available", () => {
+    const plan = createResponsePlan({
+      case_id: "CASE-ROLLBACK-COERCE",
+      title: "String Boolean Coercion",
+      actions: [
+        { type: "block_ip", target: "10.0.0.5", rollback_available: "true" },
+        { type: "block_ip", target: "10.0.0.6", rollback_available: "false" },
+        { type: "block_ip", target: "10.0.0.7", rollback_available: " True " },
+      ],
+    });
+    assert.strictEqual(plan.actions[0].rollback_available, true);
+    assert.strictEqual(plan.actions[1].rollback_available, false);
+    assert.strictEqual(plan.actions[2].rollback_available, true);
+  });
+
   it("should reject invalid rollback_available type", () => {
     assert.throws(() => {
       createResponsePlan({
