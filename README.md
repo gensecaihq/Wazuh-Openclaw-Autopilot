@@ -677,9 +677,9 @@ Features:
 │   └── agents/                 # 7 SOC agents + _shared/ (AGENTS.md, IDENTITY.md, TOOLS.md, HEARTBEAT.md, MEMORY.md)
 ├── runtime/autopilot-service/
 │   ├── Dockerfile              # Production container
-│   ├── index.js                # Main service (4700+ LOC)
+│   ├── index.js                # Main service (5700+ LOC)
 │   ├── slack.js                # Slack Socket Mode integration
-│   └── *.test.js               # Test suite (355 tests across 11 files)
+│   └── *.test.js               # Test suite (467 tests across 13 files)
 ├── policies/
 │   ├── policy.yaml             # Security policies & approvers
 │   └── toolmap.yaml            # MCP tool mappings
