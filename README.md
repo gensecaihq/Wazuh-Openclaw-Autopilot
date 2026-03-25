@@ -66,7 +66,7 @@
 
 ## Overview
 
-**Wazuh OpenClaw Autopilot** adds an autonomous intelligence layer to your Wazuh SIEM. Using [OpenClaw](https://openclaw.ai) AI agents connected via the [Wazuh MCP Server ]([https://modelcontextprotocol.io](https://github.com/gensecaihq/Wazuh-MCP-Server)), it automatically triages alerts, correlates related incidents, and generates risk-assessed response plans—all with mandatory human approval before any action is taken.
+**Wazuh OpenClaw Autopilot** adds an autonomous intelligence layer to your Wazuh SIEM. Using [OpenClaw](https://openclaw.ai) AI agents connected via the [Wazuh MCP Server]([https://modelcontextprotocol.io](https://github.com/gensecaihq/Wazuh-MCP-Server)), it automatically triages alerts, correlates related incidents, and generates risk-assessed response plans—all with mandatory human approval before any action is taken.
 
 ### Key Capabilities
 
