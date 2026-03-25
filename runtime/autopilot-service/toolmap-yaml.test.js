@@ -282,6 +282,33 @@ describe("buildMcpParams", () => {
     assert.equal(params.duration, 5400);
   });
 
+  it("clamps duration exceeding 86400s to max allowed", () => {
+    const params = buildMcpParams({
+      type: "block_ip",
+      target: "192.168.1.100",
+      params: { duration: "7d" }, // 604800s > 86400s max
+    });
+    assert.equal(params.duration, 86400);
+  });
+
+  it("does not clamp duration within allowed range", () => {
+    const params = buildMcpParams({
+      type: "block_ip",
+      target: "192.168.1.100",
+      params: { duration: "12h" }, // 43200s < 86400s max
+    });
+    assert.equal(params.duration, 43200);
+  });
+
+  it("clamps numeric duration exceeding max", () => {
+    const params = buildMcpParams({
+      type: "block_ip",
+      target: "192.168.1.100",
+      params: { duration: 604800 },
+    });
+    assert.equal(params.duration, 86400);
+  });
+
   it("uses target as fallback param name when no toolmap loaded", () => {
     // Without toolmap, falls back to "target"
     const params = buildMcpParams({

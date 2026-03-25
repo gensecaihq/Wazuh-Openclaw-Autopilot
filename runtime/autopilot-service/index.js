@@ -1962,8 +1962,20 @@ async function executePlan(planId, executorId) {
           ),
         ]);
 
+        // Check for MCP-level isError flag (HTTP 200 but tool returned error)
+        // The MCP server may return HTTP 200 with isError: true in the response body
+        const mcpIsError = mcpResult.data && mcpResult.data.isError === true;
+        const actionSuccess = mcpResult.success && !mcpIsError;
+
+        if (mcpIsError) {
+          log("warn", "plans", "MCP tool returned isError despite HTTP success", {
+            plan_id: planId, action_type: action.type, target: action.target,
+            mcp_error: mcpResult.data.content?.[0]?.text || "unknown",
+          });
+        }
+
         // Record successful execution for rate limiting and dedup tracking
-        if (mcpResult.success) {
+        if (actionSuccess) {
           recordActionExecution(action.type);
           recordActionForDedup(action.type, action.target);
         }
@@ -1971,12 +1983,12 @@ async function executePlan(planId, executorId) {
         results.push({
           action_type: action.type,
           target: action.target,
-          status: mcpResult.success ? "success" : "failed",
+          status: actionSuccess ? "success" : "failed",
           mcp_response: mcpResult.data,
           timestamp: new Date().toISOString(),
         });
 
-        if (!mcpResult.success) {
+        if (!actionSuccess) {
           allSuccess = false;
         }
       } catch (err) {
@@ -2025,6 +2037,17 @@ async function executePlan(planId, executorId) {
     });
 
     // Update the associated case with execution results
+    // Build mcp_calls records from execution results for evidence pack
+    const mcpCallRecords = results
+      .filter((r) => r.mcp_response)
+      .map((r) => ({
+        tool: r.action_type,
+        target: r.target,
+        status: r.status,
+        timestamp: r.timestamp,
+        plan_id: planId,
+      }));
+
     try {
       await updateCase(plan.case_id, {
         actions: [
@@ -2035,6 +2058,7 @@ async function executePlan(planId, executorId) {
             result: plan.execution_result,
           },
         ],
+        ...(mcpCallRecords.length > 0 && { mcp_calls: mcpCallRecords }),
       });
     } catch (err) {
       log("warn", "plans", "Failed to update case with execution results", {
@@ -2744,6 +2768,16 @@ function buildMcpParams(action) {
       log("warn", "mcp", "Could not parse duration value, removing", { duration: params.duration, action: action.type });
       delete params.duration;
     }
+  }
+
+  // Clamp duration to Wazuh MCP Server max (86400s = 24h)
+  // LLMs sometimes request longer durations (e.g. 7d) that exceed the server limit
+  const MAX_BLOCK_DURATION = 86400;
+  if (params.duration !== undefined && params.duration > MAX_BLOCK_DURATION) {
+    log("warn", "mcp", "Duration exceeds max allowed, clamping to 86400s (24h)", {
+      original: params.duration, clamped: MAX_BLOCK_DURATION, action: action.type,
+    });
+    params.duration = MAX_BLOCK_DURATION;
   }
 
   return params;
