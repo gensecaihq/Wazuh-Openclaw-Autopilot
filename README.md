@@ -679,7 +679,7 @@ Features:
 │   ├── Dockerfile              # Production container
 │   ├── index.js                # Main service (5700+ LOC)
 │   ├── slack.js                # Slack Socket Mode integration
-│   └── *.test.js               # Test suite (476 tests across 13 files)
+│   └── *.test.js               # Test suite (490 tests across 14 files)
 ├── policies/
 │   ├── policy.yaml             # Security policies & approvers
 │   └── toolmap.yaml            # MCP tool mappings
