@@ -878,7 +878,7 @@ deploy_agents() {
         "agentDir": "~/.openclaw/wazuh-autopilot/agents/triage",
         "tools": {
           "profile": "minimal",
-          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history"],
           "deny": ["write", "exec", "delete", "browser"]
         },
         "heartbeat": {"every": "10m"}
@@ -889,7 +889,7 @@ deploy_agents() {
         "agentDir": "~/.openclaw/wazuh-autopilot/agents/correlation",
         "tools": {
           "profile": "minimal",
-          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history"],
           "deny": ["write", "exec", "delete", "browser"]
         },
         "heartbeat": {"every": "5m"}
@@ -900,7 +900,7 @@ deploy_agents() {
         "agentDir": "~/.openclaw/wazuh-autopilot/agents/investigation",
         "tools": {
           "profile": "minimal",
-          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "alsoAllow": ["read", "edit", "web_fetch", "sessions_list", "sessions_history"],
           "deny": ["write", "exec", "delete", "browser"]
         }
       },
@@ -934,7 +934,7 @@ deploy_agents() {
         },
         "tools": {
           "profile": "coding",
-          "alsoAllow": ["read", "write", "exec", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+          "alsoAllow": ["read", "write", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
           "deny": ["browser", "delete"],
           "elevated": {"enabled": true}
         },
@@ -980,7 +980,7 @@ deploy_agents() {
 
   "tools": {
     "profile": "minimal",
-    "alsoAllow": ["read", "web_fetch", "sessions_list", "sessions_history", "sessions_send"],
+    "alsoAllow": ["read", "web_fetch", "sessions_list", "sessions_history"],
     "deny": ["browser", "canvas"],
     "web": {
       "search": {"enabled": false},

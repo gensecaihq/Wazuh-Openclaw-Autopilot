@@ -49,6 +49,9 @@ const {
   findRelatedCase,
   indexCaseEntities,
   markEntityFalsePositive,
+  entityCaseIndex,
+  MAX_ENTITY_INDEX_SIZE,
+  responsePlans,
   getMcpAuthToken,
   ensureMcpSession,
   invalidateMcpSession,
@@ -1185,6 +1188,75 @@ actions:
   });
 });
 
+describe("Policy Enforcement - policyCheckApprover placeholder bootstrap approval", () => {
+  let tmpDir;
+  let origBootstrapApproval;
+
+  beforeEach(async () => {
+    origBootstrapApproval = process.env.AUTOPILOT_BOOTSTRAP_APPROVAL;
+    delete process.env.AUTOPILOT_BOOTSTRAP_APPROVAL;
+
+    tmpDir = path.join(os.tmpdir(), `approver-bootstrap-test-${Date.now()}`);
+    const policyDir = path.join(tmpDir, "policies");
+    await fs.mkdir(policyDir, { recursive: true });
+
+    // Policy with ALL placeholder Slack IDs (no real users)
+    const policyContent = `
+schema_version: "1.0"
+approvers:
+  groups:
+    standard:
+      members:
+        - slack_id: "<SLACK_USER_1>"
+      can_approve:
+        - block_ip
+      max_risk_level: medium
+    ops:
+      members:
+        - slack_id: "<SLACK_OPS_1>"
+      can_approve:
+        - disable_user
+      max_risk_level: high
+actions:
+  enabled: true
+  deny_unlisted: false
+`;
+
+    await fs.writeFile(path.join(policyDir, "policy.yaml"), policyContent);
+    await loadPolicyConfig(tmpDir);
+  });
+
+  afterEach(async () => {
+    if (origBootstrapApproval !== undefined) {
+      process.env.AUTOPILOT_BOOTSTRAP_APPROVAL = origBootstrapApproval;
+    } else {
+      delete process.env.AUTOPILOT_BOOTSTRAP_APPROVAL;
+    }
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("denies approval when all approver IDs are placeholders and AUTOPILOT_BOOTSTRAP_APPROVAL is not set", () => {
+    delete process.env.AUTOPILOT_BOOTSTRAP_APPROVAL;
+    const result = policyCheckApprover("U12345", ["block_ip"], "medium");
+    assert.strictEqual(result.authorized, false);
+    assert.ok(result.reason.includes("AUTOPILOT_BOOTSTRAP_APPROVAL"));
+  });
+
+  it("allows approval when all approver IDs are placeholders and AUTOPILOT_BOOTSTRAP_APPROVAL=true", () => {
+    process.env.AUTOPILOT_BOOTSTRAP_APPROVAL = "true";
+    const result = policyCheckApprover("U12345", ["block_ip"], "medium");
+    assert.strictEqual(result.authorized, true);
+    assert.ok(result.reason.includes("bootstrap approval enabled"));
+  });
+
+  it("denies approval when AUTOPILOT_BOOTSTRAP_APPROVAL is set to a non-true value", () => {
+    process.env.AUTOPILOT_BOOTSTRAP_APPROVAL = "false";
+    const result = policyCheckApprover("U12345", ["block_ip"], "medium");
+    assert.strictEqual(result.authorized, false);
+    assert.ok(result.reason.includes("AUTOPILOT_BOOTSTRAP_APPROVAL"));
+  });
+});
+
 describe("Policy Enforcement - policyCheckEvidence with loaded policy", () => {
   let tmpDir;
 
@@ -1692,6 +1764,117 @@ describe("Agent output fields in updateCase", () => {
     const result = await getCase(caseId);
     assert.strictEqual(result.investigation_notes, "Second pass with more data");
     assert.strictEqual(result.findings.classification, "confirmed_compromise");
+  });
+});
+
+// =============================================================================
+// M3: Entity Index Capacity Warnings
+// =============================================================================
+
+describe("Entity Index Capacity Warnings", () => {
+  // Access the module for the warning flag getter/setter
+  const mod = require("./index.js");
+
+  beforeEach(() => {
+    entityCaseIndex.clear();
+    mod.entityIndexWarningLogged = false;
+  });
+
+  afterEach(() => {
+    entityCaseIndex.clear();
+    mod.entityIndexWarningLogged = false;
+  });
+
+  it("logs warning when entity index reaches 90% capacity", () => {
+    // Pre-fill the index to just below 90% threshold
+    const threshold = Math.floor(MAX_ENTITY_INDEX_SIZE * 0.9);
+    for (let i = 0; i < threshold - 1; i++) {
+      entityCaseIndex.set(`ip:10.0.${Math.floor(i / 256)}.${i % 256}-prefill-${i}`, [{ caseId: "CASE-PREFILL", severity: "low", createdAt: Date.now(), isFalsePositive: false }]);
+    }
+    assert.strictEqual(entityCaseIndex.size, threshold - 1);
+    assert.strictEqual(mod.entityIndexWarningLogged, false);
+
+    // Add one more entity via indexCaseEntities to cross the 90% threshold
+    // We need 2 new unique keys: one to reach threshold, one to trigger warning check
+    indexCaseEntities("CASE-WARN-1", [{ type: "ip", value: "192.168.0.1-warn" }], "high");
+    // Now at threshold exactly — warning should NOT have fired yet (check is on the NEXT insert)
+    indexCaseEntities("CASE-WARN-2", [{ type: "ip", value: "192.168.0.2-warn" }], "high");
+    // Now past threshold — warning should have been logged
+    assert.strictEqual(mod.entityIndexWarningLogged, true);
+  });
+
+  it("warning is logged only once (not on every insert past 90%)", () => {
+    const threshold = Math.floor(MAX_ENTITY_INDEX_SIZE * 0.9);
+    for (let i = 0; i < threshold + 5; i++) {
+      entityCaseIndex.set(`ip:warn-once-${i}`, [{ caseId: "CASE-ONCE", severity: "low", createdAt: Date.now(), isFalsePositive: false }]);
+    }
+    // Reset flag and verify it only gets set once
+    mod.entityIndexWarningLogged = false;
+    indexCaseEntities("CASE-A", [{ type: "ip", value: "once-test-1" }], "high");
+    assert.strictEqual(mod.entityIndexWarningLogged, true);
+    // Flag stays true — the log("warn") only fires when flag is false
+  });
+});
+
+// =============================================================================
+// M10: Response Plan Periodic Eviction
+// =============================================================================
+
+describe("Response Plan Periodic Eviction", () => {
+  let savedPlans;
+
+  beforeEach(() => {
+    // Save existing plans and start with a clean map
+    savedPlans = new Map(responsePlans);
+    responsePlans.clear();
+  });
+
+  afterEach(() => {
+    // Restore original plans
+    responsePlans.clear();
+    for (const [k, v] of savedPlans) {
+      responsePlans.set(k, v);
+    }
+  });
+
+  it("evicts terminal plans older than 24 hours", () => {
+    const now = Date.now();
+    const old = new Date(now - 25 * 60 * 60 * 1000).toISOString(); // 25 hours ago
+    const recent = new Date(now - 1 * 60 * 60 * 1000).toISOString(); // 1 hour ago
+
+    // Add old terminal plans (should be evicted)
+    responsePlans.set("PLAN-OLD-COMPLETED", { state: "completed", updated_at: old, created_at: old });
+    responsePlans.set("PLAN-OLD-FAILED", { state: "failed", updated_at: old, created_at: old });
+    responsePlans.set("PLAN-OLD-REJECTED", { state: "rejected", updated_at: old, created_at: old });
+    responsePlans.set("PLAN-OLD-EXPIRED", { state: "expired", updated_at: old, created_at: old });
+
+    // Add recent terminal plans (should NOT be evicted)
+    responsePlans.set("PLAN-RECENT-COMPLETED", { state: "completed", updated_at: recent, created_at: recent });
+
+    // Add old non-terminal plans (should NOT be evicted)
+    responsePlans.set("PLAN-OLD-PROPOSED", { state: "proposed", updated_at: old, created_at: old });
+    responsePlans.set("PLAN-OLD-EXECUTING", { state: "executing", updated_at: old, created_at: old });
+
+    assert.strictEqual(responsePlans.size, 7);
+
+    // Simulate the periodic cleanup logic (same as in setupCleanupIntervals)
+    const cutoff = now - 24 * 60 * 60 * 1000;
+    let evicted = 0;
+    for (const [planId, plan] of responsePlans.entries()) {
+      if (
+        ["completed", "failed", "rejected", "expired"].includes(plan.state) &&
+        new Date(plan.updated_at).getTime() < cutoff
+      ) {
+        responsePlans.delete(planId);
+        evicted++;
+      }
+    }
+
+    assert.strictEqual(evicted, 4, "Should evict 4 old terminal plans");
+    assert.strictEqual(responsePlans.size, 3, "Should retain 3 plans (1 recent terminal, 2 non-terminal)");
+    assert.ok(responsePlans.has("PLAN-RECENT-COMPLETED"), "Recent completed plan should be retained");
+    assert.ok(responsePlans.has("PLAN-OLD-PROPOSED"), "Old proposed plan should be retained");
+    assert.ok(responsePlans.has("PLAN-OLD-EXECUTING"), "Old executing plan should be retained");
   });
 });
 

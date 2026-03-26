@@ -104,10 +104,15 @@ const config = {
   // Alert grouping
   alertGroupEnabled: process.env.ALERT_GROUP_ENABLED !== "false",
   alertGroupWindowMs: parseInt(process.env.ALERT_GROUP_WINDOW_MS || "3600000", 10),
+  // Bootstrap approval — allows agent auto-approval when all approver Slack IDs are placeholders
+  // WARNING: This disables human-in-the-loop review for response plans
+  bootstrapApproval: process.env.AUTOPILOT_BOOTSTRAP_APPROVAL === "true",
   // Stalled pipeline detection
   stalledPipelineEnabled: process.env.STALLED_PIPELINE_ENABLED !== "false",
   stalledPipelineThresholdMs: parseInt(process.env.STALLED_PIPELINE_THRESHOLD_MINUTES || "30", 10) * 60 * 1000,
   stalledPipelineCheckIntervalMs: parseInt(process.env.STALLED_PIPELINE_CHECK_INTERVAL_MS || "300000", 10),
+  // Trusted proxy: only trust X-Forwarded-For when explicitly enabled
+  trustedProxy: process.env.TRUSTED_PROXY === "true",
 };
 
 // =============================================================================
@@ -148,6 +153,59 @@ function log(level, component, msg, extra = {}) {
     console.log(`[${entry.ts}] [${level.toUpperCase()}] [${component}] ${msg}`);
   }
 }
+
+// =============================================================================
+// TRUSTED PROXY WARNING (log once)
+// =============================================================================
+
+let _untrustedProxyWarned = false;
+function warnUntrustedProxy() {
+  if (_untrustedProxyWarned) return;
+  _untrustedProxyWarned = true;
+  log("warn", "security",
+    "X-Forwarded-For header received from localhost but TRUSTED_PROXY is not set. " +
+    "Using socket remote address instead. Set TRUSTED_PROXY=true if behind a reverse proxy.");
+}
+
+// =============================================================================
+// ALERT DEDUP (cross-midnight alert ID → case ID mapping)
+// =============================================================================
+
+const ALERT_DEDUP_TTL_MS = 60 * 60 * 1000; // 1 hour
+const ALERT_DEDUP_MAX_SIZE = 50000;
+const alertDedup = new Map(); // alertId → { caseId, ts }
+
+function alertDedupGet(alertId) {
+  const entry = alertDedup.get(alertId);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > ALERT_DEDUP_TTL_MS) {
+    alertDedup.delete(alertId);
+    return null;
+  }
+  return entry.caseId;
+}
+
+function alertDedupSet(alertId, caseId) {
+  // Cap size: evict oldest entries when at capacity
+  if (alertDedup.size >= ALERT_DEDUP_MAX_SIZE && !alertDedup.has(alertId)) {
+    // Delete the first (oldest-inserted) entry
+    const firstKey = alertDedup.keys().next().value;
+    alertDedup.delete(firstKey);
+  }
+  alertDedup.set(alertId, { caseId, ts: Date.now() });
+}
+
+// Periodic cleanup of expired entries (every 5 minutes)
+const _alertDedupCleanupInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of alertDedup) {
+    if (now - entry.ts > ALERT_DEDUP_TTL_MS) {
+      alertDedup.delete(key);
+    }
+  }
+}, 5 * 60 * 1000);
+// Allow process to exit without waiting for cleanup timer
+if (_alertDedupCleanupInterval.unref) _alertDedupCleanupInterval.unref();
 
 // =============================================================================
 // METRICS
@@ -285,6 +343,12 @@ function formatMetrics() {
   // Gauges
   lines.push("# TYPE autopilot_plans_executing gauge");
   lines.push(`autopilot_plans_executing ${executingPlans.size}`);
+
+  lines.push("# TYPE autopilot_entity_index_size gauge");
+  lines.push(`autopilot_entity_index_size ${entityCaseIndex.size}`);
+
+  lines.push("# TYPE autopilot_plans_in_memory gauge");
+  lines.push(`autopilot_plans_in_memory ${responsePlans.size}`);
 
   return lines.join("\n");
 }
@@ -840,6 +904,7 @@ async function enrichIpAddress(ip) {
 // Maps "type:value" → [{caseId, severity, createdAt, isFalsePositive}]
 const entityCaseIndex = new Map();
 const MAX_ENTITY_INDEX_SIZE = 50000;
+let entityIndexWarningLogged = false;
 
 function indexCaseEntities(caseId, entities, severity) {
   if (!config.alertGroupEnabled) return;
@@ -847,7 +912,14 @@ function indexCaseEntities(caseId, entities, severity) {
   for (const entity of entities) {
     const key = `${entity.type}:${entity.value}`;
     if (!entityCaseIndex.has(key)) {
-      if (entityCaseIndex.size >= MAX_ENTITY_INDEX_SIZE) continue;
+      if (entityCaseIndex.size >= MAX_ENTITY_INDEX_SIZE) {
+        log("error", "entity-index", "Entity index full — new entities are being skipped", { size: entityCaseIndex.size, limit: MAX_ENTITY_INDEX_SIZE });
+        continue;
+      }
+      if (!entityIndexWarningLogged && entityCaseIndex.size >= MAX_ENTITY_INDEX_SIZE * 0.9) {
+        log("warn", "entity-index", "Entity index at 90% capacity", { size: entityCaseIndex.size, limit: MAX_ENTITY_INDEX_SIZE });
+        entityIndexWarningLogged = true;
+      }
       entityCaseIndex.set(key, []);
     }
     const entries = entityCaseIndex.get(key);
@@ -2400,8 +2472,14 @@ function policyCheckApprover(approverId, actionTypes = [], planRiskLevel = "medi
   });
 
   if (allPlaceholders) {
-    log("warn", "policy", "All approver Slack IDs are placeholders — bypassing approver check", { approver_id: approverId });
-    return { authorized: true, reason: "Approver check bypassed (placeholder Slack IDs)" };
+    // Check if explicit bootstrap approval is enabled (env var checked at call time to allow test overrides)
+    const bootstrapApprovalEnabled = process.env.AUTOPILOT_BOOTSTRAP_APPROVAL === "true";
+    if (bootstrapApprovalEnabled) {
+      log("warn", "policy", "All approver Slack IDs are placeholders — bypassing approver check (AUTOPILOT_BOOTSTRAP_APPROVAL=true)", { approver_id: approverId });
+      return { authorized: true, reason: "Approver check bypassed (placeholder Slack IDs, bootstrap approval enabled)" };
+    }
+    log("error", "policy", "All approver Slack IDs are placeholders and AUTOPILOT_BOOTSTRAP_APPROVAL is not set — denying approval", { approver_id: approverId });
+    return { authorized: false, reason: "Approver check bypassed in bootstrap mode but AUTOPILOT_BOOTSTRAP_APPROVAL is not set. Set AUTOPILOT_BOOTSTRAP_APPROVAL=true to allow agent auto-approval, or configure real Slack approver IDs in policy.yaml" };
   }
 
   // Risk level hierarchy
@@ -3330,14 +3408,17 @@ function validateAuthorization(req, requiredScope = "write", url = null) {
     : null;
 
   // Get client IP for auth failure tracking
-  // Only trust X-Forwarded-For from loopback connections (behind a local reverse proxy)
+  // Only trust X-Forwarded-For when TRUSTED_PROXY=true and connection is from localhost
   const directIp = req.socket.remoteAddress || "unknown";
   const isDirectLocalhost = directIp === "127.0.0.1" || directIp === "::1" ||
                             directIp === "::ffff:127.0.0.1";
   const forwardedFor = req.headers["x-forwarded-for"];
-  const clientIp = (isDirectLocalhost && forwardedFor)
+  const clientIp = (isDirectLocalhost && forwardedFor && config.trustedProxy)
     ? forwardedFor.split(",")[0].trim()
     : directIp;
+  if (isDirectLocalhost && forwardedFor && !config.trustedProxy) {
+    warnUntrustedProxy();
+  }
   const isLocalhost = clientIp === "127.0.0.1" || clientIp === "::1" ||
                       clientIp === "::ffff:127.0.0.1";
 
@@ -3507,14 +3588,17 @@ function createServer() {
     res.setHeader("X-Request-ID", requestId);
 
     // Get client IP for rate limiting
-    // Only trust X-Forwarded-For from loopback connections (behind a local reverse proxy)
+    // Only trust X-Forwarded-For when TRUSTED_PROXY=true and connection is from localhost
     const directIpRL = req.socket.remoteAddress || "unknown";
     const isDirectLocalRL = directIpRL === "127.0.0.1" || directIpRL === "::1" ||
                             directIpRL === "::ffff:127.0.0.1";
     const forwardedForRL = req.headers["x-forwarded-for"];
-    const clientIp = (isDirectLocalRL && forwardedForRL)
+    const clientIp = (isDirectLocalRL && forwardedForRL && config.trustedProxy)
       ? forwardedForRL.split(",")[0].trim()
       : directIpRL;
+    if (isDirectLocalRL && forwardedForRL && !config.trustedProxy) {
+      warnUntrustedProxy();
+    }
 
     // Security headers
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -3785,12 +3869,19 @@ function createServer() {
         // Bug #15 fix: Use hash of full alert ID to prevent collisions
         const rawAlertId = alert.alert_id || alert._id || alert.id;
         const alertId = typeof rawAlertId === "object" ? JSON.stringify(rawAlertId) : String(rawAlertId);
-        const timestamp = new Date().toISOString().split("T")[0].replace(/-/g, "");
-        const alertIdHash = crypto.createHash("sha256")
-          .update(alertId)
-          .digest("hex")
-          .substring(0, 12);
-        const caseId = `CASE-${timestamp}-${alertIdHash}`;
+
+        // M2 fix: Check alert dedup map first to prevent date-boundary case ID splits.
+        // An alert retried across midnight would otherwise get a different CASE-YYYYMMDD prefix.
+        let caseId = alertDedupGet(alertId);
+        if (!caseId) {
+          const timestamp = new Date().toISOString().split("T")[0].replace(/-/g, "");
+          const alertIdHash = crypto.createHash("sha256")
+            .update(alertId)
+            .digest("hex")
+            .substring(0, 12);
+          caseId = `CASE-${timestamp}-${alertIdHash}`;
+          alertDedupSet(alertId, caseId);
+        }
 
         // Extract entities from alert (basic triage)
         const entities = [];
@@ -5283,6 +5374,11 @@ async function validateStartup() {
     }
   }
 
+  // Warn if bootstrap approval is enabled (human-in-the-loop is disabled)
+  if (config.bootstrapApproval) {
+    log("warn", "startup", "AUTOPILOT_BOOTSTRAP_APPROVAL=true — human-in-the-loop approval is DISABLED. Agents can auto-approve and execute response plans without human review. Unset this variable before production use.");
+  }
+
   // Warn if OPENCLAW_TOKEN is not set (agent pipeline will be disabled)
   if (!config.openclawToken) {
     log("warn", "startup", "OPENCLAW_TOKEN not set — agent pipeline dispatch is disabled. Set OPENCLAW_TOKEN to enable agent orchestration.");
@@ -5432,6 +5528,12 @@ module.exports = {
   findRelatedCase,
   indexCaseEntities,
   markEntityFalsePositive,
+  entityCaseIndex,
+  MAX_ENTITY_INDEX_SIZE,
+  get entityIndexWarningLogged() { return entityIndexWarningLogged; },
+  set entityIndexWarningLogged(v) { entityIndexWarningLogged = v; },
+  // Response plans internals (for testing)
+  responsePlans,
   // Policy enforcement
   loadPolicyConfig,
   policyCheckAction,
@@ -5473,6 +5575,12 @@ module.exports = {
   parseSimpleYaml,
   sanitizeMetricLabelName,
   normalizeGatewayUrl,
+  // Alert dedup (exported for testing)
+  alertDedup,
+  alertDedupGet,
+  alertDedupSet,
+  ALERT_DEDUP_TTL_MS,
+  ALERT_DEDUP_MAX_SIZE,
 };
 
 // =============================================================================
@@ -5697,6 +5805,25 @@ function setupCleanupIntervals() {
     }
   }, 60000);
   cleanupIntervals.push(plansCleanup);
+
+  // Periodic response plan eviction: remove terminal plans older than 24 hours
+  const planEvictionCleanup = setInterval(() => {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    let evicted = 0;
+    for (const [planId, plan] of responsePlans.entries()) {
+      if (
+        ["completed", "failed", "rejected", "expired"].includes(plan.state) &&
+        new Date(plan.updated_at).getTime() < cutoff
+      ) {
+        responsePlans.delete(planId);
+        evicted++;
+      }
+    }
+    if (evicted > 0) {
+      log("info", "cleanup", "Periodic plan eviction: removed terminal plans older than 24h", { evicted, remaining: responsePlans.size });
+    }
+  }, 30 * 60 * 1000); // every 30 minutes
+  cleanupIntervals.push(planEvictionCleanup);
 
   // Entity case index cleanup (evict entries outside group window)
   const entityCleanup = setInterval(() => {
