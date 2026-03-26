@@ -709,6 +709,50 @@ describe("GET /api/agent-action/get-agent", () => {
 });
 
 // ===================================================================
+// GET /api/plans/:id — retrieve a single plan by ID
+// ===================================================================
+
+describe("GET /api/plans/:id", () => {
+  let server;
+  let testPlanId;
+
+  before(async () => {
+    ensureTestDirs();
+    server = createServer();
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const alert = await ingestAlert(server, `plan-get-${Date.now()}`);
+    const actions = JSON.stringify([{ type: "block_ip", target: "9.8.7.6" }]);
+    const planRes = await request(server, "GET",
+      `/api/agent-action/create-plan?case_id=${alert.case_id}&title=Get%20Plan%20Test&risk_level=low&actions=${encodeURIComponent(actions)}`);
+    testPlanId = planRes.body.plan_id;
+  });
+
+  after(() => {
+    return new Promise((resolve) => server.close(() => { rmTestDir(); resolve(); }));
+  });
+
+  it("returns a plan by valid plan_id", async () => {
+    const res = await request(server, "GET", `/api/plans/${testPlanId}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.plan_id, testPlanId);
+    assert.ok(res.body.actions);
+    assert.ok(res.body.state);
+  });
+
+  it("returns 404 for non-existent plan_id", async () => {
+    const res = await request(server, "GET", "/api/plans/PLAN-9999999999999-deadbeef");
+    assert.equal(res.status, 404);
+    assert.ok(res.body.error);
+  });
+
+  it("returns 400 for invalid plan_id format", async () => {
+    const res = await request(server, "GET", "/api/plans/not-a-valid-id");
+    assert.equal(res.status, 400);
+    assert.ok(res.body.error);
+  });
+});
+
+// ===================================================================
 // Audit fix C2: Action type allowlist enforcement
 // ===================================================================
 

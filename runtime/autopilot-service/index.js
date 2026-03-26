@@ -1478,6 +1478,31 @@ async function loadPlansFromDisk() {
     if (loaded > 0) {
       log("info", "plans", "Loaded plans from disk", { count: loaded });
     }
+
+    // Crash recovery: reset any plans stuck in EXECUTING state
+    // If the process crashed mid-executePlan(), the plan is persisted as EXECUTING
+    // but cannot be re-executed (requires APPROVED) or re-approved (requires PROPOSED).
+    // Reset them to FAILED so operators can investigate and re-create if needed.
+    let recovered = 0;
+    for (const [planId, plan] of responsePlans.entries()) {
+      if (plan.state === "executing") {
+        plan.state = "failed";
+        plan.execution_result = {
+          success: false,
+          reason: "Process crashed during execution — plan state recovered on restart",
+        };
+        plan.updated_at = new Date().toISOString();
+        log("warn", "plans", "Recovered stuck EXECUTING plan on startup", {
+          plan_id: planId,
+          case_id: plan.case_id,
+        });
+        await savePlanToDisk(plan);
+        recovered++;
+      }
+    }
+    if (recovered > 0) {
+      log("warn", "plans", "Crash recovery: reset EXECUTING plans to FAILED", { count: recovered });
+    }
   } catch {
     // Plans directory doesn't exist yet — will be created on first plan
   }
@@ -3390,7 +3415,9 @@ function parseJsonBody(req) {
     // Pre-check Content-Length header to reject oversized requests early
     const contentLength = parseInt(req.headers?.["content-length"], 10);
     if (contentLength > 0 && contentLength > MAX_BODY_SIZE) {
-      reject(new Error("Request body too large"));
+      const err = new Error("Request body too large");
+      err.httpStatus = 413;
+      reject(err);
       return;
     }
 
@@ -3403,7 +3430,9 @@ function parseJsonBody(req) {
       if (!rejected) {
         rejected = true;
         req.destroy();
-        reject(new Error("Request body timeout"));
+        const err = new Error("Request body timeout");
+        err.httpStatus = 408;
+        reject(err);
       }
     }, 30000);
 
@@ -3416,7 +3445,9 @@ function parseJsonBody(req) {
         rejected = true;
         clearTimeout(bodyTimeout);
         req.destroy(); // Stop receiving data
-        reject(new Error("Request body too large"));
+        const err = new Error("Request body too large");
+        err.httpStatus = 413;
+        reject(err);
         return;
       }
       chunks.push(chunk);
@@ -3429,7 +3460,9 @@ function parseJsonBody(req) {
         const body = Buffer.concat(chunks).toString("utf8");
         resolve(body ? JSON.parse(body) : {});
       } catch (err) {
-        reject(new Error("Invalid JSON"));
+        const parseErr = new Error("Invalid JSON");
+        parseErr.httpStatus = 400;
+        reject(parseErr);
       }
     });
 
@@ -3937,47 +3970,146 @@ function createServer() {
           }],
         };
 
-        // Check if case already exists (idempotency via hash)
-        let existingCase = null;
-        try {
-          existingCase = await getCase(caseId);
-        } catch (e) {
-          // Case doesn't exist, which is expected
-        }
-
-        // Entity-based alert grouping: if no exact hash match, check for related cases
+        // Entity-based alert grouping: check for related cases (in-memory, no lock needed)
         let groupedCaseId = null;
-        if (!existingCase && entities.length > 0) {
+        if (entities.length > 0) {
           groupedCaseId = findRelatedCase(entities);
-          if (groupedCaseId) {
-            try {
-              existingCase = await getCase(groupedCaseId);
-            } catch (e) {
-              groupedCaseId = null; // Related case was deleted
-            }
-          }
         }
 
         const effectiveCaseId = groupedCaseId || caseId;
 
+        // Use withCaseLock to atomically check-then-create/update, preventing
+        // race conditions when concurrent requests arrive for the same alert_id.
+        // We inline the file operations instead of calling createCase/updateCase
+        // because those functions acquire the same lock (non-reentrant) and would deadlock.
+        let existingCase = false;
+        await withCaseLock(effectiveCaseId, async () => {
+          let caseExists = false;
+          try {
+            await getCase(effectiveCaseId);
+            caseExists = true;
+          } catch (e) {
+            // Case doesn't exist, which is expected
+          }
+
+          if (caseExists) {
+            existingCase = true;
+            // Update existing case with new evidence directly (lock already held)
+            const caseDir = path.join(config.dataDir, "cases", effectiveCaseId);
+            const packPath = path.join(caseDir, "evidence-pack.json");
+            const content = await fs.readFile(packPath, "utf8");
+            const evidencePack = JSON.parse(content);
+            const now = new Date().toISOString();
+            evidencePack.updated_at = now;
+
+            // Merge entities (deduplicate by type+value)
+            if (caseData.entities) {
+              const existingKeys = new Set(
+                (evidencePack.entities || []).map((e) => `${e.type}:${e.value}`)
+              );
+              for (const entity of caseData.entities) {
+                if (!existingKeys.has(`${entity.type}:${entity.value}`)) {
+                  evidencePack.entities.push(entity);
+                  existingKeys.add(`${entity.type}:${entity.value}`);
+                }
+              }
+            }
+
+            // Append timeline entries
+            if (caseData.timeline) {
+              evidencePack.timeline = (evidencePack.timeline || []).concat(caseData.timeline);
+            }
+
+            // Append evidence refs (deduplicate by ref_id)
+            if (caseData.evidence_refs) {
+              const existingRefs = new Set(
+                (evidencePack.evidence_refs || []).map((r) => r.ref_id)
+              );
+              for (const ref of caseData.evidence_refs) {
+                if (!existingRefs.has(ref.ref_id)) {
+                  evidencePack.evidence_refs.push(ref);
+                  existingRefs.add(ref.ref_id);
+                }
+              }
+            }
+
+            await atomicWriteFile(packPath, JSON.stringify(evidencePack, null, 2));
+          } else {
+            // Create new case directly (lock already held)
+            const caseDir = path.join(config.dataDir, "cases", effectiveCaseId);
+            const packPath = path.join(caseDir, "evidence-pack.json");
+
+            await ensureDir(caseDir);
+
+            const now = new Date().toISOString();
+
+            const evidencePack = {
+              schema_version: EVIDENCE_PACK_SCHEMA_VERSION,
+              case_id: effectiveCaseId,
+              created_at: now,
+              updated_at: now,
+              title: caseData.title || "",
+              summary: caseData.summary || "",
+              severity: caseData.severity || "medium",
+              confidence: caseData.confidence || 0,
+              entities: caseData.entities || [],
+              timeline: caseData.timeline || [],
+              mitre: caseData.mitre || [],
+              mcp_calls: [],
+              evidence_refs: caseData.evidence_refs || [],
+              plans: [],
+              approvals: [],
+              actions: [],
+              status: "open",
+              feedback: [],
+            };
+
+            await atomicWriteFile(packPath, JSON.stringify(evidencePack, null, 2));
+
+            const caseSummary = {
+              case_id: effectiveCaseId,
+              created_at: now,
+              updated_at: now,
+              title: caseData.title || "",
+              severity: caseData.severity || "medium",
+              status: "open",
+            };
+
+            await atomicWriteFile(
+              path.join(caseDir, "case.json"),
+              JSON.stringify(caseSummary, null, 2),
+            );
+
+            incrementMetric("cases_created_total");
+            log("info", "evidence-pack", "Case created", { case_id: effectiveCaseId });
+
+            // Post to Slack alerts channel (async, don't await)
+            if (slack && slack.isInitialized()) {
+              slack.postCaseAlert({
+                case_id: effectiveCaseId,
+                title: caseData.title,
+                summary: caseData.summary,
+                severity: caseData.severity,
+                entities: caseData.entities || [],
+                created_at: now,
+              }).catch((err) => {
+                log("warn", "evidence-pack", "Failed to post case to Slack", { error: err.message, case_id: effectiveCaseId });
+              });
+            }
+          }
+        });
+
+        // Entity indexing and webhook dispatch stay OUTSIDE the lock
+        indexCaseEntities(effectiveCaseId, entities, severity);
+
         if (existingCase) {
-          // Update existing case with new evidence
-          await updateCase(effectiveCaseId, {
-            entities: caseData.entities,
-            timeline: caseData.timeline,
-            evidence_refs: caseData.evidence_refs,
-          });
-          indexCaseEntities(effectiveCaseId, entities, severity);
           log("info", "triage", "Updated existing case with new alert", {
             case_id: effectiveCaseId,
             alert_id: alertId,
             ...(groupedCaseId && { grouped_from: caseId }),
           });
         } else {
-          // Create new case
-          await createCase(caseId, caseData);
-          indexCaseEntities(caseId, entities, severity);
-          log("info", "triage", "Created new case from alert", { case_id: caseId, alert_id: alertId, severity });
+          log("info", "triage", "Created new case from alert", { case_id: effectiveCaseId, alert_id: alertId, severity });
 
           // Dispatch to triage agent via OpenClaw gateway
           // NOTE: Callback URLs are NOT included in the webhook message because
@@ -3987,14 +4119,14 @@ function createServer() {
           // callback URL templates. The agent reads case_id from this data and
           // substitutes it into the URL pattern from its system prompt.
           dispatchToGateway("/webhook/wazuh-alert", {
-            message: `New triage task. Case ID: ${caseId}. Severity: ${severity}. Title: ${caseData.title}. Entities: ${entities.length} extracted. Follow your AGENTS.md instructions to triage this alert and advance the pipeline.`,
-            case_id: caseId,
+            message: `New triage task. Case ID: ${effectiveCaseId}. Severity: ${severity}. Title: ${caseData.title}. Entities: ${entities.length} extracted. Follow your AGENTS.md instructions to triage this alert and advance the pipeline.`,
+            case_id: effectiveCaseId,
             severity,
             title: caseData.title,
             entities_count: entities.length,
             trigger: "alert_ingestion",
           }).catch((err) => {
-            log("warn", "dispatch", "Failed to dispatch alert ingestion webhook", { case_id: caseId, error: err.message });
+            log("warn", "dispatch", "Failed to dispatch alert ingestion webhook", { case_id: effectiveCaseId, error: err.message });
             incrementMetric("webhook_dispatch_failures_total");
           });
         }
@@ -5000,8 +5132,10 @@ function createServer() {
       // 404 for unknown routes
       sendJsonError(res, 404, "Not found", requestId);
     } catch (err) {
-      log("error", "http", "Request error", { error: err.message });
-      sendJsonError(res, 500, "Internal server error", requestId);
+      const status = err.httpStatus || 500;
+      const message = err.httpStatus ? err.message : "Internal server error";
+      log("error", "http", "Request error", { error: err.message, status });
+      sendJsonError(res, status, message, requestId);
     }
   });
 

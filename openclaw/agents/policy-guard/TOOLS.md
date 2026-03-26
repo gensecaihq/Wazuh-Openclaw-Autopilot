@@ -69,9 +69,9 @@ Use the following confidence thresholds for your evaluation. The runtime service
 
 | Risk Level | Default Minimum Confidence |
 |------------|---------------------------|
-| Low | 0.5 |
+| Low | 0.7 |
 | Medium | 0.7 |
-| High | 0.85 |
+| High | 0.8 |
 | Critical | 0.95 |
 
 If below threshold, deny with `LOW_CONFIDENCE`.

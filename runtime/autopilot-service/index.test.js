@@ -53,6 +53,8 @@ const {
   ensureMcpSession,
   invalidateMcpSession,
   normalizeGatewayUrl,
+  loadPlansFromDisk,
+  savePlanToDisk,
 } = require("./index.js");
 
 describe("Evidence Pack Management", () => {
@@ -679,6 +681,75 @@ describe("Plan State Constants", () => {
     assert.strictEqual(PLAN_STATES.FAILED, "failed");
     assert.strictEqual(PLAN_STATES.REJECTED, "rejected");
     assert.strictEqual(PLAN_STATES.EXPIRED, "expired");
+  });
+});
+
+describe("Crash Recovery — EXECUTING plans on startup", () => {
+  beforeEach(async () => {
+    await fs.mkdir(process.env.AUTOPILOT_DATA_DIR, { recursive: true });
+    await fs.mkdir(path.join(process.env.AUTOPILOT_DATA_DIR, "plans"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(process.env.AUTOPILOT_DATA_DIR, { recursive: true, force: true });
+  });
+
+  it("should recover a plan stuck in EXECUTING state to FAILED on load", async () => {
+    // Simulate a plan that was persisted as EXECUTING before a crash
+    const stuckPlan = {
+      plan_id: "plan-crash-recovery-test",
+      case_id: "CASE-RECOVERY-001",
+      state: "executing",
+      actions: [{ type: "block_ip", target: "10.0.0.1" }],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    await fs.writeFile(
+      path.join(process.env.AUTOPILOT_DATA_DIR, "plans", `${stuckPlan.plan_id}.json`),
+      JSON.stringify(stuckPlan, null, 2),
+    );
+
+    // Load plans from disk — should trigger crash recovery
+    await loadPlansFromDisk();
+
+    const recovered = getPlan(stuckPlan.plan_id);
+    assert.ok(recovered, "Plan should be loaded from disk");
+    assert.strictEqual(recovered.state, PLAN_STATES.FAILED, "State should be reset to FAILED");
+    assert.ok(recovered.execution_result, "Should have execution_result");
+    assert.strictEqual(recovered.execution_result.success, false);
+    assert.ok(recovered.execution_result.reason.includes("crashed"), "Reason should mention crash");
+    assert.ok(recovered.updated_at, "updated_at should be set");
+
+    // Verify the recovered state was persisted to disk
+    const diskContent = await fs.readFile(
+      path.join(process.env.AUTOPILOT_DATA_DIR, "plans", `${stuckPlan.plan_id}.json`),
+      "utf8",
+    );
+    const diskPlan = JSON.parse(diskContent);
+    assert.strictEqual(diskPlan.state, "failed", "Disk file should also show failed state");
+  });
+
+  it("should not modify plans in non-EXECUTING states", async () => {
+    const completedPlan = {
+      plan_id: "plan-completed-test",
+      case_id: "CASE-RECOVERY-002",
+      state: "completed",
+      actions: [{ type: "block_ip", target: "10.0.0.2" }],
+      created_at: new Date().toISOString(),
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
+    await fs.writeFile(
+      path.join(process.env.AUTOPILOT_DATA_DIR, "plans", `${completedPlan.plan_id}.json`),
+      JSON.stringify(completedPlan, null, 2),
+    );
+
+    await loadPlansFromDisk();
+
+    const loaded = getPlan(completedPlan.plan_id);
+    assert.ok(loaded, "Plan should be loaded");
+    assert.strictEqual(loaded.state, "completed", "Completed plan should remain completed");
+    assert.strictEqual(loaded.updated_at, "2026-01-01T00:00:00.000Z", "updated_at should be unchanged");
+    assert.strictEqual(loaded.execution_result, undefined, "Should not have execution_result added");
   });
 });
 

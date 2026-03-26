@@ -1154,6 +1154,72 @@ describe("Health endpoint connectivity fields", () => {
 });
 
 // ===================================================================
+// Concurrent Alert Ingestion (race condition regression test)
+// ===================================================================
+
+describe("Concurrent alert ingestion", () => {
+  let server;
+
+  before(() => {
+    ensureTestDirs();
+    server = createServer();
+    return new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  });
+
+  after(() => new Promise((resolve) => server.close(resolve)));
+
+  it("two rapid requests with the same alert_id both return 201 (not 500)", async () => {
+    const alertBody = {
+      alert_id: "alert-concurrent-race-test",
+      rule: {
+        id: "5502",
+        description: "Concurrent race test alert",
+        level: 8,
+      },
+      agent: {
+        id: "009",
+        name: "race-test-host",
+        ip: "10.0.0.9",
+      },
+      data: {
+        srcip: "172.16.0.99",
+      },
+    };
+
+    // Fire both requests concurrently — before the fix, the second would 500
+    // with "Case already exists" because both saw the case as missing outside
+    // the lock, then both tried to create it.
+    const [res1, res2] = await Promise.all([
+      request(server, "POST", "/api/alerts", alertBody),
+      request(server, "POST", "/api/alerts", alertBody),
+    ]);
+
+    // Both should succeed — one creates (201), the other either creates or
+    // updates (200/201). Neither should be 500.
+    assert.ok(
+      [200, 201].includes(res1.status),
+      `First request returned ${res1.status}: ${JSON.stringify(res1.body)}`,
+    );
+    assert.ok(
+      [200, 201].includes(res2.status),
+      `Second request returned ${res2.status}: ${JSON.stringify(res2.body)}`,
+    );
+
+    // At least one must be "created", and both must reference the same case
+    const statuses = [res1.body.status, res2.body.status];
+    assert.ok(
+      statuses.includes("created"),
+      "At least one request should have created the case",
+    );
+    assert.equal(
+      res1.body.case_id,
+      res2.body.case_id,
+      "Both requests should reference the same case_id",
+    );
+  });
+});
+
+// ===================================================================
 // Cleanup
 // ===================================================================
 
