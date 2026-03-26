@@ -509,7 +509,7 @@ install_tailscale() {
         log_success "Tailscale already installed"
     else
         log_info "Installing Tailscale..."
-        curl -fsSL https://tailscale.com/install.sh | sh
+        curl -fsSL https://tailscale.com/install.sh | bash
         log_success "Tailscale installed"
     fi
 
@@ -785,7 +785,7 @@ install_openclaw() {
         log_success "OpenClaw already installed: $oc_version"
     else
         log_info "Installing OpenClaw from upstream..."
-        curl -fsSL https://openclaw.ai/install.sh | sh
+        curl -fsSL https://openclaw.ai/install.sh | bash
 
         if command -v openclaw &>/dev/null; then
             log_success "OpenClaw installed"
