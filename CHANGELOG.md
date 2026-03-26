@@ -5,7 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-03-26
+
+> **v1.0.0** is a clean semver reset marking the first production-ready release. All prior versions (2.0.0–2.4.3) were pre-release development iterations.
+
+### Highlights
+- **497 tests** across 14 files, all passing
+- **48 MCP tools** supported via Wazuh MCP Server v4.2.1
+- **7 SOC agents** with full playbooks and tool documentation
+- **End-to-end audit** — critical, high, and medium findings resolved
+- **Zero npm vulnerabilities**
 
 ### Security — Production Readiness Audit
 - **[CRITICAL] Action type allowlist enforcement (C2)**: Response plans now validate action types against an explicit allowlist (`block_ip`, `firewall_drop`, `host_deny`, `isolate_host`, `kill_process`, `disable_user`, `quarantine_file`, `restart_wazuh`). Plans with unknown action types are rejected at creation time, preventing hallucinated or injected action types from reaching the MCP server.
@@ -19,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **[MEDIUM] IP format validation on active response (M7)**: New `_validate_ip()` in Wazuh client validates IPv4/IPv6 format before passing to `block_ip`, `firewall_drop`, `host_deny`.
 - **[MEDIUM] Flag injection prevention (M6)**: `_sanitize_ar_argument()` now rejects values starting with `-` to prevent flag injection in active response commands.
 - **[MEDIUM] Error message sanitization (H8)**: Wazuh client HTTP 4xx errors no longer include raw API response bodies in exception messages. Full details logged server-side only.
-- **Test coverage**: Added 38 new tests for `search-alerts` (8 tests), `get-agent` (6 tests), action type allowlist (3 tests), plus config validation tests. Total: 393 tests, all passing.
+- **Test coverage**: 497 tests across 14 files, all passing. Includes regression tests for every security fix.
 
 ### Added
 - **vLLM deployment support** (addresses #22): New `openclaw/openclaw-vllm.json` config for running Wazuh Autopilot with self-hosted open-source models via vLLM. Includes pre-configured model entries for Qwen3 32B, Llama 3.3 70B, MiniMax-M2.1 139B, and DeepSeek-R1 70B with correct tool call parser settings. New `docs/VLLM_DEPLOYMENT.md` covers hardware requirements, Docker deployment, air-gapped setup, production systemd config, multi-GPU configurations, and AMD MI300X instructions. README updated with Path D for vLLM and vLLM entry in supported providers table.
@@ -60,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **listCases hard max**: `/api/cases` now clamps the `limit` parameter to 1-1000 range
 - **Enrichment cache eviction on overflow**: `enrichmentCache` now evicts oldest entry when hitting 10,000 entries
 - **Agent TOOLS.md stalled pipeline docs**: All 6 pipeline agent TOOLS.md files now document the `[RETRY]` message format and pre-built callback URLs
-- 297 tests across 10 files
+- 497 tests across 14 files
 
 ### Fixed
 - **Stalled pipeline data corruption**: `checkStalledPipeline()` now acquires the case lock before writing `updated_at`, preventing data loss from concurrent `updateCase` calls
@@ -93,8 +102,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **OBSERVABILITY_EXPORT.md phantom OpenTelemetry section**: Removed section describing OTEL support that was never implemented
 - **SECURITY.md supported versions**: Updated from 2.0.x-2.1.x to 2.2.x-2.4.x
 
+### Added — v1.0.0 Release Fixes
+- **Crash recovery for stuck EXECUTING plans**: `loadPlansFromDisk()` now resets plans stuck in EXECUTING state to FAILED on startup with a recovery message
+- **Bootstrap approval gate**: `policyCheckApprover()` now requires `AUTOPILOT_BOOTSTRAP_APPROVAL=true` when policy has placeholder Slack IDs, preventing autonomous agent auto-approval
+- **Alert dedup across midnight**: In-memory `alertDedup` Map with 1hr TTL ensures same alert retried across date boundary reuses original case ID
+- **Trusted proxy rate limiting**: Rate limiter only trusts `X-Forwarded-For` when `TRUSTED_PROXY=true` is set, preventing IP spoofing
+- **Entity index saturation warnings**: Logs warning at 90% capacity, error when full. New `autopilot_entity_index_size` gauge metric
+- **Plan memory cleanup**: Periodic eviction of terminal plans older than 24h. New `autopilot_plans_in_memory` gauge metric
+- **Wazuh MCP Server v4.2.1 compatibility**: Expanded toolmap from 3 to 9 action tools, added param validation for `kill_process` (requires `process_id`), `disable_user` (requires `username`), `quarantine_file` (requires `file_path`). Documented RBAC scope requirements and `AUTHLESS_ALLOW_WRITE`
+- **MCP isError detection**: `executePlan()` now checks `isError` flag in MCP response body, correctly marking actions as failed when MCP returns HTTP 200 with tool-level errors
+- **mcp_calls evidence recording**: Plan execution writes MCP tool call records to case evidence pack
+- **Duration clamping**: `buildMcpParams()` clamps duration to 86400s (24h) max to match Wazuh MCP Server limits
+- **LLM type coercion**: Runtime coerces string booleans (`"true"`/`"false"`), string numbers (`"0.9"`), and case-variant enums (`"Critical"`, `"Low"`) from local LLMs
+
+### Fixed — v1.0.0 Release Fixes
+- **Concurrent duplicate alerts return 500**: Wrapped check-then-create in `withCaseLock()` to eliminate TOCTOU race
+- **Malformed JSON returns 500**: `parseJsonBody()` errors now return proper 400/413/408 status codes
+- **Policy Guard confidence threshold mismatch**: Aligned playbook thresholds with policy.yaml (low=0.7, medium=0.7, high=0.8, critical=0.95)
+- **install.sh permission drift**: Removed extra `sessions_send` and `exec` permissions not in reference configs
+
 ### Changed
 - **Tested with OpenClaw v2026.7.3**: Verified compatibility with the latest OpenClaw release. The undici timeout preload script is still required — pi-ai@0.55.3 ships identical `http-proxy.ts`.
+- **Wazuh MCP Server**: Updated compatibility from v4.0.6 to v4.2.1 (48 tools)
+- **Version reset**: Clean semver reset to 1.0.0 — all prior versions were pre-release development
 
 ## [2.4.3] - 2026-02-27
 
