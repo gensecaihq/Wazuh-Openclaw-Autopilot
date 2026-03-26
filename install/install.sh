@@ -307,9 +307,19 @@ check_os() {
                 PKG_INSTALL="apt-get install -y -qq"
                 FIREWALL_CMD="ufw"
                 ;;
-            centos|rhel|rocky|almalinux|fedora)
-                PKG_UPDATE="yum makecache -q"
-                PKG_INSTALL="yum install -y -q"
+            fedora)
+                PKG_UPDATE="dnf makecache -q"
+                PKG_INSTALL="dnf install -y -q"
+                FIREWALL_CMD="firewalld"
+                ;;
+            centos|rhel|rocky|almalinux)
+                if command -v dnf &>/dev/null; then
+                    PKG_UPDATE="dnf makecache -q"
+                    PKG_INSTALL="dnf install -y -q"
+                else
+                    PKG_UPDATE="yum makecache -q"
+                    PKG_INSTALL="yum install -y -q"
+                fi
                 FIREWALL_CMD="firewalld"
                 ;;
             *)
@@ -403,7 +413,17 @@ install_dependencies() {
     # Python 3.11+ (required for Wazuh MCP Server)
     if ! command -v python3 &>/dev/null; then
         log_info "Installing Python 3..."
-        $PKG_INSTALL python3 python3-pip python3-venv
+        case "$ID" in
+            ubuntu|debian)
+                $PKG_INSTALL python3 python3-pip python3-venv
+                ;;
+            centos|rhel|rocky|almalinux|fedora)
+                $PKG_INSTALL python3 python3-pip
+                ;;
+            *)
+                $PKG_INSTALL python3 python3-pip python3-venv
+                ;;
+        esac
     fi
 
     local py_ver
@@ -658,15 +678,26 @@ setup_credentials() {
     fi
 
     # Store secrets in isolated files with restrictive umask
+    # Uses atomic write (tmp + mv) to prevent empty-file races if interrupted
     local _old_umask
     _old_umask=$(umask)
     umask 0077
-    echo "$MCP_AUTH_TOKEN" > "$SECRETS_DIR/mcp_token"
-    echo "$OPENCLAW_TOKEN" > "$SECRETS_DIR/openclaw_token"
-    echo "$OPENCLAW_WEBHOOK_TOKEN" > "$SECRETS_DIR/openclaw_webhook_token"
-    echo "$PAIRING_SECRET" > "$SECRETS_DIR/pairing_code"
-    echo "$APPROVAL_SECRET" > "$SECRETS_DIR/approval_secret"
-    echo "$AUTOPILOT_SERVICE_TOKEN" > "$SECRETS_DIR/service_token"
+
+    _atomic_secret_write() {
+        local _val="$1" _dest="$2"
+        local _tmp
+        _tmp=$(mktemp "${_dest}.XXXXXX")
+        echo "$_val" > "$_tmp"
+        chmod 600 "$_tmp"
+        mv "$_tmp" "$_dest"
+    }
+
+    _atomic_secret_write "$MCP_AUTH_TOKEN" "$SECRETS_DIR/mcp_token"
+    _atomic_secret_write "$OPENCLAW_TOKEN" "$SECRETS_DIR/openclaw_token"
+    _atomic_secret_write "$OPENCLAW_WEBHOOK_TOKEN" "$SECRETS_DIR/openclaw_webhook_token"
+    _atomic_secret_write "$PAIRING_SECRET" "$SECRETS_DIR/pairing_code"
+    _atomic_secret_write "$APPROVAL_SECRET" "$SECRETS_DIR/approval_secret"
+    _atomic_secret_write "$AUTOPILOT_SERVICE_TOKEN" "$SECRETS_DIR/service_token"
     umask "$_old_umask"
 
     # Verify permissions
@@ -714,7 +745,14 @@ install_mcp_server() {
     log_info "Installing Python dependencies..."
     if ! python3 -m venv "$MCP_SERVER_DIR/.venv" 2>/dev/null; then
         log_error "Failed to create Python virtual environment at $MCP_SERVER_DIR/.venv"
-        log_error "Ensure the python3-venv package is installed (e.g., apt-get install python3-venv)"
+        case "$ID" in
+            ubuntu|debian)
+                log_error "Ensure the python3-venv package is installed (e.g., apt-get install python3-venv)"
+                ;;
+            *)
+                log_error "Ensure python3 includes the venv module (e.g., reinstall python3 or install python3-virtualenv)"
+                ;;
+        esac
         exit 1
     fi
     if [[ ! -f "$MCP_SERVER_DIR/.venv/bin/pip" ]]; then
@@ -727,15 +765,27 @@ install_mcp_server() {
     TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "127.0.0.1")
 
     # Create systemd service with secure binding
-    local _ts_after=""
-    local _ts_requires=""
-    local _ts_desc="Wazuh MCP Server"
-    if [[ "$SKIP_TAILSCALE" != "true" ]]; then
-        _ts_after=" tailscaled.service"
-        _ts_requires="Requires=tailscaled.service"
-        _ts_desc="Wazuh MCP Server (Tailscale Only)"
-    fi
-    cat > /etc/systemd/system/wazuh-mcp-server.service << EOF
+    if ! command -v systemctl &>/dev/null || ! pidof systemd &>/dev/null; then
+        log_warn "systemd not detected — skipping wazuh-mcp-server.service creation"
+        log_warn "Start the MCP server manually:"
+        log_warn "  cd $MCP_SERVER_DIR/src && $MCP_SERVER_DIR/.venv/bin/python -m wazuh_mcp_server"
+        SYSTEMD_AVAILABLE=false
+    else
+        SYSTEMD_AVAILABLE=true
+        local _ts_after=""
+        local _ts_requires=""
+        local _ts_desc="Wazuh MCP Server"
+        if [[ "$SKIP_TAILSCALE" != "true" ]]; then
+            _ts_after=" tailscaled.service"
+            _ts_requires="Requires=tailscaled.service"
+            _ts_desc="Wazuh MCP Server (Tailscale Only)"
+        fi
+        # Back up existing service file on re-install
+        if [[ -f /etc/systemd/system/wazuh-mcp-server.service ]]; then
+            cp /etc/systemd/system/wazuh-mcp-server.service "/etc/systemd/system/wazuh-mcp-server.service.backup.$(date +%Y%m%d_%H%M%S)"
+            log_warn "Existing wazuh-mcp-server.service backed up"
+        fi
+        cat > /etc/systemd/system/wazuh-mcp-server.service << EOF
 [Unit]
 Description=$_ts_desc
 Documentation=https://github.com/gensecaihq/Wazuh-MCP-Server
@@ -754,6 +804,12 @@ EnvironmentFile=$CONFIG_DIR/.env
 Environment="MCP_HOST=$TAILSCALE_IP"
 Environment="MCP_PORT=$MCP_PORT"
 
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+TimeoutStartSec=120
+TimeoutStopSec=30
+
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -765,7 +821,8 @@ ReadWritePaths=$DATA_DIR $LOG_DIR $MCP_SERVER_DIR
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
+        systemctl daemon-reload
+    fi
 
     log_success "Wazuh MCP Server installed (Python)"
     log_security "MCP Server will bind to Tailscale IP: $TAILSCALE_IP:$MCP_PORT"
@@ -821,6 +878,11 @@ deploy_agents() {
     OPENCLAW_WEBHOOK_TOKEN=$(cat "$SECRETS_DIR/openclaw_webhook_token")
 
     # Create OpenClaw configuration (JSON5 format — validated by OpenClaw's zod schema)
+    # Back up existing config to avoid silently losing user customizations on re-install
+    if [[ -f "$OC_DIR/openclaw.json" ]]; then
+        cp "$OC_DIR/openclaw.json" "${OC_DIR}/openclaw.json.backup.$(date +%Y%m%d_%H%M%S)"
+        log_warn "Existing openclaw.json backed up"
+    fi
     cat > "$OC_DIR/openclaw.json" << EOF
 {
   "gateway": {
@@ -1093,8 +1155,27 @@ install_runtime_service() {
         fi
     fi
 
+    # Detect actual node binary path (supports nvm, snap, source installs)
+    local NODE_BIN
+    NODE_BIN=$(command -v node)
+    if [[ -z "$NODE_BIN" ]]; then
+        log_error "Cannot find node binary. Ensure Node.js is installed and in PATH."
+        exit 1
+    fi
+    log_info "Using Node.js binary: $NODE_BIN"
+
     # Create systemd service with security hardening
-    cat > /etc/systemd/system/wazuh-autopilot.service << EOF
+    if ! command -v systemctl &>/dev/null || ! pidof systemd &>/dev/null; then
+        log_warn "systemd not detected — skipping wazuh-autopilot.service creation"
+        log_warn "Start the runtime service manually:"
+        log_warn "  cd $RUNTIME_DST && NODE_ENV=production $NODE_BIN index.js"
+    else
+        # Back up existing service file on re-install
+        if [[ -f /etc/systemd/system/wazuh-autopilot.service ]]; then
+            cp /etc/systemd/system/wazuh-autopilot.service "/etc/systemd/system/wazuh-autopilot.service.backup.$(date +%Y%m%d_%H%M%S)"
+            log_warn "Existing wazuh-autopilot.service backed up"
+        fi
+        cat > /etc/systemd/system/wazuh-autopilot.service << EOF
 [Unit]
 Description=Wazuh OpenClaw Autopilot Runtime (Localhost Only)
 Documentation=https://github.com/gensecaihq/Wazuh-Openclaw-Autopilot
@@ -1106,10 +1187,16 @@ Type=simple
 User=root
 WorkingDirectory=$RUNTIME_DST
 Environment="NODE_ENV=production"
-ExecStart=/usr/bin/node index.js
+ExecStart=$NODE_BIN index.js
 Restart=always
 RestartSec=10
 EnvironmentFile=$CONFIG_DIR/.env
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+TimeoutStartSec=120
+TimeoutStopSec=30
 
 # Security hardening
 NoNewPrivileges=true
@@ -1122,7 +1209,8 @@ ReadWritePaths=$DATA_DIR $LOG_DIR $RUNTIME_DST
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
+        systemctl daemon-reload
+    fi
 
     log_success "Runtime Service installed"
     log_security "Runtime binding: $GATEWAY_BIND:$RUNTIME_PORT (localhost only)"
@@ -1297,6 +1385,11 @@ configure_system() {
 
     # Create configuration file
     # Use quoted heredoc to prevent shell expansion of $, then substitute known vars
+    # Back up existing .env to avoid silently losing user customizations on re-install
+    if [[ -f "$CONFIG_DIR/.env" ]]; then
+        cp "$CONFIG_DIR/.env" "${CONFIG_DIR}/.env.backup.$(date +%Y%m%d_%H%M%S)"
+        log_warn "Existing .env backed up"
+    fi
     local _generated_at
     _generated_at=$(date -Iseconds)
     cat > "$CONFIG_DIR/.env" << 'ENVEOF'
@@ -1422,7 +1515,8 @@ ENVEOF
     _safe_subst "__OPENCLAW_TOKEN__" "OPENCLAW_TOKEN" "$_envfile"
     _safe_subst "__OPENCLAW_WEBHOOK_TOKEN__" "OPENCLAW_WEBHOOK_TOKEN" "$_envfile"
     _safe_subst "__ANTHROPIC_API_KEY__" "ANTHROPIC_API_KEY" "$_envfile"
-    _safe_subst "__APPROVAL_SECRET__" "APPROVAL_SECRET" "$_envfile"
+    # Note: APPROVAL_SECRET is persisted in $SECRETS_DIR/approval_secret but not
+    # exposed via .env — the runtime generates approval tokens internally.
     _safe_subst "__PAIRING_SECRET__" "PAIRING_SECRET" "$_envfile"
     _safe_subst "__SLACK_APP_TOKEN__" "SLACK_APP_TOKEN" "$_envfile"
     _safe_subst "__SLACK_BOT_TOKEN__" "SLACK_BOT_TOKEN" "$_envfile"
@@ -1482,12 +1576,8 @@ ENVEOF
             # OpenClaw zod schema validation failures on startup
             if command -v python3 &>/dev/null; then
                 python3 -c "
-import json, sys
-with open('$_ocjson') as f: c = f.read()
-# Strip JSON5 comments for parsing
-import re
-c_clean = re.sub(r'//.*', '', c)
-d = json.loads(c_clean)
+import json
+with open('$_ocjson') as f: d = json.load(f)
 d['bindings'] = []
 with open('$_ocjson', 'w') as f: json.dump(d, f, indent=2)
 " 2>/dev/null || log_warn "Could not remove Slack bindings — edit openclaw.json manually if OpenClaw fails to start"
@@ -1850,6 +1940,12 @@ show_pairing_info() {
 
 start_services() {
     log_step "Starting Services"
+
+    if ! command -v systemctl &>/dev/null || ! pidof systemd &>/dev/null; then
+        log_warn "systemd not detected — cannot start services automatically"
+        log_warn "Start services manually after installation completes"
+        return 0
+    fi
 
     # Start MCP Server
     log_info "Starting Wazuh MCP Server..."
