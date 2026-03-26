@@ -406,6 +406,78 @@ describe("Plan Execution (Responder Enabled)", () => {
     assert.ok(mcpCall.headers["x-correlation-id"]);
   });
 
+  it("rejects kill_process without process_id at plan creation", async () => {
+    await fs.mkdir(process.env.AUTOPILOT_DATA_DIR, { recursive: true });
+    await fs.mkdir(path.join(process.env.AUTOPILOT_DATA_DIR, "cases"), { recursive: true });
+
+    const caseId = `CASE-killproc-${Date.now()}`;
+    await createCase(caseId, { title: "Test", severity: "high", entities: [] });
+
+    assert.throws(
+      () => createResponsePlan({
+        case_id: caseId,
+        risk_level: "high",
+        actions: [{ type: "kill_process", target: "agent-001" }],
+      }),
+      (err) => {
+        assert.ok(err.message.includes("kill_process"));
+        assert.ok(err.message.includes("process_id"));
+        return true;
+      },
+    );
+  });
+
+  it("rejects disable_user without username at plan creation", async () => {
+    await fs.mkdir(process.env.AUTOPILOT_DATA_DIR, { recursive: true });
+    await fs.mkdir(path.join(process.env.AUTOPILOT_DATA_DIR, "cases"), { recursive: true });
+
+    const caseId = `CASE-disuser-${Date.now()}`;
+    await createCase(caseId, { title: "Test", severity: "high", entities: [] });
+
+    assert.throws(
+      () => createResponsePlan({
+        case_id: caseId,
+        risk_level: "high",
+        actions: [{ type: "disable_user", target: "agent-002" }],
+      }),
+      (err) => {
+        assert.ok(err.message.includes("disable_user"));
+        assert.ok(err.message.includes("username"));
+        return true;
+      },
+    );
+  });
+
+  it("rejects quarantine_file without file_path at plan creation", async () => {
+    await fs.mkdir(process.env.AUTOPILOT_DATA_DIR, { recursive: true });
+    await fs.mkdir(path.join(process.env.AUTOPILOT_DATA_DIR, "cases"), { recursive: true });
+
+    const caseId = `CASE-quarfile-${Date.now()}`;
+    await createCase(caseId, { title: "Test", severity: "high", entities: [] });
+
+    assert.throws(
+      () => createResponsePlan({
+        case_id: caseId,
+        risk_level: "high",
+        actions: [{ type: "quarantine_file", target: "agent-003" }],
+      }),
+      (err) => {
+        assert.ok(err.message.includes("quarantine_file"));
+        assert.ok(err.message.includes("file_path"));
+        return true;
+      },
+    );
+  });
+
+  it("accepts kill_process with valid process_id", async () => {
+    const plan = await createApprovedPlan([
+      { type: "kill_process", target: "agent-001", params: { process_id: 9876 } },
+    ]);
+    assert.ok(plan.plan_id);
+    assert.equal(plan.actions[0].type, "kill_process");
+    assert.equal(plan.actions[0].params.process_id, 9876);
+  });
+
   it("rejects plan creation with invalid action fields", async () => {
     await fs.mkdir(process.env.AUTOPILOT_DATA_DIR, { recursive: true });
     await fs.mkdir(path.join(process.env.AUTOPILOT_DATA_DIR, "cases"), { recursive: true });

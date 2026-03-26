@@ -678,7 +678,7 @@ describe("Validation and edge cases", () => {
     const planRes = await request(server, "POST", "/api/plans", {
       case_id: "CASE-val-edge-01",
       title: "Validate reject body",
-      actions: [{ type: "kill_process", target: "malware.exe" }],
+      actions: [{ type: "kill_process", target: "agent-001", params: { process_id: 1234 } }],
     });
     assert.equal(planRes.status, 201);
 

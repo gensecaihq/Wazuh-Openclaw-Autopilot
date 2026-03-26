@@ -1603,6 +1603,7 @@ const ALLOWED_ACTION_TYPES = new Set([
   "disable_user",
   "quarantine_file",
   "restart_wazuh",
+  "active_response",
 ]);
 
 // Issue #6 fix: Validate action structure
@@ -1616,6 +1617,22 @@ function validatePlanAction(action, index) {
   }
   if (!action.target || typeof action.target !== "string") {
     errors.push(`Action ${index}: missing or invalid 'target' field`);
+  }
+  // Action-specific required parameter validation (Wazuh MCP Server v4.2.1)
+  if (action.type === "kill_process") {
+    if (!action.params || !action.params.process_id || (typeof action.params.process_id !== "number" || !Number.isInteger(action.params.process_id) || action.params.process_id <= 0)) {
+      errors.push(`Action ${index}: 'kill_process' requires params.process_id as a positive integer`);
+    }
+  }
+  if (action.type === "disable_user") {
+    if (!action.params || !action.params.username || typeof action.params.username !== "string" || action.params.username.trim() === "") {
+      errors.push(`Action ${index}: 'disable_user' requires params.username as a non-empty string`);
+    }
+  }
+  if (action.type === "quarantine_file") {
+    if (!action.params || !action.params.file_path || typeof action.params.file_path !== "string" || action.params.file_path.trim() === "") {
+      errors.push(`Action ${index}: 'quarantine_file' requires params.file_path as a non-empty string`);
+    }
   }
   // Rollback metadata validation (optional fields)
   // Coerce string booleans from LLMs (e.g. "true"/"false") to actual booleans
@@ -2353,6 +2370,12 @@ async function loadToolmap() {
         block_ip: { mcp_tool: "wazuh_block_ip", enabled: false, target_param: "ip_address" },
         isolate_host: { mcp_tool: "wazuh_isolate_host", enabled: false, target_param: "agent_id" },
         kill_process: { mcp_tool: "wazuh_kill_process", enabled: false, target_param: "agent_id" },
+        disable_user: { mcp_tool: "wazuh_disable_user", enabled: false, target_param: "agent_id" },
+        quarantine_file: { mcp_tool: "wazuh_quarantine_file", enabled: false, target_param: "agent_id" },
+        firewall_drop: { mcp_tool: "wazuh_firewall_drop", enabled: false, target_param: "agent_id" },
+        host_deny: { mcp_tool: "wazuh_host_deny", enabled: false, target_param: "agent_id" },
+        restart_wazuh: { mcp_tool: "wazuh_restart", enabled: false, target_param: "agent_id" },
+        active_response: { mcp_tool: "wazuh_active_response", enabled: false, target_param: "agent_id" },
       },
     };
     return toolmapConfig;

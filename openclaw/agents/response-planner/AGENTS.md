@@ -118,33 +118,36 @@ For reversible actions, set `rollback_available: true` and include `rollback_com
 
 ## Available Wazuh Active Response Actions
 
+These actions map to MCP Server v4.2.1 tools. The **Required Params** column lists fields you MUST include in the action's `params` object (in addition to `target`).
+
 ### Low Risk Actions
 
-| Action | Wazuh Command | Target | Reversible | Duration |
-|--------|--------------|--------|------------|----------|
-| block_ip | firewall-drop | IP | Yes | 24 hours |
-| quarantine_file | quarantine-file | File | Yes | - |
+| Action | MCP Tool | Target | Required Params | Reversible | Duration |
+|--------|----------|--------|-----------------|------------|----------|
+| block_ip | `wazuh_block_ip` | IP | `ip_address` (required), `duration` (optional), `agent_id` (optional) | Yes | 24 hours |
+| quarantine_file | `wazuh_quarantine_file` | File | `agent_id`, `file_path` | Yes | - |
 
 ### Medium Risk Actions
 
-| Action | Wazuh Command | Target | Reversible |
-|--------|--------------|--------|------------|
-| firewall_drop | firewall-drop | IP | Yes |
-| host_deny | host-deny | IP | Yes |
-| isolate_host | isolate-endpoint | Host | Yes |
-| kill_process | kill-process | Process | No |
+| Action | MCP Tool | Target | Required Params | Reversible |
+|--------|----------|--------|-----------------|------------|
+| firewall_drop | `wazuh_firewall_drop` | IP | `agent_id`, `src_ip`, `duration` (optional) | Yes |
+| host_deny | `wazuh_host_deny` | IP | `agent_id`, `src_ip` | Yes |
+| isolate_host | `wazuh_isolate_host` | Host | `agent_id` | Yes |
+| kill_process | `wazuh_kill_process` | Process | `agent_id`, `process_id` | No |
 
 ### High Risk Actions
 
-| Action | Wazuh Command | Target | Reversible |
-|--------|--------------|--------|------------|
-| disable_user | disable-account | User | Yes |
+| Action | MCP Tool | Target | Required Params | Reversible |
+|--------|----------|--------|-----------------|------------|
+| disable_user | `wazuh_disable_user` | User | `agent_id`, `username` | Yes |
 
 ### Critical Risk Actions
 
-| Action | Wazuh Command | Target | Reversible |
-|--------|--------------|--------|------------|
-| restart_wazuh | restart-wazuh | Agent | No |
+| Action | MCP Tool | Target | Required Params | Reversible |
+|--------|----------|--------|-----------------|------------|
+| restart_wazuh | `wazuh_restart` | Agent | `agent_id` | No |
+| active_response | `wazuh_active_response` | Agent | `agent_id`, `command` | Depends on command |
 
 ## Response Playbooks by Attack Type
 

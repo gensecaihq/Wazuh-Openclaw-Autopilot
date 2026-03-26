@@ -319,4 +319,37 @@ describe("buildMcpParams", () => {
     assert.equal(params.target, "some-target");
     assert.equal(params.extra, "value");
   });
+
+  it("includes process_id from action.params for kill_process", async () => {
+    await loadToolmap();
+    const params = buildMcpParams({
+      type: "kill_process",
+      target: "agent-005",
+      params: { process_id: 4567 },
+    });
+    assert.equal(params.agent_id, "agent-005");
+    assert.equal(params.process_id, 4567);
+  });
+
+  it("includes username from action.params for disable_user", async () => {
+    await loadToolmap();
+    const params = buildMcpParams({
+      type: "disable_user",
+      target: "agent-003",
+      params: { username: "compromised_user" },
+    });
+    assert.equal(params.agent_id, "agent-003");
+    assert.equal(params.username, "compromised_user");
+  });
+
+  it("includes file_path from action.params for quarantine_file", async () => {
+    await loadToolmap();
+    const params = buildMcpParams({
+      type: "quarantine_file",
+      target: "agent-007",
+      params: { file_path: "/tmp/malware.bin" },
+    });
+    assert.equal(params.agent_id, "agent-007");
+    assert.equal(params.file_path, "/tmp/malware.bin");
+  });
 });

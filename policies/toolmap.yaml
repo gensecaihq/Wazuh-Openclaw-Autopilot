@@ -1,6 +1,6 @@
 # Wazuh Autopilot - MCP Tool Mapping Configuration
-# Maps logical operations to actual MCP tool names on Wazuh-MCP-Server v4.0.7
-# Version: 2.1.0
+# Maps logical operations to actual MCP tool names on Wazuh-MCP-Server v4.2.1
+# Version: 2.2.0
 
 schema_version: "2.0"
 description: |
@@ -638,7 +638,7 @@ action_operations:
     enabled: false
     risk_level: medium
     reversible: true
-    target_param: src_ip
+    target_param: agent_id
     parameters:
       - name: agent_id
         type: string
@@ -660,7 +660,7 @@ action_operations:
     enabled: false
     risk_level: medium
     reversible: true
-    target_param: src_ip
+    target_param: agent_id
     parameters:
       - name: agent_id
         type: string
@@ -679,11 +679,12 @@ action_operations:
     enabled: false
     risk_level: critical
     reversible: false
+    target_param: agent_id
     parameters:
-      - name: target
+      - name: agent_id
         type: string
         required: true
-        description: "agent ID or 'manager'"
+        description: "Agent ID to restart"
 
 # =============================================================================
 # VERIFICATION OPERATIONS — Confirm action outcomes

@@ -364,11 +364,11 @@ Every response action requires explicit human authorization through a two-tier w
 
 ### Wazuh Version Support
 
-Tested via [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) v4.0.6:
+Tested via [Wazuh MCP Server](https://github.com/gensecaihq/Wazuh-MCP-Server) v4.2.1:
 
 | Wazuh Version | Support Level | Notes |
 |---------------|-------------|-------|
-| **4.14.x** | Fully Supported | Recommended. All 29 MCP tools work. |
+| **4.14.x** | Fully Supported | Recommended. All 48 MCP tools work. |
 | 4.10.x – 4.13.x | Fully Supported | All features available |
 | 4.8.x – 4.9.x | Fully Supported | Minimum for vulnerability tools |
 | 4.0.0 – 4.7.x | Limited | 3 vulnerability tools unavailable (require Wazuh Indexer) |
@@ -455,6 +455,8 @@ GOOGLE_API_KEY=...                     # Gemini
 SLACK_APP_TOKEN=xapp-...
 SLACK_BOT_TOKEN=xoxb-...
 ```
+
+> **MCP Server Auth Note:** If using `AUTH_MODE=none` (bootstrap mode), add `AUTHLESS_ALLOW_WRITE=true` to the Wazuh MCP Server's `.env` file. Without this, active response tools will be rejected by the MCP Server's RBAC layer (v4.2.0+).
 
 **For Local Ollama (Path B — air-gapped):**
 
@@ -639,6 +641,7 @@ Query parameter authentication is restricted to GET requests only to prevent tok
 - **Tailscale**: All inter-component traffic encrypted
 - **Credentials**: Isolated storage with 600 permissions
 - **Human approval**: Required for all response actions
+- **MCP Server RBAC**: Active response tools (e.g., `wazuh_block_ip`, `wazuh_isolate_host`) require `wazuh:write` scope in MCP Server v4.2.0+. When running the MCP Server without authentication (`AUTH_MODE=none`), set `AUTHLESS_ALLOW_WRITE=true` in the MCP Server's `.env` to enable destructive operations.
 
 ---
 

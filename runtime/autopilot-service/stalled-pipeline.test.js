@@ -237,6 +237,7 @@ describe("ALLOWED_ACTION_TYPES export", () => {
     assert.ok(ALLOWED_ACTION_TYPES.has("firewall_drop"));
     assert.ok(ALLOWED_ACTION_TYPES.has("host_deny"));
     assert.ok(ALLOWED_ACTION_TYPES.has("restart_wazuh"));
+    assert.ok(ALLOWED_ACTION_TYPES.has("active_response"));
   });
 
   it("does not contain dangerous action types", () => {
