@@ -97,13 +97,15 @@ Use this for action success rate KPIs and plan throughput metrics. Prefer this o
 
 Returns pre-computed KPI metrics for the specified period. Supported periods: `1h`, `8h`, `24h`, `7d`, `30d`.
 
+**IMPORTANT: All MTTx values are in SECONDS, not minutes. Convert to minutes by dividing by 60 when displaying in reports. Label as `_seconds` not `_minutes`.**
+
 | Field | Description |
 |-------|-------------|
-| `mttd` | Mean Time to Detect (minutes) |
-| `mttt` | Mean Time to Triage (minutes) |
-| `mtti` | Mean Time to Investigate (minutes) |
-| `mttr` | Mean Time to Respond (minutes) |
-| `mttc` | Mean Time to Contain (minutes) |
+| `mttd` | Mean Time to Detect (**seconds**) |
+| `mttt` | Mean Time to Triage (**seconds**) |
+| `mtti` | Mean Time to Investigate (**seconds**) |
+| `mttr` | Mean Time to Respond (**seconds**) |
+| `mttc` | Mean Time to Contain (**seconds**) |
 | `auto_triage_rate` | Percentage of cases auto-triaged |
 | `false_positive_rate` | Percentage of cases marked false positive |
 | `sla_compliance` | Percentage of cases meeting SLA targets |

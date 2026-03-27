@@ -31,9 +31,11 @@ The Reporting Agent cannot execute any response actions. It is strictly read-onl
 
 ## KPI Definitions
 
-### Time Metrics (Minutes)
+### Time Metrics (Thresholds in Minutes)
 
-| KPI | Abbreviation | Target | Warning | Critical |
+**IMPORTANT: The `/api/kpis` endpoint returns all MTTx values in SECONDS. Divide by 60 to convert to minutes before comparing against these thresholds or displaying in reports. Always label output fields as `_seconds` not `_minutes`.**
+
+| KPI | Abbreviation | Target (min) | Warning (min) | Critical (min) |
 |-----|--------------|--------|---------|----------|
 | Mean Time to Detect | MTTD | 10 | 15 | 30 |
 | Mean Time to Triage | MTTT | 15 | 30 | 60 |
