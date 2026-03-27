@@ -1829,6 +1829,76 @@ describe("Agent output fields in updateCase", () => {
 });
 
 // =============================================================================
+// Findings severity/confidence promotion to top-level case fields
+// =============================================================================
+
+describe("Findings promotion to top-level case fields", () => {
+  // Use the same dataDir that config resolved at module-load time (line 14)
+  const dataDir = process.env.AUTOPILOT_DATA_DIR;
+
+  before(async () => {
+    await fs.mkdir(path.join(dataDir, "cases"), { recursive: true });
+  });
+
+  it("promotes findings.severity to case top-level severity", async () => {
+    const caseId = `CASE-${Date.now()}-promsev01`;
+    await createCase(caseId, { title: "Triage low", severity: "low", confidence: 0.5 });
+    await updateCase(caseId, {
+      findings: { classification: "brute_force", severity: "high", confidence: 0.95 },
+    });
+    const result = await getCase(caseId);
+    assert.strictEqual(result.severity, "high", "Top-level severity should be promoted from findings");
+    assert.strictEqual(result.findings.severity, "high");
+  });
+
+  it("promotes findings.confidence when higher than current", async () => {
+    const caseId = `CASE-${Date.now()}-promconf01`;
+    await createCase(caseId, { title: "Triage uncertain", severity: "low", confidence: 0.63 });
+    await updateCase(caseId, {
+      findings: { classification: "brute_force", severity: "high", confidence: 0.95 },
+    });
+    const result = await getCase(caseId);
+    assert.strictEqual(result.confidence, 0.95, "Top-level confidence should be promoted from findings");
+  });
+
+  it("does NOT demote confidence when findings.confidence is lower", async () => {
+    const caseId = `CASE-${Date.now()}-nodemote01`;
+    await createCase(caseId, { title: "High confidence triage", severity: "high", confidence: 0.98 });
+    await updateCase(caseId, {
+      findings: { classification: "reconnaissance", severity: "medium", confidence: 0.6 },
+    });
+    const result = await getCase(caseId);
+    assert.strictEqual(result.confidence, 0.98, "Confidence should NOT be demoted when findings.confidence is lower");
+    // But severity should still be updated
+    assert.strictEqual(result.severity, "medium", "Severity should still be updated from findings");
+  });
+
+  it("updates case summary (case.json) with promoted severity", async () => {
+    const caseId = `CASE-${Date.now()}-promsumm01`;
+    await createCase(caseId, { title: "Summary test", severity: "low" });
+    await updateCase(caseId, {
+      findings: { classification: "malware", severity: "critical", confidence: 0.99 },
+    });
+    // Read case.json directly to verify summary was updated
+    const summaryPath = path.join(dataDir, "cases", caseId, "case.json");
+    const summaryContent = await fs.readFile(summaryPath, "utf8");
+    const summary = JSON.parse(summaryContent);
+    assert.strictEqual(summary.severity, "critical", "case.json summary severity should reflect promoted findings severity");
+  });
+
+  it("ignores invalid findings.severity values", async () => {
+    const caseId = `CASE-${Date.now()}-invalidsev01`;
+    await createCase(caseId, { title: "Invalid sev test", severity: "medium" });
+    await updateCase(caseId, {
+      findings: { classification: "unknown", severity: "super_critical", confidence: 0.8 },
+    });
+    const result = await getCase(caseId);
+    assert.strictEqual(result.severity, "medium", "Invalid severity in findings should not change case severity");
+    assert.strictEqual(result.confidence, 0.8, "Valid confidence should still be promoted");
+  });
+});
+
+// =============================================================================
 // M3: Entity Index Capacity Warnings
 // =============================================================================
 

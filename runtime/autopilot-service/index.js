@@ -1251,7 +1251,21 @@ async function updateCase(caseId, updates) {
 
     // Agent investigation/correlation output fields — direct assignment (latest wins)
     if (updates.investigation_notes !== undefined) evidencePack.investigation_notes = updates.investigation_notes;
-    if (updates.findings !== undefined) evidencePack.findings = updates.findings;
+    if (updates.findings !== undefined) {
+      evidencePack.findings = updates.findings;
+      // Promote findings severity/confidence to top-level case fields so the
+      // investigation agent's assessment overwrites the initial triage values.
+      const FINDINGS_VALID_SEVERITIES = ["informational", "low", "medium", "high", "critical"];
+      if (updates.findings.severity && FINDINGS_VALID_SEVERITIES.includes(updates.findings.severity)) {
+        evidencePack.severity = updates.findings.severity;
+      }
+      if (typeof updates.findings.confidence === "number" && updates.findings.confidence >= 0 && updates.findings.confidence <= 1) {
+        // Only promote if investigation confidence is higher than current
+        if (updates.findings.confidence > (evidencePack.confidence || 0)) {
+          evidencePack.confidence = updates.findings.confidence;
+        }
+      }
+    }
     if (updates.pivot_results !== undefined) evidencePack.pivot_results = updates.pivot_results;
     if (updates.enrichment_data !== undefined) evidencePack.enrichment_data = updates.enrichment_data;
     if (updates.key_questions_answered !== undefined) evidencePack.key_questions_answered = updates.key_questions_answered;
@@ -1273,6 +1287,13 @@ async function updateCase(caseId, updates) {
       if (Object.prototype.hasOwnProperty.call(updates, "title")) summary.title = updates.title;
       if (Object.prototype.hasOwnProperty.call(updates, "severity")) summary.severity = updates.severity;
       if (Object.prototype.hasOwnProperty.call(updates, "status")) summary.status = updates.status;
+      // Sync severity promoted from findings (investigation agent override)
+      if (updates.findings && updates.findings.severity) {
+        const FINDINGS_VALID_SEVERITIES = ["informational", "low", "medium", "high", "critical"];
+        if (FINDINGS_VALID_SEVERITIES.includes(updates.findings.severity)) {
+          summary.severity = updates.findings.severity;
+        }
+      }
       await atomicWriteFile(summaryPath, JSON.stringify(summary, null, 2));
     } catch (err) {
       // Summary file might not exist, that's ok
@@ -2172,6 +2193,7 @@ async function executePlan(planId, executorId) {
 
     try {
       await updateCase(plan.case_id, {
+        status: "executed",
         actions: [
           {
             plan_id: planId,
@@ -5406,10 +5428,10 @@ function createServer() {
           try {
             const caseData = await getCase(caseSummary.case_id);
             const history = caseData.status_history;
-            if (!history || !Array.isArray(history) || history.length === 0) continue;
+            const hasHistory = history && Array.isArray(history) && history.length > 0;
 
             const findTransition = (toStatus) =>
-              history.find(h => h.to === toStatus);
+              hasHistory ? history.find(h => h.to === toStatus) : undefined;
 
             const openEntry = findTransition("open");
             const triagedEntry = findTransition("triaged");
@@ -5417,7 +5439,18 @@ function createServer() {
             const executedEntry = findTransition("executed");
             const closedEntry = findTransition("closed");
 
+            // Use the open transition timestamp, falling back to created_at for legacy cases
             const openTs = openEntry ? new Date(openEntry.timestamp).getTime() : new Date(caseData.created_at).getTime();
+
+            // MTTD: time from first alert to case creation (detection)
+            // Use timeline[0].timestamp as the alert time if available, otherwise skip
+            const alertTs = (caseData.timeline && caseData.timeline.length > 0 && caseData.timeline[0].timestamp)
+              ? new Date(caseData.timeline[0].timestamp).getTime()
+              : null;
+            if (alertTs) {
+              const detectionDelta = (new Date(caseData.created_at).getTime() - alertTs) / 1000;
+              if (detectionDelta >= 0) mttdValues.push(detectionDelta);
+            }
 
             if (triagedEntry) {
               const triageTime = (new Date(triagedEntry.timestamp).getTime() - openTs) / 1000;
@@ -5433,14 +5466,18 @@ function createServer() {
               if (delta >= 0) mttiValues.push(delta);
             }
 
-            if (executedEntry && investigatedEntry) {
-              const delta = (new Date(executedEntry.timestamp).getTime() - new Date(investigatedEntry.timestamp).getTime()) / 1000;
+            // MTTR: time from open to response (executed or closed)
+            // Look for "executed" transition first, fall back to "closed"
+            const responseEntry = executedEntry || closedEntry;
+            if (responseEntry) {
+              const delta = (new Date(responseEntry.timestamp).getTime() - openTs) / 1000;
               if (delta >= 0) {
                 mttrValues.push(delta);
                 if (delta <= slaResponse) responseWithinSla++;
               }
             }
 
+            // MTTC: only include cases that actually have a "closed" transition
             if (closedEntry) {
               const delta = (new Date(closedEntry.timestamp).getTime() - openTs) / 1000;
               if (delta >= 0) mttcValues.push(delta);
@@ -5459,11 +5496,16 @@ function createServer() {
         res.end(JSON.stringify({
           period,
           cases_analyzed: casesAnalyzed,
-          mttd: 0, // Cannot compute without external alert timestamp
+          mttd: avg(mttdValues),
+          mttd_cases: mttdValues.length,
           mttt: avg(mtttValues),
+          mttt_cases: mtttValues.length,
           mtti: avg(mttiValues),
+          mtti_cases: mttiValues.length,
           mttr: avg(mttrValues),
+          mttr_cases: mttrValues.length,
           mttc: avg(mttcValues),
+          mttc_cases: mttcValues.length,
           auto_triage_rate: casesAnalyzed > 0 ? Math.round((autoTriaged / casesAnalyzed) * 100) / 100 : 0,
           false_positive_rate: casesAnalyzed > 0 ? Math.round((falsePositives / casesAnalyzed) * 100) / 100 : 0,
           sla_compliance: {

@@ -29,6 +29,8 @@ process.env.MCP_AUTH_MODE = "legacy-rest";
 
 const {
   createCase,
+  updateCase,
+  getCase,
   createResponsePlan,
   approvePlan,
   rejectPlan,
@@ -404,6 +406,64 @@ describe("Plan Execution (Responder Enabled)", () => {
     assert.deepStrictEqual(mcpCall.body, { ip: "10.0.0.42", direction: "both", target: "10.0.0.42" });
     assert.ok(mcpCall.headers["authorization"]);
     assert.ok(mcpCall.headers["x-correlation-id"]);
+  });
+
+  it("transitions case status to executed after successful plan execution", async () => {
+    const plan = await createApprovedPlan([
+      { type: "block_ip", target: "10.0.0.99", params: { ip: "10.0.0.99" } },
+    ]);
+
+    // Walk case through valid status transitions to reach "approved"
+    // open → triaged → correlated → investigated → planned → approved
+    await updateCase(plan.case_id, { status: "triaged" });
+    await updateCase(plan.case_id, { status: "correlated" });
+    await updateCase(plan.case_id, { status: "investigated" });
+    await updateCase(plan.case_id, { status: "planned" });
+    await updateCase(plan.case_id, { status: "approved" });
+
+    const result = await executePlan(plan.plan_id, "executor-001");
+    assert.equal(result.state, PLAN_STATES.COMPLETED);
+    assert.equal(result.execution_result.success, true);
+
+    // Verify case status is now "executed"
+    const caseAfter = await getCase(plan.case_id);
+    assert.equal(caseAfter.status, "executed");
+  });
+
+  it("transitions case status to executed even with partial action failure", async () => {
+    mcpResponseHandler = (_req, res, entry) => {
+      // Always fail requests targeting 10.0.0.1 (in URL or body), succeed the rest
+      const bodyStr = JSON.stringify(entry.body || {});
+      if (entry.url.includes("10.0.0.1") || bodyStr.includes("10.0.0.1")) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "simulated failure" }));
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ success: true }));
+      }
+    };
+
+    const plan = await createApprovedPlan([
+      { type: "block_ip", target: "10.0.0.1", params: { ip: "10.0.0.1" } },
+      { type: "block_ip", target: "10.0.0.2", params: { ip: "10.0.0.2" } },
+      { type: "block_ip", target: "10.0.0.3", params: { ip: "10.0.0.3" } },
+    ]);
+
+    // Walk case through valid status transitions to reach "approved"
+    await updateCase(plan.case_id, { status: "triaged" });
+    await updateCase(plan.case_id, { status: "correlated" });
+    await updateCase(plan.case_id, { status: "investigated" });
+    await updateCase(plan.case_id, { status: "planned" });
+    await updateCase(plan.case_id, { status: "approved" });
+
+    const result = await executePlan(plan.plan_id, "executor-001");
+    assert.equal(result.state, PLAN_STATES.FAILED);
+    assert.equal(result.execution_result.success, false);
+    assert.ok(result.execution_result.actions_failed >= 1);
+
+    // Verify case status is still "executed" even with partial failure
+    const caseAfter = await getCase(plan.case_id);
+    assert.equal(caseAfter.status, "executed");
   });
 
   it("rejects kill_process without process_id at plan creation", async () => {

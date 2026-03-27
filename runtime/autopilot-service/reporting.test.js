@@ -192,10 +192,15 @@ describe("Reporting Endpoints", () => {
       assert.strictEqual(res.body.period, "24h");
       assert.ok(typeof res.body.cases_analyzed === "number");
       assert.ok(typeof res.body.mttd === "number");
+      assert.ok(typeof res.body.mttd_cases === "number");
       assert.ok(typeof res.body.mttt === "number");
+      assert.ok(typeof res.body.mttt_cases === "number");
       assert.ok(typeof res.body.mtti === "number");
+      assert.ok(typeof res.body.mtti_cases === "number");
       assert.ok(typeof res.body.mttr === "number");
+      assert.ok(typeof res.body.mttr_cases === "number");
       assert.ok(typeof res.body.mttc === "number");
+      assert.ok(typeof res.body.mttc_cases === "number");
       assert.ok(typeof res.body.auto_triage_rate === "number");
       assert.ok(typeof res.body.false_positive_rate === "number");
       assert.ok(res.body.sla_compliance);
@@ -229,6 +234,110 @@ describe("Reporting Endpoints", () => {
       const res = await request(server, "GET", "/api/kpis?period=24h");
       assert.strictEqual(res.status, 200);
       assert.ok(res.body.cases_analyzed > 0);
+    });
+
+    it("should compute mttd from timeline when status_history has no initial entry", async () => {
+      // Create a case with timeline data to simulate a legacy case
+      const alertTime = new Date(Date.now() - 60000).toISOString(); // 60s ago
+      await createCase("CASE-20260327-kpi002", {
+        title: "MTTD test case", severity: "high",
+        timeline: [{ timestamp: alertTime, description: "Alert fired" }],
+      });
+      // The case has status_history (from createCase), but even if it didn't,
+      // mttd should be computed from timeline[0].timestamp vs created_at
+      const res = await request(server, "GET", "/api/kpis?period=24h");
+      assert.strictEqual(res.status, 200);
+      assert.ok(res.body.mttd_cases > 0, "mttd_cases should include cases with timeline data");
+      assert.ok(res.body.mttd >= 0, "mttd should be non-negative");
+    });
+
+    it("should exclude open cases from mttc computation", async () => {
+      // Create an open case (no closed transition)
+      await createCase("CASE-20260327-kpi003", {
+        title: "Open case for mttc test", severity: "medium",
+      });
+      await updateCase("CASE-20260327-kpi003", { status: "triaged" });
+
+      const res = await request(server, "GET", "/api/kpis?period=24h");
+      assert.strictEqual(res.status, 200);
+      // mttc_cases should not count open cases
+      // All our test cases so far are open, so mttc_cases should be 0
+      // unless a previous test closed one
+      assert.ok(typeof res.body.mttc_cases === "number");
+      // mttc should be 0 when no cases are closed
+      if (res.body.mttc_cases === 0) {
+        assert.strictEqual(res.body.mttc, 0, "mttc should be 0 when no closed cases exist");
+      }
+    });
+
+    it("should include closed cases in mttc and mttr", async () => {
+      // Create a case and close it to generate mttc
+      await createCase("CASE-20260327-kpi004", {
+        title: "Closed case for mttc test", severity: "high",
+        timeline: [{ timestamp: new Date(Date.now() - 120000).toISOString(), description: "Alert" }],
+      });
+      await updateCase("CASE-20260327-kpi004", { status: "closed" });
+
+      const res = await request(server, "GET", "/api/kpis?period=24h");
+      assert.strictEqual(res.status, 200);
+      assert.ok(res.body.mttc_cases >= 1, "mttc_cases should include the closed case");
+      assert.ok(res.body.mttc >= 0, "mttc should be >= 0 for closed cases");
+      // mttr should also count closed cases as a response fallback
+      assert.ok(res.body.mttr_cases >= 1, "mttr_cases should include cases with closed transition");
+    });
+
+    it("should handle cases without status_history gracefully", async () => {
+      // Manually write a case file without status_history to simulate legacy data
+      const legacyCaseId = "CASE-20260327-kpi005";
+      const caseDir = path.join(process.env.AUTOPILOT_DATA_DIR, "cases", legacyCaseId);
+      await fs.mkdir(caseDir, { recursive: true });
+      const alertTime = new Date(Date.now() - 30000).toISOString();
+      const legacyPack = {
+        schema_version: "1.0",
+        case_id: legacyCaseId,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        title: "Legacy case without status_history",
+        summary: "",
+        severity: "low",
+        confidence: 0,
+        entities: [],
+        timeline: [{ timestamp: alertTime, description: "Alert" }],
+        mitre: [],
+        mcp_calls: [],
+        evidence_refs: [],
+        plans: [],
+        approvals: [],
+        actions: [],
+        status: "open",
+        feedback: [],
+        // No status_history field
+      };
+      await fs.writeFile(
+        path.join(caseDir, "evidence-pack.json"),
+        JSON.stringify(legacyPack, null, 2),
+      );
+      // Also write summary for listCases
+      await fs.writeFile(
+        path.join(caseDir, "summary.json"),
+        JSON.stringify({ case_id: legacyCaseId, title: legacyPack.title, severity: "low", status: "open", created_at: legacyPack.created_at, updated_at: legacyPack.updated_at }),
+      );
+
+      const res = await request(server, "GET", "/api/kpis?period=24h");
+      assert.strictEqual(res.status, 200);
+      // The legacy case should still contribute to mttd via timeline
+      assert.ok(res.body.mttd_cases >= 1, "Legacy cases with timeline should contribute to mttd");
+    });
+
+    it("should report correct _cases counts", async () => {
+      const res = await request(server, "GET", "/api/kpis?period=24h");
+      assert.strictEqual(res.status, 200);
+      // _cases counts should never exceed cases_analyzed
+      assert.ok(res.body.mttd_cases <= res.body.cases_analyzed);
+      assert.ok(res.body.mttt_cases <= res.body.cases_analyzed);
+      assert.ok(res.body.mtti_cases <= res.body.cases_analyzed);
+      assert.ok(res.body.mttr_cases <= res.body.cases_analyzed);
+      assert.ok(res.body.mttc_cases <= res.body.cases_analyzed);
     });
   });
 
