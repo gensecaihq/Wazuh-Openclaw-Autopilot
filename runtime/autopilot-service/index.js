@@ -1080,6 +1080,7 @@ async function createCase(caseId, data) {
       approvals: [],
       actions: [],
       status: "open",
+      status_history: [{ from: null, to: "open", timestamp: now }],
       feedback: [],
     };
 
@@ -1173,6 +1174,13 @@ async function updateCase(caseId, updates) {
     if (Object.prototype.hasOwnProperty.call(updates, "severity")) evidencePack.severity = updates.severity;
     if (Object.prototype.hasOwnProperty.call(updates, "confidence")) evidencePack.confidence = updates.confidence;
     if (Object.prototype.hasOwnProperty.call(updates, "status")) {
+      // Track status transition history
+      if (!evidencePack.status_history) { evidencePack.status_history = []; }
+      evidencePack.status_history.push({
+        from: evidencePack.status,
+        to: updates.status,
+        timestamp: now,
+      });
       evidencePack.status = updates.status;
       stalledRedispatchCounts.delete(caseId); // Reset backoff counter on status transition
     }
@@ -3745,7 +3753,50 @@ function createServer() {
         return;
       }
 
-      // Cases API - GET all
+      // Cases summary endpoint (must be BEFORE /api/cases/:id to avoid pattern conflict)
+      if (url.pathname === "/api/cases/summary" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "read", url);
+        if (!authResult.valid) {
+          sendAuthError(res, authResult, requestId);
+          return;
+        }
+
+        const allCases = await listCases({ limit: 100000 });
+        const now = Date.now();
+        const by_status = {};
+        const by_severity = {};
+        let false_positive_count = 0;
+        let last_24h = 0;
+        let last_7d = 0;
+        let last_30d = 0;
+
+        for (const c of allCases) {
+          const st = c.status || "open";
+          by_status[st] = (by_status[st] || 0) + 1;
+          const sev = c.severity || "medium";
+          by_severity[sev] = (by_severity[sev] || 0) + 1;
+          if (st === "false_positive") false_positive_count++;
+          const created = new Date(c.created_at).getTime();
+          if (now - created <= 24 * 3600 * 1000) last_24h++;
+          if (now - created <= 7 * 24 * 3600 * 1000) last_7d++;
+          if (now - created <= 30 * 24 * 3600 * 1000) last_30d++;
+        }
+
+        res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
+        res.end(JSON.stringify({
+          total: allCases.length,
+          by_status,
+          by_severity,
+          false_positive_count,
+          last_24h,
+          last_7d,
+          last_30d,
+          request_id: requestId,
+        }));
+        return;
+      }
+
+      // Cases API - GET all (with filtering)
       if (url.pathname === "/api/cases" && req.method === "GET") {
         const authResult = validateAuthorization(req, "read", url);
         if (!authResult.valid) {
@@ -3754,9 +3805,40 @@ function createServer() {
         }
 
         const requestedLimit = parseInt(url.searchParams.get("limit") || "100", 10);
-        const cases = await listCases({ limit: Math.min(Math.max(requestedLimit, 1), 1000) });
+        const requestedOffset = parseInt(url.searchParams.get("offset") || "0", 10);
+        const filterStatus = url.searchParams.get("status");
+        const filterSeverity = url.searchParams.get("severity");
+        const filterSince = url.searchParams.get("since");
+        const filterUntil = url.searchParams.get("until");
+
+        // Fetch all cases (we filter in-memory after)
+        let cases = await listCases({ limit: 100000 });
+
+        if (filterStatus) {
+          cases = cases.filter(c => c.status === filterStatus);
+        }
+        if (filterSeverity) {
+          cases = cases.filter(c => c.severity === filterSeverity);
+        }
+        if (filterSince) {
+          const sinceTs = new Date(filterSince).getTime();
+          if (!isNaN(sinceTs)) {
+            cases = cases.filter(c => new Date(c.created_at).getTime() >= sinceTs);
+          }
+        }
+        if (filterUntil) {
+          const untilTs = new Date(filterUntil).getTime();
+          if (!isNaN(untilTs)) {
+            cases = cases.filter(c => new Date(c.created_at).getTime() <= untilTs);
+          }
+        }
+
+        const safeOffset = Math.max(requestedOffset, 0);
+        const safeLimit = Math.min(Math.max(requestedLimit, 1), 1000);
+        const paged = cases.slice(safeOffset, safeOffset + safeLimit);
+
         res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
-        res.end(JSON.stringify(cases));
+        res.end(JSON.stringify(paged));
         return;
       }
 
@@ -4994,6 +5076,44 @@ function createServer() {
         return;
       }
 
+      // Plans summary (must be BEFORE plans/:id to avoid regex matching "summary" as an ID)
+      if (url.pathname === "/api/plans/summary" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "read", url);
+        if (!authResult.valid) {
+          sendAuthError(res, authResult, requestId);
+          return;
+        }
+
+        const allPlans = listPlans({ limit: 100000 });
+        const now = Date.now();
+        const by_state = {};
+        let completed = 0;
+        let failed = 0;
+        let last_24h = 0;
+
+        for (const p of allPlans) {
+          const st = p.state || "proposed";
+          by_state[st] = (by_state[st] || 0) + 1;
+          if (st === "completed") completed++;
+          if (st === "failed") failed++;
+          const created = new Date(p.created_at).getTime();
+          if (now - created <= 24 * 3600 * 1000) last_24h++;
+        }
+
+        const total = allPlans.length;
+        const success_rate = (completed + failed) > 0 ? completed / (completed + failed) : 0;
+
+        res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
+        res.end(JSON.stringify({
+          total,
+          by_state,
+          success_rate: Math.round(success_rate * 100) / 100,
+          last_24h,
+          request_id: requestId,
+        }));
+        return;
+      }
+
       // Get single plan
       if (url.pathname.match(/^\/api\/plans\/[^/]+$/) && req.method === "GET") {
         const authResult = validateAuthorization(req, "read", url);
@@ -5240,6 +5360,233 @@ function createServer() {
             throw err;
           }
         }
+        return;
+      }
+
+      // =================================================================
+      // REPORTING ENDPOINTS
+      // =================================================================
+
+      // KPI metrics
+      if (url.pathname === "/api/kpis" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "read", url);
+        if (!authResult.valid) {
+          sendAuthError(res, authResult, requestId);
+          return;
+        }
+
+        const period = url.searchParams.get("period") || "24h";
+        const periodMap = { "1h": 3600, "8h": 28800, "24h": 86400, "7d": 604800, "30d": 2592000 };
+        const periodSeconds = periodMap[period];
+        if (!periodSeconds) {
+          sendJsonError(res, 400, "Invalid period. Supported: 1h, 8h, 24h, 7d, 30d", requestId);
+          return;
+        }
+
+        const slaTriage = parseInt(process.env.SLA_TRIAGE_SECONDS || "900", 10);
+        const slaResponse = parseInt(process.env.SLA_RESPONSE_SECONDS || "3600", 10);
+        const now = Date.now();
+        const cutoff = now - periodSeconds * 1000;
+
+        const allCases = await listCases({ limit: 100000 });
+        const periodCases = allCases.filter(c => new Date(c.created_at).getTime() >= cutoff);
+
+        // Read full evidence packs for cases in the period to get status_history
+        const mttdValues = [];
+        const mtttValues = [];
+        const mttiValues = [];
+        const mttrValues = [];
+        const mttcValues = [];
+        let autoTriaged = 0;
+        let falsePositives = 0;
+        let triageWithinSla = 0;
+        let responseWithinSla = 0;
+
+        for (const caseSummary of periodCases) {
+          try {
+            const caseData = await getCase(caseSummary.case_id);
+            const history = caseData.status_history;
+            if (!history || !Array.isArray(history) || history.length === 0) continue;
+
+            const findTransition = (toStatus) =>
+              history.find(h => h.to === toStatus);
+
+            const openEntry = findTransition("open");
+            const triagedEntry = findTransition("triaged");
+            const investigatedEntry = findTransition("investigated");
+            const executedEntry = findTransition("executed");
+            const closedEntry = findTransition("closed");
+
+            const openTs = openEntry ? new Date(openEntry.timestamp).getTime() : new Date(caseData.created_at).getTime();
+
+            if (triagedEntry) {
+              const triageTime = (new Date(triagedEntry.timestamp).getTime() - openTs) / 1000;
+              if (triageTime >= 0) {
+                mtttValues.push(triageTime);
+                if (triageTime <= slaTriage) triageWithinSla++;
+              }
+              autoTriaged++;
+            }
+
+            if (investigatedEntry && triagedEntry) {
+              const delta = (new Date(investigatedEntry.timestamp).getTime() - new Date(triagedEntry.timestamp).getTime()) / 1000;
+              if (delta >= 0) mttiValues.push(delta);
+            }
+
+            if (executedEntry && investigatedEntry) {
+              const delta = (new Date(executedEntry.timestamp).getTime() - new Date(investigatedEntry.timestamp).getTime()) / 1000;
+              if (delta >= 0) {
+                mttrValues.push(delta);
+                if (delta <= slaResponse) responseWithinSla++;
+              }
+            }
+
+            if (closedEntry) {
+              const delta = (new Date(closedEntry.timestamp).getTime() - openTs) / 1000;
+              if (delta >= 0) mttcValues.push(delta);
+            }
+
+            if (caseData.status === "false_positive") falsePositives++;
+          } catch {
+            // Skip cases that can't be read
+          }
+        }
+
+        const avg = (arr) => arr.length > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
+        const casesAnalyzed = periodCases.length;
+
+        res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
+        res.end(JSON.stringify({
+          period,
+          cases_analyzed: casesAnalyzed,
+          mttd: 0, // Cannot compute without external alert timestamp
+          mttt: avg(mtttValues),
+          mtti: avg(mttiValues),
+          mttr: avg(mttrValues),
+          mttc: avg(mttcValues),
+          auto_triage_rate: casesAnalyzed > 0 ? Math.round((autoTriaged / casesAnalyzed) * 100) / 100 : 0,
+          false_positive_rate: casesAnalyzed > 0 ? Math.round((falsePositives / casesAnalyzed) * 100) / 100 : 0,
+          sla_compliance: {
+            triage_within_15m: mtttValues.length > 0 ? Math.round((triageWithinSla / mtttValues.length) * 100) / 100 : 0,
+            response_within_1h: mttrValues.length > 0 ? Math.round((responseWithinSla / mttrValues.length) * 100) / 100 : 0,
+          },
+          request_id: requestId,
+        }));
+        return;
+      }
+
+      // Agent action: store report (GET-only for web_fetch compatibility)
+      if (url.pathname === "/api/agent-action/store-report" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "write", url);
+        if (!authResult.valid) {
+          sendAuthError(res, authResult, requestId);
+          return;
+        }
+
+        const reportType = url.searchParams.get("type");
+        const reportData = url.searchParams.get("data");
+
+        const validTypes = ["hourly", "daily", "weekly", "monthly", "shift"];
+        if (!reportType || !validTypes.includes(reportType)) {
+          sendJsonError(res, 400, `Invalid or missing type. Supported: ${validTypes.join(", ")}`, requestId);
+          return;
+        }
+
+        if (!reportData) {
+          sendJsonError(res, 400, "Missing required 'data' query parameter (JSON-encoded report)", requestId);
+          return;
+        }
+
+        let parsedData;
+        try {
+          parsedData = JSON.parse(reportData);
+        } catch {
+          sendJsonError(res, 400, "Invalid JSON in 'data' query parameter", requestId);
+          return;
+        }
+
+        const now = new Date();
+        const dateStr = now.toISOString().slice(0, 10); // YYYY-MM-DD
+        const timestamp = now.toISOString().replace(/[:.]/g, "-");
+        const reportId = `RPT-${timestamp}-${crypto.randomBytes(4).toString("hex")}`;
+        const reportDir = path.join(config.dataDir, "reports", reportType, dateStr);
+        await ensureDir(reportDir);
+
+        const reportFile = path.join(reportDir, `${timestamp}.json`);
+        const report = {
+          report_id: reportId,
+          type: reportType,
+          created_at: now.toISOString(),
+          data: parsedData,
+        };
+
+        await atomicWriteFile(reportFile, JSON.stringify(report, null, 2));
+        incrementMetric("reports_stored_total", { type: reportType });
+        log("info", "reports", "Report stored", { report_id: reportId, type: reportType });
+
+        res.writeHead(201, { "Content-Type": JSON_CONTENT_TYPE });
+        res.end(JSON.stringify({
+          ok: true,
+          report_id: reportId,
+          path: reportFile,
+          request_id: requestId,
+        }));
+        return;
+      }
+
+      // List stored reports
+      if (url.pathname === "/api/reports" && req.method === "GET") {
+        const authResult = validateAuthorization(req, "read", url);
+        if (!authResult.valid) {
+          sendAuthError(res, authResult, requestId);
+          return;
+        }
+
+        const filterType = url.searchParams.get("type");
+        const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "20", 10), 1), 1000);
+        const reportsBaseDir = path.join(config.dataDir, "reports");
+
+        const reports = [];
+        try {
+          await ensureDir(reportsBaseDir);
+          const typeDirs = filterType ? [filterType] : await fs.readdir(reportsBaseDir).catch(() => []);
+
+          for (const typeDir of typeDirs) {
+            const typePath = path.join(reportsBaseDir, typeDir);
+            let dateDirs;
+            try {
+              dateDirs = await fs.readdir(typePath);
+            } catch { continue; }
+
+            for (const dateDir of dateDirs) {
+              const datePath = path.join(typePath, dateDir);
+              let files;
+              try {
+                files = await fs.readdir(datePath);
+              } catch { continue; }
+
+              for (const file of files) {
+                if (!file.endsWith(".json")) continue;
+                try {
+                  const content = await fs.readFile(path.join(datePath, file), "utf8");
+                  const report = JSON.parse(content);
+                  reports.push({
+                    id: report.report_id,
+                    type: report.type,
+                    created_at: report.created_at,
+                    path: path.join(datePath, file),
+                  });
+                } catch { /* skip unreadable reports */ }
+              }
+            }
+          }
+        } catch { /* empty reports directory */ }
+
+        // Sort newest first
+        reports.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+        res.writeHead(200, { "Content-Type": JSON_CONTENT_TYPE });
+        res.end(JSON.stringify(reports.slice(0, limit)));
         return;
       }
 

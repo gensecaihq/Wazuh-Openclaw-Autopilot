@@ -93,6 +93,67 @@ describe("Evidence Pack Management", () => {
     assert.strictEqual(result.schema_version, "1.0");
   });
 
+  it("should initialize status_history with open entry on case creation", async () => {
+    const result = await createCase("CASE-TEST-HIST-001", {
+      title: "Status History Init Test",
+      severity: "medium",
+    });
+
+    assert.ok(Array.isArray(result.status_history), "status_history should be an array");
+    assert.strictEqual(result.status_history.length, 1);
+    assert.strictEqual(result.status_history[0].from, null);
+    assert.strictEqual(result.status_history[0].to, "open");
+    assert.ok(result.status_history[0].timestamp, "timestamp should be present");
+  });
+
+  it("should append to status_history on status update", async () => {
+    await createCase("CASE-TEST-HIST-002", {
+      title: "Status History Update Test",
+      severity: "high",
+    });
+
+    const updated = await updateCase("CASE-TEST-HIST-002", {
+      status: "triaged",
+    });
+
+    assert.ok(Array.isArray(updated.status_history));
+    assert.strictEqual(updated.status_history.length, 2);
+    // Initial entry
+    assert.strictEqual(updated.status_history[0].from, null);
+    assert.strictEqual(updated.status_history[0].to, "open");
+    // Transition entry
+    assert.strictEqual(updated.status_history[1].from, "open");
+    assert.strictEqual(updated.status_history[1].to, "triaged");
+    assert.ok(updated.status_history[1].timestamp, "transition timestamp should be present");
+  });
+
+  it("should track multiple status transitions in status_history", async () => {
+    await createCase("CASE-TEST-HIST-003", {
+      title: "Multi Transition Test",
+      severity: "medium",
+    });
+
+    await updateCase("CASE-TEST-HIST-003", { status: "triaged" });
+    await updateCase("CASE-TEST-HIST-003", { status: "correlated" });
+    const result = await updateCase("CASE-TEST-HIST-003", { status: "investigated" });
+
+    assert.strictEqual(result.status_history.length, 4);
+    assert.deepStrictEqual(
+      result.status_history.map(h => ({ from: h.from, to: h.to })),
+      [
+        { from: null, to: "open" },
+        { from: "open", to: "triaged" },
+        { from: "triaged", to: "correlated" },
+        { from: "correlated", to: "investigated" },
+      ]
+    );
+    // Every entry must have a timestamp
+    for (const entry of result.status_history) {
+      assert.ok(typeof entry.timestamp === "string" && entry.timestamp.length > 0,
+        "each status_history entry must have a non-empty timestamp string");
+    }
+  });
+
   it("should update an existing case", async () => {
     // Create initial case
     await createCase("CASE-TEST-002", {
