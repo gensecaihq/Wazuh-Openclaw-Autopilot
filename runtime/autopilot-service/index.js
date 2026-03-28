@@ -1265,6 +1265,21 @@ async function updateCase(caseId, updates) {
           evidencePack.confidence = updates.findings.confidence;
         }
       }
+      // Promote classification to title prefix and auto_verdict when investigation
+      // reveals a different picture than initial triage (e.g. single failure → brute_force)
+      if (updates.findings.classification && typeof updates.findings.classification === "string") {
+        const classification = updates.findings.classification.replace(/_/g, " ");
+        const severity = (updates.findings.severity || evidencePack.severity || "unknown").toUpperCase();
+        const currentTitle = evidencePack.title || "";
+        // Only update title if the classification isn't already reflected
+        if (!currentTitle.toLowerCase().includes(classification.toLowerCase())) {
+          const host = (evidencePack.entities || []).find(e => e.type === "host")?.value || "unknown host";
+          const source = (evidencePack.entities || []).find(e => e.type === "ip" && e.role === "source")?.value || "";
+          evidencePack.title = `[${severity}] ${classification.charAt(0).toUpperCase() + classification.slice(1)} detected on ${host}${source ? ` from ${source}` : ""}`;
+        }
+        // Update auto_verdict to match findings classification
+        evidencePack.auto_verdict = updates.findings.classification;
+      }
     }
     if (updates.pivot_results !== undefined) evidencePack.pivot_results = updates.pivot_results;
     if (updates.enrichment_data !== undefined) evidencePack.enrichment_data = updates.enrichment_data;
@@ -1287,11 +1302,15 @@ async function updateCase(caseId, updates) {
       if (Object.prototype.hasOwnProperty.call(updates, "title")) summary.title = updates.title;
       if (Object.prototype.hasOwnProperty.call(updates, "severity")) summary.severity = updates.severity;
       if (Object.prototype.hasOwnProperty.call(updates, "status")) summary.status = updates.status;
-      // Sync severity promoted from findings (investigation agent override)
-      if (updates.findings && updates.findings.severity) {
+      // Sync findings-promoted fields to summary (investigation agent override)
+      if (updates.findings) {
         const FINDINGS_VALID_SEVERITIES = ["informational", "low", "medium", "high", "critical"];
-        if (FINDINGS_VALID_SEVERITIES.includes(updates.findings.severity)) {
+        if (updates.findings.severity && FINDINGS_VALID_SEVERITIES.includes(updates.findings.severity)) {
           summary.severity = updates.findings.severity;
+        }
+        // Sync promoted title from findings classification
+        if (evidencePack.title) {
+          summary.title = evidencePack.title;
         }
       }
       await atomicWriteFile(summaryPath, JSON.stringify(summary, null, 2));
