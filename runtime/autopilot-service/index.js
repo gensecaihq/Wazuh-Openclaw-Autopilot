@@ -2129,11 +2129,20 @@ async function executePlan(planId, executorId) {
         const mcpIsError = mcpResult.data && mcpResult.data.isError === true;
         const actionSuccess = mcpResult.success && !mcpIsError;
 
+        // Enrich error messages for common active-response failures
+        let actionNote = undefined;
         if (mcpIsError) {
+          const errText = mcpResult.data.content?.[0]?.text || "";
           log("warn", "plans", "MCP tool returned isError despite HTTP success", {
             plan_id: planId, action_type: action.type, target: action.target,
-            mcp_error: mcpResult.data.content?.[0]?.text || "unknown",
+            mcp_error: errText,
           });
+          // Detect "already applied" patterns from Wazuh 400 responses
+          if (errText.includes("HTTP 400") || errText.includes("Bad Request")) {
+            const arActions = { block_ip: "blocked", isolate_host: "isolated", disable_user: "disabled", quarantine_file: "quarantined", firewall_drop: "firewall-dropped", host_deny: "host-denied" };
+            const verb = arActions[action.type] || "applied";
+            actionNote = `Wazuh returned 400 — the target may already be ${verb}, or the active response command is not configured on this agent. Check iptables/agent status to confirm.`;
+          }
         }
 
         // Record successful execution for rate limiting and dedup tracking
@@ -2147,6 +2156,7 @@ async function executePlan(planId, executorId) {
           target: action.target,
           status: actionSuccess ? "success" : "failed",
           mcp_response: mcpResult.data,
+          ...(actionNote && { note: actionNote }),
           timestamp: new Date().toISOString(),
         });
 
