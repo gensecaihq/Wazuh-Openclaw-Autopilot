@@ -403,7 +403,8 @@ describe("Plan Execution (Responder Enabled)", () => {
     assert.equal(mcpCall.method, "POST");
     assert.ok(mcpCall.url.includes("block_ip"));
     // buildMcpParams injects action.target as the target param name (fallback: "target")
-    assert.deepStrictEqual(mcpCall.body, { ip: "10.0.0.42", direction: "both", target: "10.0.0.42" });
+    // block_ip now auto-injects agent_id: "001" (Wazuh manager) when not specified
+    assert.deepStrictEqual(mcpCall.body, { ip: "10.0.0.42", direction: "both", target: "10.0.0.42", agent_id: "001" });
     assert.ok(mcpCall.headers["authorization"]);
     assert.ok(mcpCall.headers["x-correlation-id"]);
   });

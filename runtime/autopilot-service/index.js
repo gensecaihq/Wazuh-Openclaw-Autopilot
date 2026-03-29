@@ -2945,6 +2945,23 @@ function buildMcpParams(action) {
     }
   }
 
+  // For block_ip: ensure agent_id is set. Wazuh active-response API requires a
+  // specific agent ID, not "all". If the plan doesn't include agent_id, try to
+  // resolve it from the case entities or default to the reporting agent.
+  if (action.type === "block_ip" && !params.agent_id) {
+    // Check if the plan action has an agent_id in params (LLM should include it)
+    // If not, try action.agent_id, then fall back to "001" (Wazuh manager)
+    if (action.agent_id) {
+      params.agent_id = action.agent_id;
+    } else {
+      // Default to Wazuh manager agent (001) which can execute AR on behalf of all agents
+      params.agent_id = "001";
+      log("warn", "plans", "block_ip action missing agent_id, defaulting to 001 (manager)", {
+        target: action.target, action_type: action.type,
+      });
+    }
+  }
+
   // Clamp duration to Wazuh MCP Server max (86400s = 24h)
   // LLMs sometimes request longer durations (e.g. 7d) that exceed the server limit
   const MAX_BLOCK_DURATION = 86400;
