@@ -2055,8 +2055,28 @@ async function executePlan(planId, executorId) {
   const results = [];
   let allSuccess = true;
 
+  // Resolve agent_id from case entities for actions that need it (e.g., block_ip)
+  // This avoids hardcoding agent IDs and uses the actual reporting agent from the case
+  let caseAgentId = null;
+  try {
+    const caseData = await getCase(plan.case_id);
+    if (caseData) {
+      const hostEntity = (caseData.entities || []).find(e => e.type === "host" && e.agent_id);
+      if (hostEntity) {
+        caseAgentId = hostEntity.agent_id;
+        log("info", "plans", "Resolved agent_id from case entities", {
+          plan_id: planId, agent_id: caseAgentId, host: hostEntity.value,
+        });
+      }
+    }
+  } catch { /* best effort */ }
+
   try {
     for (const action of plan.actions) {
+      // Inject resolved agent_id for actions that need it
+      if (caseAgentId && !action.agent_id && !(action.params && action.params.agent_id)) {
+        action._case_agent_id = caseAgentId;
+      }
       try {
       // Validate action has required fields
         if (!action.type || !action.target) {
@@ -2956,17 +2976,18 @@ function buildMcpParams(action) {
   }
 
   // For block_ip: ensure agent_id is set. Wazuh active-response API requires a
-  // specific agent ID, not "all". If the plan doesn't include agent_id, try to
-  // resolve it from the case entities or default to the reporting agent.
+  // specific agent ID, not "all". Resolve from plan params, action, or case entities.
   if (action.type === "block_ip" && !params.agent_id) {
-    // Check if the plan action has an agent_id in params (LLM should include it)
-    // If not, try action.agent_id, then fall back to "001" (Wazuh manager)
     if (action.agent_id) {
       params.agent_id = action.agent_id;
+    } else if (action._case_agent_id) {
+      // Resolved from case entities during executePlan() — see below
+      params.agent_id = action._case_agent_id;
     } else {
-      // Default to Wazuh manager agent (001) which can execute AR on behalf of all agents
-      params.agent_id = "001";
-      log("warn", "plans", "block_ip action missing agent_id, defaulting to 001 (manager)", {
+      // Last resort: use "all" and let the MCP Server handle it
+      // Note: Wazuh 4.14+ may reject "all" — prefer specific agent IDs
+      params.agent_id = "all";
+      log("warn", "plans", "block_ip action missing agent_id, using 'all' (may fail on some Wazuh versions)", {
         target: action.target, action_type: action.type,
       });
     }
@@ -5529,7 +5550,9 @@ function createServer() {
               if (delta >= 0) mttcValues.push(delta);
             }
 
-            if (caseData.status === "false_positive") falsePositives++;
+            // Count false positives by status OR auto_verdict (investigation may classify
+            // as false_positive while the pipeline status continues to executed/closed)
+            if (caseData.status === "false_positive" || caseData.auto_verdict === "false_positive") falsePositives++;
           } catch {
             // Skip cases that can't be read
           }
