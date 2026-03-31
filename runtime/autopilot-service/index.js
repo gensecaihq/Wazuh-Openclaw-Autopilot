@@ -111,6 +111,10 @@ const config = {
   stalledPipelineEnabled: process.env.STALLED_PIPELINE_ENABLED !== "false",
   stalledPipelineThresholdMs: parseInt(process.env.STALLED_PIPELINE_THRESHOLD_MINUTES || "30", 10) * 60 * 1000,
   stalledPipelineCheckIntervalMs: parseInt(process.env.STALLED_PIPELINE_CHECK_INTERVAL_MS || "300000", 10),
+  // Auto-close: automatically close cases in "executed" status after a grace period
+  autoCloseEnabled: process.env.AUTO_CLOSE_ENABLED !== "false",
+  autoCloseDelayMs: parseInt(process.env.AUTO_CLOSE_DELAY_MINUTES || "15", 10) * 60 * 1000,
+  autoCloseCheckIntervalMs: parseInt(process.env.AUTO_CLOSE_CHECK_INTERVAL_MS || "300000", 10), // 5 min
   // Trusted proxy: only trust X-Forwarded-For when explicitly enabled
   trustedProxy: process.env.TRUSTED_PROXY === "true",
 };
@@ -6381,6 +6385,20 @@ function setupCleanupIntervals() {
   const dlqRetry = setInterval(() => retryDlqDispatches().catch(() => {}), 5 * 60 * 1000);
   cleanupIntervals.push(dlqRetry);
 
+  // Auto-close executed cases after grace period (Issue #29)
+  if (config.autoCloseEnabled) {
+    const autoCloseCheck = setInterval(() => {
+      autoCloseExecutedCases().catch((err) => {
+        log("error", "auto-close", "Unhandled error in auto-close check", { error: err.message });
+      });
+    }, config.autoCloseCheckIntervalMs);
+    cleanupIntervals.push(autoCloseCheck);
+    log("info", "startup", "Auto-close enabled for executed cases", {
+      delay_minutes: config.autoCloseDelayMs / 60000,
+      check_interval_ms: config.autoCloseCheckIntervalMs,
+    });
+  }
+
   // Stalled pipeline detection
   if (config.stalledPipelineEnabled) {
     const stalledCheck = setInterval(() => {
@@ -6393,6 +6411,39 @@ function setupCleanupIntervals() {
       threshold_minutes: config.stalledPipelineThresholdMs / 60000,
       check_interval_ms: config.stalledPipelineCheckIntervalMs,
     });
+  }
+}
+
+// Issue #29: Auto-close cases in "executed" status after a grace period
+async function autoCloseExecutedCases() {
+  if (!config.autoCloseEnabled) return;
+  try {
+    const cases = await listCases({ limit: 500 });
+    let closed = 0;
+    for (const c of cases) {
+      if (c.status !== "executed") continue;
+      const age = Date.now() - new Date(c.updated_at).getTime();
+      if (age >= config.autoCloseDelayMs) {
+        try {
+          await updateCase(c.case_id, {
+            status: "closed",
+          });
+          closed++;
+          log("info", "auto-close", "Case auto-closed after grace period", {
+            case_id: c.case_id, age_minutes: Math.round(age / 60000),
+          });
+        } catch (err) {
+          log("warn", "auto-close", "Failed to auto-close case", {
+            case_id: c.case_id, error: err.message,
+          });
+        }
+      }
+    }
+    if (closed > 0) {
+      log("info", "auto-close", `Auto-closed ${closed} executed case(s)`, { closed });
+    }
+  } catch (err) {
+    log("error", "auto-close", "Unhandled error in auto-close check", { error: err.message });
   }
 }
 
