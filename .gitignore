@@ -45,3 +45,6 @@ temp/
 # Issue analysis (local working notes)
 issue*.md
 reply-issue*.md
+
+# Local AI assistant working notes (never committed)
+CLAUDE.md

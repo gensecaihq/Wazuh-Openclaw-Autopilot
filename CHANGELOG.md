@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Active-response execution verification (Issue #32)**: New opt-in `AUTOPILOT_VERIFY_ACTIONS` flag. When enabled, after a successful active-response dispatch the runtime calls the verification tool declared in `policies/toolmap.yaml` (`wazuh_check_blocked_ip`, `wazuh_check_agent_isolation`, `wazuh_check_process`, `wazuh_check_user_status`, `wazuh_check_file_quarantine`) and records `verified: true|false` plus a `verification` block on each action result. Best-effort: a `null` result (tool unavailable / unparseable) and a failed check are annotated with an explanatory `note` and never silently flip status. Addresses "API success does not prove on-host execution".
+- **`executive` (C-Level) and `incident` report types (Issue #30)**: `GET /api/agent-action/store-report` now accepts `type=executive` and `type=incident` alongside hourly/daily/weekly/monthly/shift.
+
+### Fixed
+- **Empty `actions` array now accepted on create-plan (Issue #31)**: `GET /api/agent-action/create-plan` no longer rejects `actions=[]` with HTTP 400. An empty plan is a valid outcome (false positive / lab test / human-only follow-up) and lets the case pipeline advance past `investigated` instead of stalling. Per-action policy/approval checks still apply when the array is non-empty.
+- **Toolmap verification & rollback tools now resolvable**: `resolveMcpTool()`/`isToolEnabled()` now also consult `verification_operations` and `rollback_operations` so the tools referenced inline by `action_operations[*].verification`/`rollback` resolve to their real MCP tool names.
+- **`quarantine_file` glob warning (Issue #32)**: Quarantine targets containing glob characters (`*`, `?`, `[]`) are flagged at execution time — Wazuh's quarantine AR and FIM-based verification operate on concrete paths, so a glob would not match or verify.
+
+### Changed
+- **KPI unit clarification (Issue #25)**: The reporting agent playbook now states explicitly that `GET /api/kpis` returns MTTx values in **seconds** (not minutes), with conversion guidance, so generated reports stop mislabelling second-valued fields as `_minutes`.
+
 ## [1.0.0] - 2026-03-26
 
 > **v1.0.0** is a clean semver reset marking the first production-ready release. All prior versions (2.0.0–2.4.3) were pre-release development iterations.

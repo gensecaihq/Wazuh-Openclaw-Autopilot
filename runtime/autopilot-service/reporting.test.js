@@ -364,6 +364,13 @@ describe("Reporting Endpoints", () => {
       assert.strictEqual(res.status, 400);
     });
 
+    it("should accept the executive (C-Level) report type (Issue #30)", async () => {
+      const data = encodeURIComponent(JSON.stringify({ executive_summary: { overall_risk: "low" } }));
+      const res = await request(server, "GET", `/api/agent-action/store-report?type=executive&data=${data}`);
+      assert.strictEqual(res.status, 201);
+      assert.strictEqual(res.body.ok, true);
+    });
+
     it("should reject missing data", async () => {
       const res = await request(server, "GET", "/api/agent-action/store-report?type=daily");
       assert.strictEqual(res.status, 400);

@@ -183,7 +183,14 @@ kpis:
   enabled: true
   autonomous: true
 
-  # Mean Time metrics (in minutes)
+  # Mean Time metrics.
+  # IMPORTANT (Issue #25): the runtime endpoint GET /api/kpis returns every MTTx
+  # value in SECONDS (e.g. mttt: 42 means 42 seconds, not minutes). The targets /
+  # thresholds below are expressed in MINUTES. When generating reports you MUST
+  # either (a) keep raw values in seconds and label fields with a `_seconds`
+  # suffix, or (b) convert to minutes (value / 60) before labelling a `_minutes`
+  # field or comparing against the minute-based targets below. Never label a raw
+  # /api/kpis value as "_minutes".
   time_metrics:
     - name: mean_time_to_detect
       abbreviation: MTTD

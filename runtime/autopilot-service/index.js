@@ -117,6 +117,13 @@ const config = {
   autoCloseCheckIntervalMs: parseInt(process.env.AUTO_CLOSE_CHECK_INTERVAL_MS || "300000", 10), // 5 min
   // Trusted proxy: only trust X-Forwarded-For when explicitly enabled
   trustedProxy: process.env.TRUSTED_PROXY === "true",
+  // Issue #32: post-execution verification of active-response actions.
+  // Wazuh's active-response API returns "success" when a command is *dispatched*
+  // to the agent list — it does NOT guarantee the script actually ran on-host.
+  // When enabled, after a successful AR action the runtime calls the verification
+  // tool declared in toolmap.yaml (e.g. wazuh_check_blocked_ip) to confirm the
+  // on-host effect, and records verified: true/false on the action result.
+  verifyActions: process.env.AUTOPILOT_VERIFY_ACTIONS === "true",
 };
 
 // =============================================================================
@@ -2100,6 +2107,19 @@ async function executePlan(planId, executorId) {
           }
         }
 
+        // Issue #32: quarantine_file with a glob path. Wazuh's quarantine AR and the
+        // FIM-based verification (wazuh_check_file_quarantine) operate on concrete
+        // paths — a glob like "/root/sensitive/*" is unlikely to match a real file or
+        // verify correctly. Warn so the false-confidence case is visible in logs.
+        if (action.type === "quarantine_file") {
+          const filePath = (action.params && action.params.file_path) || action.target || "";
+          if (/[*?[\]]/.test(filePath)) {
+            log("warn", "plans", "quarantine_file target contains glob characters — Wazuh expects a concrete path; quarantine/verification may not match", {
+              plan_id: planId, file_path: filePath, action_type: action.type,
+            });
+          }
+        }
+
         // Policy enforcement: idempotency check
         const idempResult = policyCheckIdempotency(action.type, action.target);
         if (!idempResult.allowed) {
@@ -2175,11 +2195,32 @@ async function executePlan(planId, executorId) {
           recordActionForDedup(action.type, action.target);
         }
 
+        // Issue #32: confirm the on-host effect after a "success" dispatch.
+        // Wazuh API success only proves the AR command was sent to the agent list,
+        // not that the script is registered or ran. When AUTOPILOT_VERIFY_ACTIONS
+        // is enabled, call the toolmap's verification tool and annotate the result.
+        let verification;
+        if (actionSuccess && config.verifyActions) {
+          verification = await verifyActionExecution(action, mcpParams, correlationId);
+        }
+        if (verification) {
+          if (verification.verified === false) {
+            actionNote = `Verification did NOT confirm the on-host effect: ${verification.field}=${JSON.stringify(verification.observed)} (expected ${JSON.stringify(verification.expected)}). Wazuh API reported success, but the active-response command may not be registered (ar.conf) or executed on this agent. Check agent active-responses.log.`;
+            log("warn", "plans", "Active-response action unverified despite API success", {
+              plan_id: planId, action_type: action.type, target: action.target,
+              field: verification.field, observed: verification.observed,
+            });
+          } else if (verification.verified === null) {
+            actionNote = actionNote || `Action dispatched to Wazuh successfully, but on-host effect could not be verified (${verification.reason}). API success confirms dispatch, not execution.`;
+          }
+        }
+
         results.push({
           action_type: action.type,
           target: action.target,
           status: actionSuccess ? "success" : "failed",
           mcp_response: mcpResult.data,
+          ...(verification && { verified: verification.verified, verification }),
           ...(actionNote && { note: actionNote }),
           timestamp: new Date().toISOString(),
         });
@@ -2892,6 +2933,16 @@ function resolveMcpTool(logicalName) {
     }
   }
 
+  // Check verification/rollback operations (Issue #32: post-execution verification)
+  for (const section of ["verification_operations", "rollback_operations"]) {
+    if (toolmapConfig[section] && toolmapConfig[section][logicalName]) {
+      const tool = toolmapConfig[section][logicalName];
+      if (typeof tool === "object" && tool.mcp_tool) {
+        return tool.mcp_tool;
+      }
+    }
+  }
+
   return logicalName;
 }
 
@@ -2909,6 +2960,14 @@ function isToolEnabled(logicalName) {
   if (toolmapConfig.action_operations && toolmapConfig.action_operations[logicalName]) {
     const tool = toolmapConfig.action_operations[logicalName];
     return typeof tool === "object" ? tool.enabled === true : false;
+  }
+
+  // Verification/rollback tools are read-only checks/reversals (default enabled)
+  for (const section of ["verification_operations", "rollback_operations"]) {
+    if (toolmapConfig[section] && toolmapConfig[section][logicalName]) {
+      const tool = toolmapConfig[section][logicalName];
+      return typeof tool === "object" ? tool.enabled !== false : true;
+    }
   }
 
   return true;
@@ -3008,6 +3067,83 @@ function buildMcpParams(action) {
   }
 
   return params;
+}
+
+// Issue #32: Resolve the logical verification-tool name for a given MCP tool name.
+// action_operations[*].verification.tool stores the raw MCP tool name (e.g.
+// "wazuh_check_blocked_ip"); callMcpTool needs the logical name from
+// verification_operations (e.g. "check_blocked_ip").
+function resolveVerificationLogicalName(mcpToolName) {
+  const vops = (toolmapConfig && toolmapConfig.verification_operations) || {};
+  for (const [logical, def] of Object.entries(vops)) {
+    if (def && def.mcp_tool === mcpToolName) return logical;
+  }
+  // Fallback: strip the "wazuh_" prefix (wazuh_check_blocked_ip -> check_blocked_ip)
+  return mcpToolName.replace(/^wazuh_/, "");
+}
+
+// Extract a named field (e.g. "blocked", "isolated", "quarantined") from a
+// verification tool's MCP response. Check tools return either a structured
+// object or a content[].text blob containing JSON, so handle both.
+function extractMcpResultField(mcpResult, field) {
+  try {
+    const data = mcpResult && mcpResult.data;
+    if (!data || typeof data !== "object") return undefined;
+    if (field in data) return data[field];
+    const text = data.content && data.content[0] && data.content[0].text;
+    if (typeof text === "string") {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) {
+        const obj = JSON.parse(match[0]);
+        if (field in obj) return obj[field];
+      }
+    }
+  } catch { /* unparseable — treat as unknown */ }
+  return undefined;
+}
+
+// Issue #32: Confirm an active-response action's on-host effect after the Wazuh
+// API reports "success". Wazuh's PUT /active-response returns error:0 /
+// total_affected_items:1 when a command is *dispatched* to the agent list — it
+// does NOT prove the AR script is registered (ar.conf) or that it actually ran.
+// Returns { verified: true|false|null, ... }. null = could not be determined
+// (verification tool unavailable or returned no parseable result). Best-effort:
+// never throws, never changes the action's success/failed status by itself.
+async function verifyActionExecution(action, mcpParams, correlationId) {
+  try {
+    const toolCfg = toolmapConfig && toolmapConfig.action_operations && toolmapConfig.action_operations[action.type];
+    const vcfg = toolCfg && toolCfg.verification;
+    if (!vcfg || !vcfg.tool || !vcfg.field) return null; // nothing declared to verify against
+
+    const logical = resolveVerificationLogicalName(vcfg.tool);
+    const vopDef = toolmapConfig.verification_operations && toolmapConfig.verification_operations[logical];
+
+    // Build verification params limited to the check tool's declared parameters,
+    // reusing the values already resolved for the action (agent_id, ip_address,
+    // file_path, username, process_id, etc.).
+    let vParams = {};
+    if (vopDef && Array.isArray(vopDef.parameters)) {
+      for (const p of vopDef.parameters) {
+        if (mcpParams[p.name] !== undefined) vParams[p.name] = mcpParams[p.name];
+      }
+    } else {
+      const { duration, reason, ...rest } = mcpParams;
+      vParams = rest;
+    }
+
+    const result = await callMcpTool(logical, vParams, `${correlationId}-verify`);
+    const expected = vcfg.expected !== undefined ? vcfg.expected : true;
+    const observed = extractMcpResultField(result, vcfg.field);
+    if (observed === undefined) {
+      return { verified: null, tool: logical, field: vcfg.field, reason: "verification tool returned no parseable result" };
+    }
+    return { verified: observed === expected, tool: logical, field: vcfg.field, observed, expected };
+  } catch (err) {
+    log("warn", "plans", "Action verification failed (best effort)", {
+      action_type: action.type, error: err.message,
+    });
+    return { verified: null, field: (toolmapConfig?.action_operations?.[action.type]?.verification?.field), reason: `verification error: ${err.message}` };
+  }
 }
 
 // MCP Circuit Breaker — prevents hammering a down MCP server
@@ -4729,8 +4865,13 @@ function createServer() {
           sendJsonError(res, 400, "Invalid JSON in actions parameter", requestId);
           return;
         }
-        if (!Array.isArray(actions) || actions.length === 0) {
-          sendJsonError(res, 400, "actions parameter must be a non-empty JSON array", requestId);
+        // Issue #31: allow an empty actions array. An empty plan is a valid outcome —
+        // it means "no automated active-response steps" (false positive, lab test, or
+        // human-only follow-up). It still records a titled/described plan so the case
+        // pipeline advances past "investigated" instead of stalling. Policy/approval
+        // checks still apply per-action when the array is non-empty.
+        if (!Array.isArray(actions)) {
+          sendJsonError(res, 400, "actions parameter must be a JSON array", requestId);
           return;
         }
         if (actions.length > MAX_ACTIONS_PER_PLAN) {
@@ -5601,7 +5742,10 @@ function createServer() {
         const reportType = url.searchParams.get("type");
         const reportData = url.searchParams.get("data");
 
-        const validTypes = ["hourly", "daily", "weekly", "monthly", "shift"];
+        // Issue #30: "executive" (C-Level) and "incident" report types are
+        // first-class — the reporting agent emits report-type-specific structures
+        // (executive summary, risk posture, interpreted KPIs / incident timeline).
+        const validTypes = ["hourly", "daily", "weekly", "monthly", "shift", "executive", "incident"];
         if (!reportType || !validTypes.includes(reportType)) {
           sendJsonError(res, 400, `Invalid or missing type. Supported: ${validTypes.join(", ")}`, requestId);
           return;

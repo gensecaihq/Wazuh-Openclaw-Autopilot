@@ -334,9 +334,17 @@ describe("GET /api/agent-action/create-plan", () => {
     assert.equal(res.status, 400);
   });
 
-  it("rejects empty actions array", async () => {
+  it("accepts an empty actions array (Issue #31 — no-automated-steps plan)", async () => {
     const res = await request(server, "GET",
-      `/api/agent-action/create-plan?case_id=${testCaseId}&title=Test&actions=${encodeURIComponent("[]")}`);
+      `/api/agent-action/create-plan?case_id=${testCaseId}&title=No%20action%20needed&risk_level=low&actions=${encodeURIComponent("[]")}`);
+    assert.equal(res.status, 201, `Expected 201 but got ${res.status}: ${JSON.stringify(res.body)}`);
+    assert.equal(res.body.ok, true);
+    assert.ok(res.body.plan_id);
+  });
+
+  it("rejects a non-array actions value", async () => {
+    const res = await request(server, "GET",
+      `/api/agent-action/create-plan?case_id=${testCaseId}&title=Test&actions=${encodeURIComponent("{}")}`);
     assert.equal(res.status, 400);
   });
 
