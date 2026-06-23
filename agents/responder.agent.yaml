@@ -257,6 +257,16 @@ allowed_tools:
     requires_approval: true
     requires_policy_allow: true
 
+  - name: firewall_drop
+    purpose: "Drop traffic from a source IP at the host firewall (cross-platform)"
+    requires_approval: true
+    requires_policy_allow: true
+
+  - name: host_deny
+    purpose: "Add a source IP to hosts.deny (Linux/Unix)"
+    requires_approval: true
+    requires_policy_allow: true
+
   - name: isolate_host
     purpose: "Network isolate endpoint"
     requires_approval: true

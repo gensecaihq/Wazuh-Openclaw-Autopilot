@@ -253,6 +253,27 @@ planning:
         requires_approval: true
         min_approver_group: standard
 
+      - action: firewall_drop
+        display_name: "Firewall Drop (block source IP at host firewall)"
+        wazuh_tool: firewall_drop
+        risk_level: medium
+        reversible: true
+        typical_duration_hours: 24
+        business_impact: minimal
+        requires_approval: true
+        min_approver_group: elevated
+        notes: "Cross-platform IP block (iptables on Linux, netsh on Windows). Put the IP in params.src_ip; target is the agent_id."
+
+      - action: host_deny
+        display_name: "Host Deny (add source IP to hosts.deny)"
+        wazuh_tool: host_deny
+        risk_level: medium
+        reversible: true
+        business_impact: minimal
+        requires_approval: true
+        min_approver_group: elevated
+        notes: "Linux/Unix only (TCP wrappers). Put the IP in params.src_ip; target is the agent_id."
+
       - action: isolate_host
         display_name: "Isolate Host from Network"
         wazuh_tool: isolate_host

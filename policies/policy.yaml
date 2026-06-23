@@ -252,6 +252,31 @@ actions:
   deny_unlisted: true
 
 # =============================================================================
+# PROTECTED TARGETS (deny-list — never act on these)
+# =============================================================================
+# Hard guardrail: active-response actions are REFUSED when their target matches
+# an entry here, regardless of confidence/approval. This prevents an attacker-
+# controlled alert field (e.g. a spoofed data.srcip) from steering block_ip /
+# firewall_drop / host_deny at critical infrastructure (default gateway, DNS
+# resolvers, the Wazuh manager, analyst jump hosts), and prevents isolating /
+# restarting protected agents. IPv4 addresses and CIDR ranges are supported;
+# list IPv6 entries as exact addresses only.
+protected_targets:
+  # IPs / CIDRs that must never be blocked, firewall-dropped, or host-denied.
+  # NOTE: do not put inline "#" comments on the list items below — the runtime's
+  # config parser keeps them as part of the value. Keep comments on their own line.
+  # Examples to add for your environment (uncomment and set real values):
+  #   - default gateway IP
+  #   - internal DNS resolver IP
+  #   - the Wazuh manager IP
+  ips:
+    - "127.0.0.0/8"
+    - "0.0.0.0"
+  # Agent IDs that must never be isolated or restarted (000 = Wazuh manager).
+  agent_ids:
+    - "000"
+
+# =============================================================================
 # ASSET CRITICALITY RULES
 # =============================================================================
 assets:

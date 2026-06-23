@@ -9,7 +9,10 @@
 #   ❌ NOT READY              - Critical requirements missing
 #
 
-set -euo pipefail
+# A diagnostic must run ALL checks to completion. `set -e` would abort on the first
+# check command that returns non-zero (a failing/missing check is normal here), so
+# use -uo pipefail only — same as scripts/health-check.sh.
+set -uo pipefail
 
 # =============================================================================
 # CONFIGURATION
@@ -42,18 +45,20 @@ REMEDIATIONS=()
 
 check_pass() {
     echo -e "  ${GREEN}✓${NC} $1"
-    ((CHECKS_PASSED++))
+    # NOTE: use $((x+1)) not ((x++)) — under `set -e`, ((x++)) returns the pre-value
+    # (0 on the first call) which is exit status 1 and aborts the whole script.
+    CHECKS_PASSED=$((CHECKS_PASSED + 1))
 }
 
 check_warn() {
     echo -e "  ${YELLOW}⚠${NC} $1"
-    ((CHECKS_WARNED++))
+    CHECKS_WARNED=$((CHECKS_WARNED + 1))
     PRODUCTION_READY=false
 }
 
 check_fail() {
     echo -e "  ${RED}✗${NC} $1"
-    ((CHECKS_FAILED++))
+    CHECKS_FAILED=$((CHECKS_FAILED + 1))
     PRODUCTION_READY=false
     BOOTSTRAP_READY=false
 }
@@ -384,7 +389,7 @@ check_agent_pack() {
             check_pass "Agent: $agent"
         else
             check_fail "Missing agent: $agent (no AGENTS.md found)"
-            ((missing++))
+            missing=$((missing + 1))
         fi
     done
 

@@ -7,17 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Protected-target deny-list**: new `protected_targets` section in `policy.yaml` (IPs/CIDRs + agent IDs). `block_ip`/`firewall_drop`/`host_deny` are refused for deny-listed IPs and `isolate_host`/`restart_wazuh` for deny-listed agents — at plan creation and again at execution (defense-in-depth). Prevents an attacker-controlled alert field (e.g. spoofed `srcip`) from steering active-response at gateways/DNS/the manager. Defaults protect loopback and agent `000` (manager).
+- **Slack approvals now authorized**: `/wazuh approve|execute` and the approve/execute buttons now run `policyCheckApprover` (by Slack user ID) plus a workspace/channel allowlist check before approving or executing — previously anyone who could click the button could trigger real active-response. Placeholder-aware so dev/bootstrap is unaffected.
+- **Approval-token scaffolding documented as inactive**: clarified in code that the `generateApprovalToken`/`validateApprovalToken`/`consumeApprovalToken` helpers are not wired into the flow; authorization is enforced via approver-group membership + separation-of-duties.
+
 ### Added
 - **Active-response execution verification (Issue #32)**: New opt-in `AUTOPILOT_VERIFY_ACTIONS` flag. When enabled, after a successful active-response dispatch the runtime calls the verification tool declared in `policies/toolmap.yaml` (`wazuh_check_blocked_ip`, `wazuh_check_agent_isolation`, `wazuh_check_process`, `wazuh_check_user_status`, `wazuh_check_file_quarantine`) and records `verified: true|false` plus a `verification` block on each action result. Best-effort: a `null` result (tool unavailable / unparseable) and a failed check are annotated with an explanatory `note` and never silently flip status. Addresses "API success does not prove on-host execution".
 - **`executive` (C-Level) and `incident` report types (Issue #30)**: `GET /api/agent-action/store-report` now accepts `type=executive` and `type=incident` alongside hourly/daily/weekly/monthly/shift.
+- **Documented env vars**: `.env.example` now documents previously-undocumented knobs — `AUTOPILOT_BOOTSTRAP_APPROVAL` (human-in-the-loop bypass), `TRUSTED_PROXY`, `AUTO_CLOSE_*`, `SLA_*`, stalled-pipeline and enrichment timeouts.
+- **docker-compose**: resource limits (`mem_limit`/`cpus`/`pids_limit`) and an explicit `AUTOPILOT_MODE` passthrough (set `=production` for fail-fast safety validation).
 
 ### Fixed
 - **Empty `actions` array now accepted on create-plan (Issue #31)**: `GET /api/agent-action/create-plan` no longer rejects `actions=[]` with HTTP 400. An empty plan is a valid outcome (false positive / lab test / human-only follow-up) and lets the case pipeline advance past `investigated` instead of stalling. Per-action policy/approval checks still apply when the array is non-empty.
-- **Toolmap verification & rollback tools now resolvable**: `resolveMcpTool()`/`isToolEnabled()` now also consult `verification_operations` and `rollback_operations` so the tools referenced inline by `action_operations[*].verification`/`rollback` resolve to their real MCP tool names.
-- **`quarantine_file` glob warning (Issue #32)**: Quarantine targets containing glob characters (`*`, `?`, `[]`) are flagged at execution time — Wazuh's quarantine AR and FIM-based verification operate on concrete paths, so a glob would not match or verify.
+- **Failed executions no longer marked "executed"**: a plan whose actions all failed/denied/errored no longer advances the case to `executed` (which would auto-close it and corrupt MTTR/SLA). The case stays at its current status for retry/visibility; empty and partially-successful plans still advance.
+- **`/api/reports` path-traversal fixed**: the `type` query param is now whitelisted before use as a path segment (previously `type=../../x` could disclose arbitrary JSON file paths/contents).
+- **Most-recent plan resolution after restart**: plan lookup now selects by `created_at` instead of Map iteration order (which is filesystem order after a restart), so the correct plan_id is dispatched/executed.
+- **Toolmap verification & rollback tools now resolvable**: `resolveMcpTool()`/`isToolEnabled()` now also consult `verification_operations` and `rollback_operations`.
+- **`quarantine_file` glob warning (Issue #32)**: glob characters (`*`, `?`, `[]`) in a quarantine target are flagged at execution — Wazuh's quarantine AR and FIM verification need concrete paths.
+- **Install scripts**: `doctor.sh` no longer aborts on its first passing check (dropped `set -e` for the diagnostic; counters use `$((x+1))`); `uninstall.sh` no longer deletes `/etc/wazuh-autopilot` (secrets) unless `--purge`; `install.sh` preserves an existing `.env` on re-install (regenerate with `REGENERATE_ENV=true`).
+- **Minor**: `search-alerts` `time_range=0h` no longer yields an unbounded query; `create-plan` `confidence` uses strict `Number()` parsing; removed dead `unblock_ip` validation branch.
 
 ### Changed
-- **KPI unit clarification (Issue #25)**: The reporting agent playbook now states explicitly that `GET /api/kpis` returns MTTx values in **seconds** (not minutes), with conversion guidance, so generated reports stop mislabelling second-valued fields as `_minutes`.
+- **KPI unit clarification (Issue #25)**: The reporting agent playbook now states explicitly that `GET /api/kpis` returns MTTx values in **seconds** (not minutes), with conversion guidance.
+- **Config consistency**: `firewall_drop`/`host_deny` added to the response-planner catalog and responder allowed-tools; policy-guard risk tiers/confidence/action-names aligned with `policy.yaml`; reporting-agent report types mapped to the runtime's accepted `store-report` types.
+- **Docs**: `MCP_INTEGRATION.md` updated to Wazuh MCP Server v4.2.1 / 48 tools; README test-count claim corrected.
+- **Tests**: now **548 tests across 16 files, all passing** (added `audit-fixes.test.js` covering the CIDR matcher, protected-target deny-list, Slack context check, report-type path-traversal guard, and verification helper). `slack.test.js` no longer requires the optional `@slack/bolt` to be installed (lazy-loaded in `initSlack`).
 
 ## [1.0.0] - 2026-03-26
 

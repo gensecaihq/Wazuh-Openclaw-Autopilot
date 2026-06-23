@@ -9,7 +9,10 @@
  * - Slash commands for manual operations
  */
 
-const { App } = require("@slack/bolt");
+// @slack/bolt is an optional dependency. It is loaded lazily inside initSlack()
+// (the only place that needs it) so that requiring this module for its pure helper
+// functions — e.g. from tests, or when Slack is disabled — does not crash when the
+// package isn't installed. index.js also guards `require("./slack")` itself.
 const crypto = require("crypto");
 
 // =============================================================================
@@ -102,6 +105,14 @@ async function initSlack(runtimeService) {
   if (slackApp) {
     log("info", "init", "Stopping existing Slack app before reinitialization");
     await stopSlack();
+  }
+
+  let App;
+  try {
+    ({ App } = require("@slack/bolt"));
+  } catch (err) {
+    log("warn", "init", "Slack enabled but @slack/bolt is not installed — Slack integration disabled", { error: err.message });
+    return null;
   }
 
   try {
@@ -206,6 +217,16 @@ function registerSlashCommands(runtime) {
             await respond({ text: "Usage: /wazuh approve <plan_id>" });
             return;
           }
+          {
+            const ctx = checkSlackContext(runtime, command.team_id, command.channel_id);
+            if (!ctx.ok) { await respond({ text: `Denied: ${ctx.reason}`, response_type: "ephemeral" }); return; }
+            const authz = authorizeSlackAction(runtime, planIdApprove, userId);
+            if (!authz.ok) {
+              log("warn", "command", "Slack approve denied", { plan_id: planIdApprove, user_id: userId, reason: authz.reason });
+              await respond({ text: `Denied: ${authz.reason}`, response_type: "ephemeral" });
+              return;
+            }
+          }
           try {
             const approvedPlan = runtime.approvePlan(planIdApprove, userId, "Approved via Slack");
             await respond({
@@ -226,6 +247,16 @@ function registerSlashCommands(runtime) {
           if (!planIdExecute) {
             await respond({ text: "Usage: /wazuh execute <plan_id>" });
             return;
+          }
+          {
+            const ctx = checkSlackContext(runtime, command.team_id, command.channel_id);
+            if (!ctx.ok) { await respond({ text: `Denied: ${ctx.reason}`, response_type: "ephemeral" }); return; }
+            const authz = authorizeSlackAction(runtime, planIdExecute, userId);
+            if (!authz.ok) {
+              log("warn", "command", "Slack execute denied", { plan_id: planIdExecute, user_id: userId, reason: authz.reason });
+              await respond({ text: `Denied: ${authz.reason}`, response_type: "ephemeral" });
+              return;
+            }
           }
           try {
             const executedPlan = await runtime.executePlan(planIdExecute, userId);
@@ -293,8 +324,37 @@ function validateActionPayload(body) {
     return { valid: false, error: "Invalid user ID" };
   }
   const channelId = body.channel?.id;
+  const teamId = body.team?.id;
   const messageTs = body.message?.ts;
-  return { valid: true, planId, userId, channelId, messageTs };
+  return { valid: true, planId, userId, channelId, teamId, messageTs };
+}
+
+// Security (Issue C2): authorize a Slack-initiated approve/execute against policy.
+// Without this, anyone who can click the button — or run /wazuh — could approve and
+// execute real active-response actions. Checks workspace/channel context and that
+// the Slack user is in an approver group permitted for the plan's actions/risk.
+// Placeholder-aware via the runtime policy checks, so dev/bootstrap setups still work.
+// Returns { ok: true } or { ok: false, reason }.
+function authorizeSlackAction(runtime, planId, userId) {
+  let plan;
+  try {
+    plan = runtime.getPlan(planId, { updateExpiry: false });
+  } catch {
+    return { ok: false, reason: `Plan ${planId} not found` };
+  }
+  if (!plan) return { ok: false, reason: `Plan ${planId} not found` };
+  const actionTypes = (plan.actions || []).map((a) => a.type);
+  const result = runtime.policyCheckApprover(userId, actionTypes, plan.risk_level);
+  if (!result.authorized) {
+    return { ok: false, reason: `Not authorized: ${result.reason}` };
+  }
+  return { ok: true };
+}
+
+function checkSlackContext(runtime, teamId, channelId) {
+  if (typeof runtime.policyCheckSlackContext !== "function") return { ok: true };
+  const ctx = runtime.policyCheckSlackContext(teamId, channelId, "commands");
+  return ctx.allowed ? { ok: true } : { ok: false, reason: ctx.reason };
 }
 
 // Sanitize error messages before sending to Slack
@@ -330,6 +390,17 @@ function registerInteractiveButtons(runtime) {
     if (!payload.valid) {
       await respond({ text: `Error: ${payload.error}`, response_type: "ephemeral" });
       return;
+    }
+
+    {
+      const ctx = checkSlackContext(runtime, payload.teamId, payload.channelId);
+      if (!ctx.ok) { await respond({ text: `Denied: ${ctx.reason}`, response_type: "ephemeral" }); return; }
+      const authz = authorizeSlackAction(runtime, payload.planId, payload.userId);
+      if (!authz.ok) {
+        log("warn", "button", "Slack approve button denied", { plan_id: payload.planId, user_id: payload.userId, reason: authz.reason });
+        await respond({ text: `Denied: ${authz.reason}`, response_type: "ephemeral" });
+        return;
+      }
     }
 
     try {
@@ -372,6 +443,17 @@ function registerInteractiveButtons(runtime) {
     if (!payload.valid) {
       await respond({ text: `Error: ${payload.error}`, response_type: "ephemeral" });
       return;
+    }
+
+    {
+      const ctx = checkSlackContext(runtime, payload.teamId, payload.channelId);
+      if (!ctx.ok) { await respond({ text: `Denied: ${ctx.reason}`, response_type: "ephemeral" }); return; }
+      const authz = authorizeSlackAction(runtime, payload.planId, payload.userId);
+      if (!authz.ok) {
+        log("warn", "button", "Slack execute button denied", { plan_id: payload.planId, user_id: payload.userId, reason: authz.reason });
+        await respond({ text: `Denied: ${authz.reason}`, response_type: "ephemeral" });
+        return;
+      }
     }
 
     try {

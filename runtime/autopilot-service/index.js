@@ -1361,10 +1361,15 @@ async function updateCase(caseId, updates) {
         let resolvedPlanId = null;
         if (updates.status === "planned" || updates.status === "approved") {
           const targetState = updates.status === "planned" ? "proposed" : "approved";
+          // Pick most recent by created_at — Map order is unreliable after a restart.
+          let bestCreatedAt = -Infinity;
           for (const [planId, plan] of responsePlans.entries()) {
             if (plan.case_id === caseId && plan.state === targetState) {
-              resolvedPlanId = planId;
-              // Don't break — keep iterating to find the LAST (most recent) match
+              const createdAt = new Date(plan.created_at).getTime();
+              if (createdAt >= bestCreatedAt) {
+                bestCreatedAt = createdAt;
+                resolvedPlanId = planId;
+              }
             }
           }
         }
@@ -1451,6 +1456,14 @@ async function listCases(options = {}) {
 // =============================================================================
 // APPROVAL TOKEN MANAGEMENT
 // =============================================================================
+// NOTE (security model): These one-time approval-token helpers are NOT currently
+// wired into the approval flow. Authorization for approve/execute is enforced via
+// policyCheckApprover() (approver-group membership) on BOTH the HTTP agent-action
+// path and the Slack path (see slack.js authorizeSlackAction), plus the
+// separation-of-duties check (executor !== approver). The token functions below are
+// retained as scaffolding for a future cryptographic one-time-token flow; they are
+// exported for tests. Until wired, do not document them as an active control.
+// In-memory only — tokens do not survive a restart (see ops durability notes).
 
 const approvalTokens = new Map();
 const MAX_APPROVAL_TOKENS = 10000; // Prevent unbounded growth
@@ -1665,6 +1678,11 @@ const ALLOWED_ACTION_TYPES = new Set([
   "active_response",
 ]);
 
+// Report types accepted by store-report / listed by /api/reports. Used as a
+// filesystem path segment, so it doubles as a path-traversal whitelist.
+// Issue #30: executive (C-Level) and incident are first-class types.
+const VALID_REPORT_TYPES = ["hourly", "daily", "weekly", "monthly", "shift", "executive", "incident"];
+
 // Issue #6 fix: Validate action structure
 function validatePlanAction(action, index) {
   const errors = [];
@@ -1737,13 +1755,19 @@ function createResponsePlan(planData) {
       throw new Error(`Time window denied: ${twResult.reason}`);
     }
 
-    // Policy enforcement: check each action against allowlist
+    // Policy enforcement: check each action against allowlist + protected targets
     for (const action of planData.actions) {
       const policyResult = policyCheckAction(action.type, planData.confidence || 0);
       if (!policyResult.allowed) {
         incrementMetric("policy_denies_total", { reason: "action_denied", action: action.type });
         log("warn", "policy", "Action denied by policy", { action: action.type, reason: policyResult.reason });
         throw new Error(`Policy denied action '${action.type}': ${policyResult.reason}`);
+      }
+      const protResult = policyCheckProtectedTarget(action);
+      if (!protResult.allowed) {
+        incrementMetric("policy_denies_total", { reason: "protected_target", action: action.type });
+        log("warn", "policy", "Action denied — protected target", { action: action.type, target: action.target, reason: protResult.reason });
+        throw new Error(`Policy denied action '${action.type}': ${protResult.reason}`);
       }
     }
   }
@@ -2096,7 +2120,9 @@ async function executePlan(planId, executorId) {
 
         // Issue #22 fix: Validate target format for IP-based actions.
         // LLMs sometimes resolve IPs to hostnames or use domain names.
-        if (action.type === "block_ip" || action.type === "unblock_ip") {
+        // (block_ip's target IS the IP; firewall_drop/host_deny carry the IP in
+        // params.src_ip while their target is the agent_id, so they're not checked here.)
+        if (action.type === "block_ip") {
           const ipv4 = /^(\d{1,3}\.){3}\d{1,3}$/;
           const ipv6 = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/;
           if (!ipv4.test(action.target) && !ipv6.test(action.target)) {
@@ -2152,6 +2178,25 @@ async function executePlan(planId, executorId) {
             target: action.target,
             status: "denied",
             reason: rlResult.reason,
+            timestamp: new Date().toISOString(),
+          });
+          continue;
+        }
+
+        // Security guardrail (defense-in-depth): refuse protected targets even if a
+        // plan slipped past creation-time checks (e.g. created before policy changed).
+        const protResult = policyCheckProtectedTarget(action);
+        if (!protResult.allowed) {
+          allSuccess = false;
+          incrementMetric("policy_denies_total", { reason: "protected_target", action: action.type });
+          log("warn", "policy", "Action denied at execution — protected target", {
+            plan_id: planId, action_type: action.type, target: action.target, reason: protResult.reason,
+          });
+          results.push({
+            action_type: action.type,
+            target: action.target,
+            status: "denied",
+            reason: protResult.reason,
             timestamp: new Date().toISOString(),
           });
           continue;
@@ -2285,9 +2330,17 @@ async function executePlan(planId, executorId) {
         plan_id: planId,
       }));
 
+    // Only advance the case to "executed" when execution actually accomplished
+    // something. A plan with actions where ALL of them failed/denied/errored is a
+    // total failure — marking it "executed" would (a) hide the failure and (b) let
+    // the auto-close sweep close it as if responded. In that case keep the case at
+    // its current status (typically "approved") so it stays visible / retryable.
+    // Empty plans (actions_total === 0) and any partial success still advance.
+    const er = plan.execution_result;
+    const executionAdvances = er.actions_total === 0 || er.actions_success > 0;
     try {
       await updateCase(plan.case_id, {
-        status: "executed",
+        ...(executionAdvances && { status: "executed" }),
         actions: [
           {
             plan_id: planId,
@@ -2298,6 +2351,12 @@ async function executePlan(planId, executorId) {
         ],
         ...(mcpCallRecords.length > 0 && { mcp_calls: mcpCallRecords }),
       });
+      if (!executionAdvances) {
+        log("warn", "plans", "Plan execution had zero successful actions — case left un-advanced for retry/visibility", {
+          plan_id: planId, case_id: plan.case_id,
+          actions_failed: er.actions_failed, actions_denied: er.actions_denied,
+        });
+      }
     } catch (err) {
       log("warn", "plans", "Failed to update case with execution results", {
         plan_id: planId,
@@ -2342,6 +2401,20 @@ function getResponderStatus() {
 // Simple YAML parser for toolmap (handles basic key-value and nested structures)
 // Bug #5 and #6 fixes: Improved list and multi-colon handling
 const PROTO_POISON_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+// Strip a YAML scalar's surrounding quotes and any trailing inline "# comment".
+// A quoted value returns its quoted content verbatim (so "#channel" survives and a
+// trailing comment is ignored). An unquoted value is cut at the first whitespace+#.
+function stripYamlScalar(raw) {
+  let s = String(raw).trim();
+  if (s.length >= 2 && (s[0] === '"' || s[0] === "'")) {
+    const end = s.indexOf(s[0], 1);
+    if (end > 0) return s.slice(1, end); // content inside quotes; ignore trailing comment
+  }
+  const ci = s.search(/\s#/);
+  if (ci >= 0) s = s.slice(0, ci);
+  return s.trim();
+}
 
 function parseSimpleYaml(content) {
   const result = Object.create(null);
@@ -2389,11 +2462,10 @@ function parseSimpleYaml(content) {
         if (colonIdx > 0) {
           const obj = {};
           const k = value.substring(0, colonIdx).trim();
-          const v = value.substring(colonIdx + 1).trim().replace(/^["']|["']$/g, "");
-          obj[k] = v;
+          obj[k] = stripYamlScalar(value.substring(colonIdx + 1));
           targetObj[listKey].push(obj);
         } else {
-          targetObj[listKey].push(value.replace(/^["']|["']$/g, ""));
+          targetObj[listKey].push(stripYamlScalar(value));
         }
       }
       continue;
@@ -2415,13 +2487,16 @@ function parseSimpleYaml(content) {
         // Mark current level as expecting list items for this key
         current.pendingListKey = key;
       } else {
-        // Parse value
-        if (value === "true") value = true;
-        else if (value === "false") value = false;
-        else if (value === "null") value = null;
-        else if (/^\d+$/.test(value)) value = parseInt(value, 10);
-        else if (/^\d+\.\d+$/.test(value)) value = parseFloat(value);
-        else value = value.replace(/^["']|["']$/g, "");
+        // Parse value. Type-coerce only UNQUOTED scalars; quoted values stay strings.
+        // stripYamlScalar removes surrounding quotes and any trailing inline comment.
+        const wasQuoted = value[0] === '"' || value[0] === "'";
+        const cleaned = stripYamlScalar(value);
+        if (!wasQuoted && cleaned === "true") value = true;
+        else if (!wasQuoted && cleaned === "false") value = false;
+        else if (!wasQuoted && cleaned === "null") value = null;
+        else if (!wasQuoted && /^\d+$/.test(cleaned)) value = parseInt(cleaned, 10);
+        else if (!wasQuoted && /^\d+\.\d+$/.test(cleaned)) value = parseFloat(cleaned);
+        else value = cleaned;
 
         parent[key] = value;
         // Clear pending list key — scalar value assigned, not expecting list items
@@ -2589,6 +2664,69 @@ function policyCheckAction(actionType, confidence = 0) {
   return { allowed: true, reason: "Action allowed by policy" };
 }
 
+// Convert a dotted IPv4 string to an unsigned 32-bit integer, or null if invalid.
+function ipv4ToLong(ip) {
+  if (typeof ip !== "string") return null;
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  let long = 0;
+  for (const p of parts) {
+    if (!/^\d{1,3}$/.test(p)) return null;
+    const n = Number(p);
+    if (n > 255) return null;
+    long = long * 256 + n;
+  }
+  return long >>> 0;
+}
+
+// True if `ip` (IPv4 string) equals or falls within `entry` (an IPv4 or IPv4 CIDR).
+// Non-IPv4 inputs fall back to exact string match (covers IPv6 exact entries).
+function ipMatchesEntry(ip, entry) {
+  if (ip === entry) return true;
+  if (typeof entry !== "string" || !entry.includes("/")) return false;
+  const slash = entry.indexOf("/");
+  const net = entry.slice(0, slash);
+  const bits = Number(entry.slice(slash + 1));
+  const ipLong = ipv4ToLong(ip);
+  const netLong = ipv4ToLong(net);
+  if (ipLong === null || netLong === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+  if (bits === 0) return true;
+  const mask = (0xFFFFFFFF << (32 - bits)) >>> 0;
+  return (ipLong & mask) === (netLong & mask);
+}
+
+// Security guardrail (Issue: protected targets): refuse active-response actions
+// whose target is on the policy.yaml protected_targets deny-list. Returns
+// { allowed: false, reason } when the action must be blocked. Fail-open only when
+// no policy/section is configured (so it never breaks deployments that don't use it).
+function policyCheckProtectedTarget(action) {
+  const pt = policyConfig && policyConfig.protected_targets;
+  if (!pt) return { allowed: true };
+
+  const IP_ACTIONS = new Set(["block_ip", "firewall_drop", "host_deny"]);
+  const AGENT_ACTIONS = new Set(["isolate_host", "restart_wazuh"]);
+
+  if (IP_ACTIONS.has(action.type) && Array.isArray(pt.ips)) {
+    const ip = (action.params && (action.params.ip_address || action.params.src_ip)) || action.target;
+    if (ip) {
+      for (const entry of pt.ips) {
+        if (ipMatchesEntry(String(ip), String(entry))) {
+          return { allowed: false, reason: `Target ${ip} is on the protected-targets deny-list (${entry}); refusing ${action.type}` };
+        }
+      }
+    }
+  }
+
+  if (AGENT_ACTIONS.has(action.type) && Array.isArray(pt.agent_ids)) {
+    const agentId = (action.params && action.params.agent_id) || action.target;
+    if (agentId && pt.agent_ids.map(String).includes(String(agentId))) {
+      return { allowed: false, reason: `Agent ${agentId} is a protected target; refusing ${action.type}` };
+    }
+  }
+
+  return { allowed: true };
+}
+
 /**
  * Check if an approver is authorized for given actions and risk level.
  * Returns { authorized: boolean, reason: string }
@@ -2662,6 +2800,34 @@ function policyCheckApprover(approverId, actionTypes = [], planRiskLevel = "medi
   }
 
   return { authorized: false, reason: `Approver '${approverId}' not authorized for risk='${planRiskLevel}' actions=[${actionTypes.join(",")}]` };
+}
+
+// Validate that a Slack approval/execution originates from an allowed workspace and
+// channel (policy.yaml `slack` section). Placeholder-aware: if the allowlist holds
+// only "<PLACEHOLDER>" entries, the check is skipped (dev/bootstrap), mirroring the
+// approver bootstrap behaviour. Returns { allowed: boolean, reason }.
+function policyCheckSlackContext(teamId, channelId, purpose = "commands") {
+  const slackCfg = policyConfig && policyConfig.slack;
+  if (!slackCfg) return { allowed: true };
+
+  const realIds = (list) => (Array.isArray(list) ? list : [])
+    .map((e) => (e && typeof e === "object" ? e.id : e))
+    .filter((id) => id && !(String(id).startsWith("<") && String(id).endsWith(">")))
+    .map(String);
+
+  const wsIds = realIds(slackCfg.workspace_allowlist);
+  if (wsIds.length > 0 && teamId && !wsIds.includes(String(teamId))) {
+    return { allowed: false, reason: `Workspace ${teamId} is not in the Slack workspace allowlist` };
+  }
+
+  const channels = slackCfg.channels;
+  const purposeCfg = channels && channels[purpose];
+  const chIds = realIds(purposeCfg && purposeCfg.allowlist);
+  if (chIds.length > 0 && channelId && !chIds.includes(String(channelId))) {
+    return { allowed: false, reason: `Channel ${channelId} is not allowed for '${purpose}'` };
+  }
+
+  return { allowed: true };
 }
 
 /**
@@ -3127,8 +3293,9 @@ async function verifyActionExecution(action, mcpParams, correlationId) {
         if (mcpParams[p.name] !== undefined) vParams[p.name] = mcpParams[p.name];
       }
     } else {
-      const { duration, reason, ...rest } = mcpParams;
-      vParams = rest;
+      vParams = { ...mcpParams };
+      delete vParams.duration;
+      delete vParams.reason;
     }
 
     const result = await callMcpTool(logical, vParams, `${correlationId}-verify`);
@@ -3610,12 +3777,21 @@ function resolvePlanId(fabricatedId, caseId, targetState) {
   }
 
   if (resolvedCaseId) {
+    // Pick the most recent matching plan by created_at. Map iteration order is NOT
+    // reliable after a restart (loadPlansFromDisk populates from fs.readdir order,
+    // which is lexicographic, not creation order), so comparing timestamps is the
+    // only correct way to find "most recent".
     let bestPlanId = null;
+    let bestCreatedAt = -Infinity;
     for (const [planId, plan] of responsePlans.entries()) {
       if (plan.case_id === resolvedCaseId) {
         // Match by target state, or any state if no target specified
         if (!targetState || plan.state === targetState) {
-          bestPlanId = planId; // keep iterating — last match = most recent
+          const createdAt = new Date(plan.created_at).getTime();
+          if (createdAt >= bestCreatedAt) {
+            bestCreatedAt = createdAt;
+            bestPlanId = planId;
+          }
         }
       }
     }
@@ -4892,7 +5068,9 @@ function createServer() {
         const confidenceParam = url.searchParams.get("confidence");
         let confidence = caseData.confidence || 0;
         if (confidenceParam !== null) {
-          const parsed = parseFloat(confidenceParam);
+          // Use Number() (not parseFloat) so trailing garbage like "0.9abc" is
+          // rejected rather than silently coerced — consistent with update-case.
+          const parsed = Number(confidenceParam);
           if (Number.isNaN(parsed) || parsed < 0 || parsed > 1) {
             sendJsonError(res, 400, "confidence must be a number between 0 and 1", requestId);
             return;
@@ -5137,9 +5315,11 @@ function createServer() {
             if (ruleId) params.rule_id = ruleId;
             if (agentId) params.agent_id = agentId;
             if (level) params.level = level;
-            // Convert time_range to timestamp_start
+            // Convert time_range to timestamp_start. Use !== null && > 0 so a
+            // zero/negative window (e.g. "0h") is treated as "no valid window"
+            // rather than silently falling through to an unbounded query.
             const durationSec = parseDurationToSeconds(timeRange);
-            if (durationSec) {
+            if (durationSec !== null && durationSec > 0) {
               params.timestamp_start = new Date(Date.now() - durationSec * 1000).toISOString();
             }
             mcpResult = await callMcpTool("get_alert", params, correlationId);
@@ -5745,9 +5925,8 @@ function createServer() {
         // Issue #30: "executive" (C-Level) and "incident" report types are
         // first-class — the reporting agent emits report-type-specific structures
         // (executive summary, risk posture, interpreted KPIs / incident timeline).
-        const validTypes = ["hourly", "daily", "weekly", "monthly", "shift", "executive", "incident"];
-        if (!reportType || !validTypes.includes(reportType)) {
-          sendJsonError(res, 400, `Invalid or missing type. Supported: ${validTypes.join(", ")}`, requestId);
+        if (!reportType || !VALID_REPORT_TYPES.includes(reportType)) {
+          sendJsonError(res, 400, `Invalid or missing type. Supported: ${VALID_REPORT_TYPES.join(", ")}`, requestId);
           return;
         }
 
@@ -5802,6 +5981,13 @@ function createServer() {
         }
 
         const filterType = url.searchParams.get("type");
+        // Whitelist the type before it is used as a path segment (path-traversal guard),
+        // mirroring store-report's validation. Without this, type=../../x would escape
+        // the reports dir and disclose arbitrary JSON file paths/contents.
+        if (filterType !== null && !VALID_REPORT_TYPES.includes(filterType)) {
+          sendJsonError(res, 400, `Invalid type. Supported: ${VALID_REPORT_TYPES.join(", ")}`, requestId);
+          return;
+        }
         const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") || "20", 10), 1), 1000);
         const reportsBaseDir = path.join(config.dataDir, "reports");
 
@@ -6167,10 +6353,15 @@ module.exports = {
   loadPolicyConfig,
   policyCheckAction,
   policyCheckApprover,
+  policyCheckSlackContext,
   policyCheckEvidence,
   policyCheckTimeWindow,
   policyCheckActionRateLimit,
   policyCheckIdempotency,
+  policyCheckProtectedTarget,
+  ipMatchesEntry,
+  verifyActionExecution,
+  autoCloseExecutedCases,
   recordActionExecution,
   recordActionForDedup,
   resetActionRateLimitState,

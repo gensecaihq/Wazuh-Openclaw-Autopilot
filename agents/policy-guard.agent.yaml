@@ -62,24 +62,28 @@ constitutional_principles:
 # WAZUH POLICY EXPERTISE
 # =============================================================================
 wazuh_expertise:
-  # Action classification based on Wazuh capabilities
+  # Action classification based on Wazuh capabilities.
+  # IMPORTANT: risk_level and approval_group below MUST match policies/policy.yaml
+  # (the enforced source of truth). Action names use underscores to match the
+  # runtime allowlist / policy keys exactly.
   action_classifications:
     low_risk:
       actions:
-        - firewall-drop
-        - host-deny
+        - block_ip
+        - quarantine_file
       characteristics:
         - reversible: true
-        - blast_radius: single_ip
+        - blast_radius: single_ip_or_file
         - service_impact: none
       default_duration_hours: 24
       approval_group: standard
 
     medium_risk:
       actions:
-        - restart-wazuh
+        - firewall_drop
+        - host_deny
         - kill_process
-        - quarantine_file
+        - isolate_host
       characteristics:
         - reversible: varies
         - blast_radius: single_host
@@ -88,23 +92,22 @@ wazuh_expertise:
 
     high_risk:
       actions:
-        - isolate_host
         - disable_user
+        - active_response
       characteristics:
-        - reversible: true
+        - reversible: varies
         - blast_radius: user_or_host
         - service_impact: definite
       approval_group: admin
 
     critical_risk:
       actions:
-        - mass_isolation
-        - domain_wide_disable
+        - restart_wazuh
       characteristics:
-        - reversible: true
-        - blast_radius: enterprise
+        - reversible: false
+        - blast_radius: agent_or_enterprise
         - service_impact: severe
-      approval_group: executive
+      approval_group: admin
       requires_dual_approval: true
 
   # Asset criticality rules
@@ -282,10 +285,14 @@ policy_evaluation:
       description: "Verify confidence score meets minimum"
       fail_action: deny
       reason_code: LOW_CONFIDENCE
+      # Aligned with policies/policy.yaml per-action min_confidence (the values the
+      # runtime actually enforces): block_ip/quarantine_file/firewall_drop 0.7;
+      # host_deny/kill_process/isolate_host 0.8; disable_user/active_response 0.9;
+      # restart_wazuh 0.95. Tier values below are the floor per risk class.
       thresholds:
-        low_risk_action: 0.5
-        medium_risk_action: 0.7
-        high_risk_action: 0.85
+        low_risk_action: 0.7
+        medium_risk_action: 0.8
+        high_risk_action: 0.9
         critical_risk_action: 0.95
 
     - name: time_window

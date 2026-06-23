@@ -145,10 +145,14 @@ main() {
     # Reload systemd after removing service files
     systemctl daemon-reload 2>/dev/null || true
 
-    # Remove configuration
-    if [[ -d "$CONFIG_DIR" ]]; then
+    # Remove configuration ONLY on --purge. CONFIG_DIR holds secrets/ (service, MCP,
+    # approval tokens) and config; deleting it in default keep-data mode would make
+    # the "preserved" data unusable. Default uninstall leaves config + data intact.
+    if [[ "$PRESERVE_DATA" == "false" ]] && [[ -d "$CONFIG_DIR" ]]; then
         rm -rf "$CONFIG_DIR"
         log_success "Configuration removed: $CONFIG_DIR"
+    elif [[ -d "$CONFIG_DIR" ]]; then
+        log_info "Configuration preserved (use --purge to remove): $CONFIG_DIR"
     fi
 
     # Remove data (if purge requested)

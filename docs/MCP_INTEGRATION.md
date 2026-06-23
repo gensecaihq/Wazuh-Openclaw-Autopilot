@@ -187,7 +187,7 @@ MCP_URL=http://127.0.0.1:3000
 
 ## Available MCP Tools
 
-The Wazuh MCP Server v4.0.6 exposes **29 tools** organized into five categories. All tools are invoked via the MCP protocol through the `/mcp` (Streamable HTTP) or `/sse` (legacy) endpoints.
+The Wazuh MCP Server v4.2.1 exposes **48 tools** organized into five categories. All tools are invoked via the MCP protocol through the `/mcp` (Streamable HTTP) or `/sse` (legacy) endpoints.
 
 ### Tool Reference
 
@@ -314,7 +314,7 @@ action_operations:
 
 ## Authentication
 
-The Wazuh MCP Server v4.0.6 supports three authentication modes, configured via `AUTH_MODE`.
+The Wazuh MCP Server v4.2.1 supports three authentication modes, configured via `AUTH_MODE`.
 
 ### Bearer Token Authentication (Default)
 
@@ -452,7 +452,7 @@ MCP calls are logged with correlation IDs:
 
 ## API Endpoints
 
-The Wazuh MCP Server v4.0.6 exposes the following HTTP endpoints:
+The Wazuh MCP Server v4.2.1 exposes the following HTTP endpoints:
 
 | Endpoint | Method | Purpose | Auth Required |
 |----------|--------|---------|---------------|

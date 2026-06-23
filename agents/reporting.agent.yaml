@@ -92,12 +92,18 @@ denied_tools:
 # =============================================================================
 # AUTONOMOUS TRIGGERS
 # =============================================================================
+# IMPORTANT — storing reports: GET /api/agent-action/store-report only accepts
+# `type` in: hourly, daily, weekly, monthly, shift, executive, incident.
+# `report_type` below is the INTERNAL schema name; when you call store-report you
+# MUST pass the `store_type` value (the runtime type) — passing the internal name
+# (e.g. "daily_digest" or "executive_summary") returns HTTP 400.
 triggers:
   scheduled:
     - name: hourly_snapshot
       cron: "0 * * * *"
       description: "Hourly operational snapshot"
       report_type: operational_snapshot
+      store_type: hourly
       retention_hours: 24
 
     - name: daily_digest
@@ -105,6 +111,7 @@ triggers:
       timezone: UTC
       description: "Daily security operations digest"
       report_type: daily_digest
+      store_type: daily
       retention_days: 90
 
     - name: shift_handoff
@@ -112,6 +119,7 @@ triggers:
       timezone: UTC
       description: "Shift handoff report (8-hour shifts)"
       report_type: shift_handoff
+      store_type: shift
       retention_days: 30
 
     - name: weekly_summary
@@ -119,6 +127,7 @@ triggers:
       timezone: UTC
       description: "Weekly security summary"
       report_type: weekly_summary
+      store_type: weekly
       retention_days: 365
 
     - name: monthly_executive
@@ -126,6 +135,7 @@ triggers:
       timezone: UTC
       description: "Monthly executive report"
       report_type: executive_summary
+      store_type: executive
       retention_days: 730
 
     - name: rule_effectiveness
@@ -133,6 +143,7 @@ triggers:
       timezone: UTC
       description: "Weekly rule effectiveness analysis"
       report_type: rule_effectiveness
+      store_type: weekly
       retention_days: 90
 
   events:
@@ -140,16 +151,19 @@ triggers:
       auto_execute: true
       priority: low
       report_type: case_summary
+      store_type: incident
 
     - type: blast_radius_critical
       auto_execute: true
       priority: high
       report_type: incident_impact
+      store_type: incident
 
     - type: policy_denial
       auto_execute: true
       priority: low
       report_type: policy_effectiveness
+      store_type: weekly
 
   commands:
     - name: digest

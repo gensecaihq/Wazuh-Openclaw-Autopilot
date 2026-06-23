@@ -1385,11 +1385,20 @@ configure_system() {
 
     # Create configuration file
     # Use quoted heredoc to prevent shell expansion of $, then substitute known vars
-    # Back up existing .env to avoid silently losing user customizations on re-install
+    # Preserve an existing .env on re-install (operators tune it by hand). It is
+    # backed up either way; regeneration only happens for a fresh install or when
+    # REGENERATE_ENV=true is set explicitly.
+    local _write_env=true
     if [[ -f "$CONFIG_DIR/.env" ]]; then
         cp "$CONFIG_DIR/.env" "${CONFIG_DIR}/.env.backup.$(date +%Y%m%d_%H%M%S)"
-        log_warn "Existing .env backed up"
+        if [[ "${REGENERATE_ENV:-false}" == "true" ]]; then
+            log_warn "Existing .env backed up and REGENERATED (REGENERATE_ENV=true)"
+        else
+            _write_env=false
+            log_warn "Existing .env preserved (backed up). Set REGENERATE_ENV=true to regenerate from scratch."
+        fi
     fi
+    if [[ "$_write_env" == "true" ]]; then
     local _generated_at
     _generated_at=$(date -Iseconds)
     cat > "$CONFIG_DIR/.env" << 'ENVEOF'
@@ -1535,6 +1544,7 @@ ENVEOF
     umask "$_old_umask"
 
     chmod 600 "$CONFIG_DIR/.env"
+    fi  # end: _write_env guard (preserve existing .env on re-install)
 
     # Substitute placeholders in openclaw.json (generated earlier with placeholder values)
     local _oc_real_user="${SUDO_USER:-$(whoami)}"

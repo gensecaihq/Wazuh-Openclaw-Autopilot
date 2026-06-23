@@ -15,6 +15,12 @@ services:
     container_name: wazuh-autopilot
     restart: unless-stopped
 
+    # Resource limits (prevent a leak/alert-flood from OOM-ing the host).
+    # `mem_limit`/`cpus`/`pids_limit` apply to `docker compose up` (non-swarm).
+    mem_limit: ${AUTOPILOT_MEM_LIMIT:-512m}
+    cpus: ${AUTOPILOT_CPUS:-1.0}
+    pids_limit: 256
+
     # Security: Read-only root filesystem
     read_only: true
 
@@ -45,6 +51,11 @@ services:
       - LOG_FORMAT=json
       - OPENCLAW_GATEWAY_URL=${OPENCLAW_GATEWAY_URL:-http://host.docker.internal:18789}
       - OPENCLAW_TOKEN=${OPENCLAW_TOKEN:-}
+      # Run mode. The image defaults to "bootstrap"; for a real production deploy
+      # set AUTOPILOT_MODE=production (in .env) so the runtime fails fast on missing
+      # auth tokens, placeholder policy values, and wildcard CORS instead of starting
+      # insecure. See validateStartup() in index.js.
+      - AUTOPILOT_MODE=${AUTOPILOT_MODE:-bootstrap}
 
     volumes:
       # Persistent data

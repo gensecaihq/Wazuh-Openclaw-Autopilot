@@ -358,7 +358,7 @@ Socket Mode — outbound-only, no webhooks or public endpoints required:
 ├── runtime/autopilot-service/
 │   ├── index.js                    # Runtime service (6400+ LOC)
 │   ├── slack.js                    # Slack Socket Mode integration
-│   └── *.test.js                   # 532 tests across 15 files
+│   └── *.test.js                   # 548 tests across 16 files
 ├── policies/
 │   ├── policy.yaml                 # Action allowlists, approvers, thresholds
 │   └── toolmap.yaml                # MCP tool mappings (9 action tools)
@@ -469,7 +469,7 @@ Anthropic and Google have **banned** subscription-plan OAuth tokens (Claude Pro/
 ```bash
 cd runtime/autopilot-service
 npm install
-npm test   # 532 tests, all passing
+npm test   # 548 tests across 16 files, all passing
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
